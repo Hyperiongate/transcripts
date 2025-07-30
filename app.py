@@ -2,7 +2,7 @@
 Transcript Fact Checker - Main Application
 A focused tool for fact-checking transcripts from various sources
 """
-import os
+import os 
 import json
 import logging
 import uuid
