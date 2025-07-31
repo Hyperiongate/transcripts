@@ -16,8 +16,8 @@ COPY requirements.txt .
 # Install Python dependencies
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Download spaCy language model
-RUN python -m spacy download en_core_web_sm
+# Download spaCy language model separately to avoid timeout
+RUN pip install https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl
 
 # Copy application files
 COPY . .
@@ -29,8 +29,8 @@ RUN mkdir -p static/css static/js templates services
 ENV FLASK_APP=app.py
 ENV PYTHONUNBUFFERED=1
 
-# Expose port
-EXPOSE 5000
+# Render uses PORT environment variable
+EXPOSE ${PORT}
 
-# Run the application
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "2", "--timeout", "120", "app:app"]
+# Run the application with Render's PORT
+CMD gunicorn --bind 0.0.0.0:${PORT} --workers 2 --timeout 120 app:app
