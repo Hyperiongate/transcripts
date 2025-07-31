@@ -3,6 +3,7 @@ Transcript Fact Checker - Main Application
 A focused tool for fact-checking transcripts from various sources
 """
 import os 
+import sys
 import json
 import logging
 import uuid
@@ -10,6 +11,13 @@ from datetime import datetime
 from flask import Flask, render_template, request, jsonify, send_file
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
+
+# Debug logging for Render deployment
+print(f"Starting app on Render...", file=sys.stderr)
+print(f"Python version: {sys.version}", file=sys.stderr)
+print(f"Port: {os.environ.get('PORT', 'NOT SET')}", file=sys.stderr)
+print(f"Secret Key Set: {'SECRET_KEY' in os.environ}", file=sys.stderr)
+print(f"Google API Key Set: {'GOOGLE_FACTCHECK_API_KEY' in os.environ}", file=sys.stderr)
 
 # Import configuration
 from config import Config
@@ -45,12 +53,27 @@ def index():
     """Main page"""
     return render_template('index.html')
 
+@app.route('/health')
+def health_check():
+    """Health check endpoint for Render"""
+    return jsonify({
+        'status': 'healthy',
+        'timestamp': datetime.now().isoformat(),
+        'service': 'transcript-factchecker',
+        'version': '1.0.0'
+    }), 200
+
 @app.route('/api/analyze', methods=['POST'])
 def analyze():
     """Start analysis job"""
     try:
-        data = request.get_json() if request.is_json else {}
-        input_type = data.get('type', 'text')
+        # Handle both JSON and form data
+        if request.is_json:
+            data = request.get_json()
+            input_type = data.get('type', 'text')
+        else:
+            data = {}
+            input_type = request.form.get('type', 'text')
         
         # Generate job ID
         job_id = str(uuid.uuid4())
@@ -69,7 +92,7 @@ def analyze():
         # Process based on input type
         try:
             if input_type == 'text':
-                transcript = data.get('content', '')
+                transcript = data.get('content', '') if request.is_json else request.form.get('content', '')
                 if not transcript:
                     raise ValueError("No transcript text provided")
                 
@@ -93,7 +116,7 @@ def analyze():
                 process_transcript(job_id, content, file.filename)
                 
             elif input_type == 'youtube':
-                url = data.get('url', '')
+                url = data.get('url', '') if request.is_json else request.form.get('url', '')
                 if not url:
                     raise ValueError("No YouTube URL provided")
                 
@@ -350,8 +373,22 @@ def not_found(e):
 
 @app.errorhandler(500)
 def server_error(e):
+    logger.error(f"Internal server error: {str(e)}")
     return jsonify({'error': 'Internal server error'}), 500
 
+# Add a catch-all error handler for debugging
+@app.errorhandler(Exception)
+def handle_exception(e):
+    logger.error(f"Unhandled exception: {str(e)}", exc_info=True)
+    return jsonify({'error': str(e)}), 500
+
 if __name__ == '__main__':
+    # Get port from environment variable (Render provides this)
     port = int(os.environ.get('PORT', 5000))
+    
+    # Log startup information
+    logger.info(f"Starting Flask app on port {port}")
+    logger.info(f"Debug mode: {Config.DEBUG}")
+    
+    # Run the app
     app.run(host='0.0.0.0', port=port, debug=Config.DEBUG)
