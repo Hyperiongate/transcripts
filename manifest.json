@@ -1,0 +1,172 @@
+// manifest.json
+{
+  "manifest_version": 3,
+  "name": "Live Transcript Fact Checker",
+  "version": "1.0",
+  "description": "Capture live captions for fact-checking",
+  "permissions": [
+    "activeTab",
+    "storage"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.abcnews.com/*",
+        "*://*.cbsnews.com/*",
+        "*://*.nbcnews.com/*",
+        "*://*.pbs.org/*",
+        "*://*.youtube.com/*"
+      ],
+      "js": ["content.js"]
+    }
+  ],
+  "background": {
+    "service_worker": "background.js"
+  }
+}
+
+// content.js - Captures captions from video players
+class CaptionCapture {
+  constructor() {
+    this.observer = null;
+    this.captionBuffer = [];
+    this.lastSentTime = 0;
+    this.serverUrl = 'https://your-fact-checker.com/api/live-captions';
+  }
+
+  start() {
+    // Look for common caption containers
+    const captionSelectors = [
+      // YouTube
+      '.ytp-caption-segment',
+      // HTML5 video captions
+      'track[kind="captions"]',
+      'track[kind="subtitles"]',
+      // Common player classes
+      '.caption-text',
+      '.subtitle-text',
+      '.vjs-text-track-display',
+      // Network specific
+      '.abc-player-captions',
+      '.cbs-video-captions'
+    ];
+
+    // Set up mutation observer for dynamic captions
+    this.observer = new MutationObserver((mutations) => {
+      mutations.forEach((mutation) => {
+        if (mutation.type === 'childList' || mutation.type === 'characterData') {
+          this.extractCaptions(mutation.target);
+        }
+      });
+    });
+
+    // Start observing
+    captionSelectors.forEach(selector => {
+      const elements = document.querySelectorAll(selector);
+      elements.forEach(el => {
+        this.observer.observe(el, {
+          childList: true,
+          characterData: true,
+          subtree: true
+        });
+      });
+    });
+
+    // Also check for video elements with text tracks
+    this.monitorVideoTracks();
+  }
+
+  monitorVideoTracks() {
+    const videos = document.querySelectorAll('video');
+    
+    videos.forEach(video => {
+      // Listen for track changes
+      video.textTracks.addEventListener('change', () => {
+        Array.from(video.textTracks).forEach(track => {
+          if (track.mode === 'showing' && track.kind === 'captions') {
+            track.addEventListener('cuechange', () => {
+              const activeCues = track.activeCues;
+              if (activeCues && activeCues.length > 0) {
+                const text = Array.from(activeCues)
+                  .map(cue => cue.text)
+                  .join(' ');
+                this.addToBuffer(text);
+              }
+            });
+          }
+        });
+      });
+    });
+  }
+
+  extractCaptions(element) {
+    const text = element.textContent?.trim();
+    if (text && text.length > 0) {
+      this.addToBuffer(text);
+    }
+  }
+
+  addToBuffer(text) {
+    // Avoid duplicates
+    if (!this.captionBuffer.includes(text)) {
+      this.captionBuffer.push({
+        text: text,
+        timestamp: Date.now()
+      });
+
+      // Send to server every 30 seconds or 500 chars
+      const totalChars = this.captionBuffer.reduce((sum, item) => sum + item.text.length, 0);
+      const timeSinceLastSent = Date.now() - this.lastSentTime;
+
+      if (totalChars > 500 || timeSinceLastSent > 30000) {
+        this.sendToServer();
+      }
+    }
+  }
+
+  async sendToServer() {
+    if (this.captionBuffer.length === 0) return;
+
+    const payload = {
+      captions: this.captionBuffer,
+      source: window.location.hostname,
+      url: window.location.href,
+      timestamp: new Date().toISOString()
+    };
+
+    try {
+      await fetch(this.serverUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload)
+      });
+
+      // Clear buffer after successful send
+      this.captionBuffer = [];
+      this.lastSentTime = Date.now();
+    } catch (error) {
+      console.error('Failed to send captions:', error);
+    }
+  }
+
+  stop() {
+    if (this.observer) {
+      this.observer.disconnect();
+    }
+    this.sendToServer(); // Send any remaining captions
+  }
+}
+
+// Initialize on page load
+const captionCapture = new CaptionCapture();
+
+// Start capturing when video is detected
+const videoDetectionInterval = setInterval(() => {
+  const video = document.querySelector('video');
+  if (video) {
+    captionCapture.start();
+    clearInterval(videoDetectionInterval);
+  }
+}, 1000);
