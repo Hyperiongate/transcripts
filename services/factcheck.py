@@ -1891,7 +1891,7 @@ class FactChecker:
                     return value, 'percent'
                 
                 # Check if it's a dollar amount
-                if ' in claim:
+                if '$' in claim:
                     return value, 'dollars'
                 
                 return value, None
