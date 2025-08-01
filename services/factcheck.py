@@ -459,7 +459,7 @@ class FactChecker:
             return 'Scientific Data'
         else:
             return 'Other Sources'
-async def _async_check_claim(self, claim: str) -> Dict:
+    async def _async_check_claim(self, claim: str) -> Dict:
         """Verify the truth of a claim using multiple methods"""
         
         # Check claim type
