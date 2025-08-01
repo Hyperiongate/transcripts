@@ -289,6 +289,17 @@ function displayResults(results) {
     // Update summary
     document.getElementById('analysis-summary').textContent = results.summary;
     
+    // Display analysis notes if present
+    if (results.analysis_notes && results.analysis_notes.length > 0) {
+        const notesHtml = results.analysis_notes.map(note => `<li>${note}</li>`).join('');
+        document.getElementById('analysis-summary').innerHTML += `
+            <div class="analysis-notes">
+                <h4>Important Notes:</h4>
+                <ul>${notesHtml}</ul>
+            </div>
+        `;
+    }
+    
     // Update statistics
     document.getElementById('total-claims').textContent = results.checked_claims;
     
@@ -312,11 +323,11 @@ function displayResults(results) {
     document.getElementById('false-claims').textContent = falseCount;
     document.getElementById('unverified-claims').textContent = unverifiedCount;
     
-    // Display fact checks
+    // Display fact checks with enhanced dropdowns
     displayFactChecks(results.fact_checks);
 }
 
-// Display individual fact checks
+// Display individual fact checks with expandable dropdowns
 function displayFactChecks(factChecks) {
     const container = document.getElementById('fact-check-list');
     container.innerHTML = '';
@@ -328,27 +339,122 @@ function displayFactChecks(factChecks) {
         const item = document.createElement('div');
         item.className = `fact-check-item ${verdictClass}`;
         
+        // Create unique ID for this fact check
+        const itemId = `fact-check-${index}`;
+        
         item.innerHTML = `
-            <div class="fact-check-header">
-                <div class="fact-check-claim">${check.claim}</div>
+            <div class="fact-check-header" onclick="toggleFactCheck('${itemId}')">
+                <div class="fact-check-claim">
+                    <i class="fas fa-chevron-right toggle-icon" id="${itemId}-icon"></i>
+                    ${check.claim}
+                </div>
                 <div class="fact-check-verdict ${verdictClass}">
                     <i class="fas ${verdictIcon}"></i>
                     ${formatVerdict(check.verdict)}
                 </div>
             </div>
-            <div class="fact-check-details">
-                <p>${check.explanation}</p>
-                ${check.confidence ? `<p><strong>Confidence:</strong> ${check.confidence}%</p>` : ''}
-            </div>
-            ${check.url ? `
-                <div class="fact-check-source">
-                    Source: <a href="${check.url}" target="_blank">${check.publisher}</a>
+            <div class="fact-check-details-wrapper" id="${itemId}" style="display: none;">
+                <div class="fact-check-details">
+                    ${check.original_text && check.original_text !== check.claim ? `
+                    <div class="original-text-section">
+                        <h4>Original Statement</h4>
+                        <p class="original-text">"${check.original_text}"</p>
+                    </div>
+                    ` : ''}
+                    
+                    <div class="explanation-section">
+                        <h4>Explanation</h4>
+                        <p>${check.explanation}</p>
+                    </div>
+                    
+                    ${check.confidence ? `
+                    <div class="confidence-section">
+                        <h4>Confidence Level</h4>
+                        <div class="confidence-bar">
+                            <div class="confidence-fill" style="width: ${check.confidence}%"></div>
+                        </div>
+                        <span class="confidence-text">${check.confidence}% confident</span>
+                    </div>
+                    ` : ''}
+                    
+                    ${check.analysis ? `
+                    <div class="analysis-section">
+                        <h4>Detailed Analysis</h4>
+                        <p>${check.analysis}</p>
+                    </div>
+                    ` : ''}
+                    
+                    ${check.context ? `
+                    <div class="context-section">
+                        <h4>Important Context</h4>
+                        <p>${check.context}</p>
+                    </div>
+                    ` : ''}
+                    
+                    ${check.sources && check.sources.length > 0 ? `
+                    <div class="sources-section">
+                        <h4>Sources Consulted</h4>
+                        <ul>
+                            ${check.sources.map(source => `<li>${source}</li>`).join('')}
+                        </ul>
+                    </div>
+                    ` : ''}
+                    
+                    ${check.source_breakdown ? `
+                    <div class="source-breakdown">
+                        <h4>Source Types Used</h4>
+                        <ul>
+                            ${Object.entries(check.source_breakdown).map(([type, count]) => 
+                                `<li>${type}: ${count}</li>`
+                            ).join('')}
+                        </ul>
+                    </div>
+                    ` : ''}
+                    
+                    ${check.url ? `
+                    <div class="primary-source">
+                        <h4>Primary Source</h4>
+                        <a href="${check.url}" target="_blank" rel="noopener">
+                            <i class="fas fa-external-link-alt"></i>
+                            ${check.publisher || 'View Source'}
+                        </a>
+                    </div>
+                    ` : ''}
                 </div>
-            ` : ''}
+            </div>
         `;
         
         container.appendChild(item);
     });
+}
+
+// Toggle fact check dropdown
+function toggleFactCheck(itemId) {
+    const details = document.getElementById(itemId);
+    const icon = document.getElementById(`${itemId}-icon`);
+    
+    if (details.style.display === 'none') {
+        // Close all other dropdowns first
+        document.querySelectorAll('.fact-check-details-wrapper').forEach(el => {
+            el.style.display = 'none';
+        });
+        document.querySelectorAll('.toggle-icon').forEach(el => {
+            el.classList.remove('fa-chevron-down');
+            el.classList.add('fa-chevron-right');
+        });
+        
+        // Open this dropdown
+        details.style.display = 'block';
+        icon.classList.remove('fa-chevron-right');
+        icon.classList.add('fa-chevron-down');
+        
+        // Smooth scroll to view
+        details.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    } else {
+        details.style.display = 'none';
+        icon.classList.remove('fa-chevron-down');
+        icon.classList.add('fa-chevron-right');
+    }
 }
 
 // Get verdict class for styling
