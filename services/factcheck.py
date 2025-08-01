@@ -164,15 +164,15 @@ class FactChecker:
         return all_results
     
     def _create_deep_analysis_response(self, claim: str, verdict: str, results: List[Dict], metadata: Dict = None) -> Dict:
-    """Create a comprehensive fact-check response with deep analysis"""
+        """Create a comprehensive fact-check response with deep analysis"""
     
-    # Base response
-    response = {
-        'claim': claim,
-        'verdict': verdict,
-        'confidence': self._calculate_truth_confidence([{'verdict': verdict, 'confidence': 80, 'weight': 0.8}]),
-        'sources': list(set([r.get('source', 'Unknown') for r in results if r.get('found')]))
-    }
+        # Base response
+        response = {
+            'claim': claim,
+            'verdict': verdict,
+            'confidence': self._calculate_truth_confidence([{'verdict': verdict, 'confidence': 80, 'weight': 0.8}]),
+            'sources': list(set([r.get('source', 'Unknown') for r in results if r.get('found')]))
+        }
     
     # First, let's understand what the claim is actually saying
     claim_interpretation = self._interpret_claim(claim, results)
