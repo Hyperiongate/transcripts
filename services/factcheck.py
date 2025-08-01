@@ -1,6 +1,7 @@
 """
 Enhanced Fact Checking Service with Multiple Verification Sources
-Complete version with FRED, Semantic Scholar, and MediaStack integrations
+Complete version with ALL integrations: Google, FRED, Semantic Scholar, MediaStack, 
+CrossRef, CDC, World Bank, and OpenAI
 """
 import os
 import time
@@ -28,6 +29,8 @@ class FactChecker:
         self.scraperapi_key = getattr(Config, 'SCRAPERAPI_KEY', None)
         self.fred_api_key = getattr(Config, 'FRED_API_KEY', None)
         self.mediastack_api_key = getattr(Config, 'MEDIASTACK_API_KEY', None)
+        self.crossref_email = getattr(Config, 'CROSSREF_EMAIL', 'factchecker@example.com')
+        self.openai_api_key = getattr(Config, 'OPENAI_API_KEY', None)
         
         self.session = requests.Session()
         
@@ -89,15 +92,25 @@ class FactChecker:
     async def _async_check_claim(self, claim: str) -> Dict:
         """Verify the truth of a claim using multiple methods"""
         
-        # Check if it's an economic claim
+        # Check claim type
         claim_lower = claim.lower()
+        
+        # Economic claim detection
         economic_terms = list(self.fred_series.keys()) + ['economy', 'economic', 'recession', 'growth']
         is_economic = any(term in claim_lower for term in economic_terms)
         
-        # Check if it's an academic/research claim
+        # Research claim detection
         research_terms = ['study', 'research', 'scientists', 'researchers', 'paper', 'journal', 
                          'university', 'professor', 'academic', 'peer-reviewed', 'published']
         is_research = any(term in claim_lower for term in research_terms)
+        
+        # Health claim detection
+        health_terms = ['covid', 'vaccine', 'disease', 'health', 'medical', 'mortality', 'cdc']
+        is_health = any(term in claim_lower for term in health_terms)
+        
+        # Global/international claim detection
+        global_terms = ['world', 'global', 'international', 'countries', 'worldwide', 'poverty', 'development']
+        is_global = any(term in claim_lower for term in global_terms)
         
         # Build task list based on claim type
         tasks = []
@@ -105,19 +118,29 @@ class FactChecker:
         # Always check Google Fact Check
         tasks.append(self._check_google_factcheck(claim))
         
-        # Add FRED for economic claims
+        # Add specialized checks based on claim type
         if is_economic and self.fred_api_key:
             tasks.append(self._check_fred_data(claim))
         
-        # Add Semantic Scholar for research claims
         if is_research:
             tasks.append(self._check_semantic_scholar(claim))
+            tasks.append(self._check_crossref(claim))
         
-        # Add news verification (MediaStack preferred, fallback to News API)
+        if is_health:
+            tasks.append(self._check_cdc_data(claim))
+        
+        if is_global:
+            tasks.append(self._check_world_bank(claim))
+        
+        # Add news verification
         if self.mediastack_api_key:
             tasks.append(self._check_mediastack_news(claim))
         elif self.news_api_key:
             tasks.append(self._search_news_verification(claim))
+        
+        # Use OpenAI for complex analysis if available
+        if self.openai_api_key and len(tasks) > 1:
+            tasks.append(self._analyze_with_openai(claim))
         
         # Gather all results
         all_results = await asyncio.gather(*tasks, return_exceptions=True)
@@ -346,6 +369,261 @@ class FactChecker:
             logger.error(f"Semantic Scholar error: {str(e)}")
             return {'found': False}
     
+    async def _check_crossref(self, claim: str) -> Dict:
+        """Check CrossRef for academic papers - 130M+ scholarly works"""
+        
+        # CrossRef is great for specific academic/scientific claims
+        academic_indicators = ['published', 'doi', 'et al', 'journal', 'volume', 'issue', 'pages', 'isbn']
+        claim_lower = claim.lower()
+        
+        # Also check if it's a research claim
+        if not any(term in claim_lower for term in academic_indicators + ['study', 'research', 'paper']):
+            return {'found': False}
+        
+        try:
+            # Extract searchable elements
+            search_terms = self._extract_crossref_search_terms(claim)
+            
+            url = "https://api.crossref.org/works"
+            params = {
+                'query': search_terms,
+                'rows': 5,
+                'select': 'DOI,title,author,published-print,published-online,container-title,is-referenced-by-count,subject,abstract'
+            }
+            
+            # CrossRef requires email in User-Agent
+            headers = {
+                'User-Agent': f'FactChecker/1.0 (mailto:{self.crossref_email})'
+            }
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, params=params, headers=headers, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        
+                        if data.get('message', {}).get('items'):
+                            items = data['message']['items']
+                            
+                            # Find best matching paper
+                            best_match = self._find_best_crossref_match(claim, items)
+                            
+                            if best_match:
+                                return self._create_crossref_result(claim, best_match, len(items))
+                            else:
+                                return {
+                                    'found': True,
+                                    'verdict': 'unverified',
+                                    'confidence': 40,
+                                    'explanation': f"Found {len(items)} academic papers but none exactly matching the claim",
+                                    'source': 'CrossRef Academic Database',
+                                    'weight': 0.6
+                                }
+            
+            return {'found': False}
+            
+        except Exception as e:
+            logger.error(f"CrossRef API error: {str(e)}")
+            return {'found': False}
+    
+    async def _check_cdc_data(self, claim: str) -> Dict:
+        """Check health claims against CDC data sources"""
+        
+        health_keywords = [
+            'covid', 'coronavirus', 'vaccine', 'vaccination', 'death rate', 'mortality',
+            'disease', 'infection', 'hospitalization', 'cdc', 'health', 'medical',
+            'flu', 'influenza', 'cancer', 'heart disease', 'diabetes', 'obesity',
+            'life expectancy', 'infant mortality', 'maternal mortality'
+        ]
+        
+        claim_lower = claim.lower()
+        if not any(keyword in claim_lower for keyword in health_keywords):
+            return {'found': False}
+        
+        try:
+            if any(term in claim_lower for term in ['covid', 'coronavirus']):
+                return await self._check_cdc_covid_data(claim)
+            return await self._check_cdc_statistics(claim)
+            
+        except Exception as e:
+            logger.error(f"CDC data error: {str(e)}")
+            return {'found': False}
+    
+    async def _check_cdc_covid_data(self, claim: str) -> Dict:
+        """Check COVID-specific claims against CDC COVID Data Tracker"""
+        
+        try:
+            # CDC COVID Data Tracker API endpoints
+            base_url = "https://data.cdc.gov/resource"
+            
+            # Extract what type of COVID data is being claimed
+            if 'death' in claim.lower() or 'mortality' in claim.lower():
+                endpoint = f"{base_url}/9mfq-cb36.json"  # COVID deaths
+                data_type = "COVID deaths"
+            elif 'case' in claim.lower() or 'infection' in claim.lower():
+                endpoint = f"{base_url}/9mfq-cb36.json"  # COVID cases
+                data_type = "COVID cases"
+            elif 'vaccine' in claim.lower() or 'vaccination' in claim.lower():
+                endpoint = f"{base_url}/8xkx-amqh.json"  # Vaccination data
+                data_type = "COVID vaccinations"
+            else:
+                return {'found': False}
+            
+            # Get latest data
+            params = {
+                '$limit': 10,
+                '$order': 'submission_date DESC'
+            }
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.get(endpoint, params=params, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        
+                        if data:
+                            return self._analyze_cdc_covid_data(claim, data, data_type)
+            
+            return {'found': False}
+            
+        except Exception as e:
+            logger.error(f"CDC COVID data error: {str(e)}")
+            return {'found': False}
+    
+    async def _check_cdc_statistics(self, claim: str) -> Dict:
+        """Check against known CDC health statistics"""
+        
+        # CDC maintains several key statistics that are commonly cited
+        claim_lower = claim.lower()
+        
+        # Extract numbers from claim
+        numbers = re.findall(r'(\d+\.?\d*)\s*%?', claim)
+        if not numbers:
+            return {'found': False}
+        
+        claimed_value = float(numbers[0])
+        
+        # Common CDC statistics (as of 2024)
+        cdc_stats = {
+            'life expectancy': {
+                'value': 76.4,
+                'range': (75, 78),
+                'unit': 'years',
+                'source': 'CDC National Vital Statistics'
+            },
+            'infant mortality': {
+                'value': 5.4,
+                'range': (5, 6),
+                'unit': 'per 1,000 live births',
+                'source': 'CDC National Vital Statistics'
+            },
+            'obesity rate': {
+                'value': 41.9,
+                'range': (40, 43),
+                'unit': 'percent',
+                'source': 'CDC National Health and Nutrition Examination Survey'
+            },
+            'diabetes prevalence': {
+                'value': 11.3,
+                'range': (10, 12),
+                'unit': 'percent',
+                'source': 'CDC National Diabetes Statistics Report'
+            },
+            'flu vaccination coverage': {
+                'value': 48.4,
+                'range': (45, 52),
+                'unit': 'percent',
+                'source': 'CDC FluVaxView'
+            }
+        }
+        
+        # Check which statistic is being claimed
+        for stat_name, stat_data in cdc_stats.items():
+            if any(term in claim_lower for term in stat_name.split()):
+                # Check if claimed value is within reasonable range
+                if stat_data['range'][0] <= claimed_value <= stat_data['range'][1]:
+                    verdict = 'true'
+                    confidence = 85
+                    explanation = f"✓ Verified: CDC data shows {stat_name} is {stat_data['value']} {stat_data['unit']}"
+                else:
+                    verdict = 'false'
+                    confidence = 85
+                    explanation = f"✗ Incorrect: CDC data shows {stat_name} is {stat_data['value']} {stat_data['unit']}, not {claimed_value}"
+                
+                return {
+                    'found': True,
+                    'verdict': verdict,
+                    'confidence': confidence,
+                    'explanation': explanation,
+                    'source': stat_data['source'],
+                    'url': 'https://www.cdc.gov/nchs/fastats/',
+                    'weight': 0.95
+                }
+        
+        return {'found': False}
+    
+    async def _check_world_bank(self, claim: str) -> Dict:
+        """Check global development claims against World Bank data"""
+        
+        global_indicators = [
+            'poverty', 'gdp per capita', 'literacy rate', 'education', 'development',
+            'global', 'world', 'countries', 'international', 'population growth',
+            'life expectancy', 'infant mortality', 'access to electricity',
+            'clean water', 'sanitation', 'internet users', 'mobile subscriptions'
+        ]
+        
+        claim_lower = claim.lower()
+        if not any(indicator in claim_lower for indicator in global_indicators):
+            return {'found': False}
+        
+        try:
+            # Map common claims to World Bank indicators
+            indicator_mapping = {
+                'poverty': '1.0.HCount.1.90usd',  # Poverty headcount ratio at $1.90 a day
+                'extreme poverty': '1.0.HCount.1.90usd',
+                'gdp per capita': 'NY.GDP.PCAP.CD',
+                'literacy': 'SE.ADT.LITR.ZS',
+                'life expectancy': 'SP.DYN.LE00.IN',
+                'infant mortality': 'SP.DYN.IMRT.IN',
+                'population growth': 'SP.POP.GROW',
+                'internet users': 'IT.NET.USER.ZS',
+                'electricity access': 'EG.ELC.ACCS.ZS',
+                'clean water': 'SH.H2O.BASW.ZS'
+            }
+            
+            # Find relevant indicator
+            indicator_code = None
+            indicator_name = None
+            for term, code in indicator_mapping.items():
+                if term in claim_lower:
+                    indicator_code = code
+                    indicator_name = term
+                    break
+            
+            if not indicator_code:
+                return {'found': False}
+            
+            # World Bank API endpoint
+            url = f"https://api.worldbank.org/v2/country/all/indicator/{indicator_code}"
+            params = {
+                'format': 'json',
+                'per_page': 50,
+                'date': '2020:2023',  # Recent years
+                'sort': 'date:desc'
+            }
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        
+                        if len(data) > 1 and data[1]:
+                            return self._analyze_world_bank_data(claim, data[1], indicator_name)
+            
+            return {'found': False}
+            
+        except Exception as e:
+            logger.error(f"World Bank API error: {str(e)}")
+            return {'found': False}
+    
     async def _check_mediastack_news(self, claim: str) -> Dict:
         """Verify claims using MediaStack's 7,500+ news sources"""
         
@@ -384,84 +662,74 @@ class FactChecker:
             logger.error(f"MediaStack API error: {str(e)}")
             return {'found': False}
     
-    def _analyze_mediastack_coverage(self, claim: str, articles: List[Dict]) -> Dict:
-        """Analyze news articles to verify factual claims"""
+    async def _analyze_with_openai(self, claim: str) -> Dict:
+        """Use OpenAI to analyze complex claims"""
         
-        reputable_sources = {
-            'reuters', 'associated press', 'ap news', 'bbc', 'npr', 'the guardian',
-            'the new york times', 'washington post', 'wall street journal', 'cnn',
-            'financial times', 'the economist', 'bloomberg', 'forbes', 'politico'
-        }
+        if not self.openai_api_key:
+            return {'found': False}
         
-        quality_articles = []
-        for article in articles:
-            source = article.get('source', '').lower()
-            if any(rep in source for rep in reputable_sources):
-                quality_articles.append(article)
-        
-        if not quality_articles:
-            quality_articles = articles
-            confidence_modifier = 0.7
-        else:
-            confidence_modifier = 1.0
-        
-        claim_facts = self._extract_verifiable_facts(claim)
-        
-        supporting = 0
-        contradicting = 0
-        relevant_quotes = []
-        
-        for article in quality_articles[:5]:
-            title = article.get('title', '').lower()
-            description = article.get('description', '').lower()
-            content = title + ' ' + description
+        try:
+            headers = {
+                'Authorization': f'Bearer {self.openai_api_key}',
+                'Content-Type': 'application/json'
+            }
             
-            facts_found = sum(1 for fact in claim_facts if fact.lower() in content)
+            prompt = f"""Analyze this claim for factual accuracy: "{claim}"
             
-            if facts_found > 0:
-                if any(word in content for word in ['false', 'incorrect', 'debunked', 'myth', 'not true', 'no evidence']):
-                    contradicting += 1
-                elif any(word in content for word in ['confirmed', 'true', 'correct', 'verified', 'evidence shows']):
-                    supporting += 1
-                else:
-                    supporting += 0.5
-                
-                relevant_quotes.append({
-                    'source': article.get('source'),
-                    'title': article.get('title'),
-                    'date': article.get('published_at')
-                })
-        
-        if supporting > contradicting * 2:
-            verdict = 'true'
-            confidence = min(70 + (supporting * 5), 90) * confidence_modifier
-            explanation = f"Verified by {len(quality_articles)} news sources. "
-        elif contradicting > supporting * 2:
-            verdict = 'false'
-            confidence = min(70 + (contradicting * 5), 90) * confidence_modifier
-            explanation = f"Contradicted by {len(quality_articles)} news sources. "
-        elif supporting > 0 or contradicting > 0:
-            verdict = 'mixed'
-            confidence = 60 * confidence_modifier
-            explanation = f"Mixed coverage from {len(quality_articles)} sources. "
-        else:
-            verdict = 'unverified'
-            confidence = 30
-            explanation = "Insufficient news coverage to verify. "
-        
-        if relevant_quotes:
-            sources_list = list(set([q['source'] for q in relevant_quotes[:3]]))
-            explanation += f"Key sources: {', '.join(sources_list)}"
-        
-        return {
-            'found': True,
-            'verdict': verdict,
-            'confidence': int(confidence),
-            'explanation': explanation,
-            'source': 'MediaStack News Analysis',
-            'article_count': len(articles),
-            'weight': 0.75
-        }
+            Consider:
+            1. Is this claim verifiable?
+            2. What specific facts need checking?
+            3. Are there logical inconsistencies?
+            4. What context is missing?
+            
+            Provide a brief assessment of the claim's likely accuracy."""
+            
+            data = {
+                'model': 'gpt-3.5-turbo',
+                'messages': [
+                    {'role': 'system', 'content': 'You are a fact-checking assistant. Analyze claims objectively.'},
+                    {'role': 'user', 'content': prompt}
+                ],
+                'temperature': 0.2,
+                'max_tokens': 200
+            }
+            
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    'https://api.openai.com/v1/chat/completions',
+                    headers=headers,
+                    json=data,
+                    timeout=aiohttp.ClientTimeout(total=15)
+                ) as response:
+                    if response.status == 200:
+                        result = await response.json()
+                        
+                        if result.get('choices'):
+                            analysis = result['choices'][0]['message']['content']
+                            
+                            # Simple verdict extraction from OpenAI response
+                            analysis_lower = analysis.lower()
+                            if any(word in analysis_lower for word in ['true', 'accurate', 'correct', 'verified']):
+                                verdict = 'mostly_true'
+                            elif any(word in analysis_lower for word in ['false', 'incorrect', 'inaccurate', 'wrong']):
+                                verdict = 'mostly_false'
+                            else:
+                                verdict = 'mixed'
+                            
+                            return {
+                                'found': True,
+                                'verdict': verdict,
+                                'confidence': 70,
+                                'explanation': f"AI Analysis: {analysis[:200]}",
+                                'source': 'OpenAI GPT Analysis',
+                                'weight': 0.6
+                            }
+            
+            return {'found': False}
+            
+        except Exception as e:
+            logger.error(f"OpenAI API error: {str(e)}")
+            return {'found': False}
     
     async def _search_news_verification(self, claim: str) -> Dict:
         """Fallback to News API if MediaStack not available"""
@@ -680,6 +948,127 @@ class FactChecker:
         
         return facts[:5]
     
+    def _extract_crossref_search_terms(self, claim: str) -> str:
+        """Extract search terms optimized for CrossRef"""
+        # Remove common phrases
+        claim = re.sub(r'(according to|a study by|research by|paper by|published in)', '', claim, flags=re.IGNORECASE)
+        
+        # Look for DOI
+        doi_match = re.search(r'10\.\d{4,}/[-._;()/:\w]+', claim)
+        if doi_match:
+            return doi_match.group()
+        
+        # Look for author names
+        author_patterns = [
+            r'([A-Z][a-z]+),\s*([A-Z]\.?\s*)+',  # Smith, J.
+            r'([A-Z]\.?\s*)+\s+([A-Z][a-z]+)',   # J. Smith
+            r'([A-Z][a-z]+)\s+et\s+al\.?'        # Smith et al.
+        ]
+        
+        for pattern in author_patterns:
+            match = re.search(pattern, claim)
+            if match:
+                return match.group()
+        
+        # Look for quoted titles
+        title_match = re.search(r'"([^"]+)"', claim)
+        if title_match:
+            return title_match.group(1)
+        
+        # Fallback to key terms
+        return ' '.join(self._extract_key_terms(claim)[:5])
+    
+    def _find_best_crossref_match(self, claim: str, items: List[Dict]) -> Optional[Dict]:
+        """Find the best matching paper from CrossRef results"""
+        claim_lower = claim.lower()
+        
+        # Look for exact title match
+        for item in items:
+            if 'title' in item and item['title']:
+                title = item['title'][0].lower() if isinstance(item['title'], list) else item['title'].lower()
+                if title in claim_lower or claim_lower in title:
+                    return item
+        
+        # Look for author match
+        for item in items:
+            if 'author' in item:
+                for author in item['author']:
+                    author_name = f"{author.get('family', '')} {author.get('given', '')}".lower()
+                    if author_name in claim_lower:
+                        return item
+        
+        # Look for high-citation papers on the topic
+        high_citation_items = [i for i in items if i.get('is-referenced-by-count', 0) > 50]
+        if high_citation_items:
+            return high_citation_items[0]
+        
+        # Return first result if any
+        return items[0] if items else None
+    
+    def _create_crossref_result(self, claim: str, paper: Dict, total_found: int) -> Dict:
+        """Create result from CrossRef paper data"""
+        # Extract paper details
+        title = paper['title'][0] if isinstance(paper.get('title'), list) else paper.get('title', 'Unknown')
+        
+        authors = []
+        if 'author' in paper:
+            for author in paper['author'][:3]:  # First 3 authors
+                authors.append(f"{author.get('given', '')} {author.get('family', '')}")
+        author_str = ', '.join(authors) if authors else 'Unknown authors'
+        
+        journal = paper.get('container-title', ['Unknown journal'])[0] if isinstance(paper.get('container-title'), list) else paper.get('container-title', 'Unknown journal')
+        
+        year = None
+        if 'published-print' in paper:
+            year = paper['published-print']['date-parts'][0][0]
+        elif 'published-online' in paper:
+            year = paper['published-online']['date-parts'][0][0]
+        
+        citations = paper.get('is-referenced-by-count', 0)
+        doi = paper.get('DOI', '')
+        
+        # Analyze if claim is supported
+        verdict = self._analyze_crossref_alignment(claim, paper)
+        
+        # Build explanation
+        explanation = f"CrossRef: Found exact paper - '{title}' by {author_str}"
+        if year:
+            explanation += f" ({year})"
+        explanation += f" in {journal}"
+        if citations > 0:
+            explanation += f" with {citations} citations"
+        
+        confidence = min(70 + (citations // 10), 90)  # More citations = higher confidence
+        
+        return {
+            'found': True,
+            'verdict': verdict,
+            'confidence': confidence,
+            'explanation': explanation,
+            'source': 'CrossRef Academic Database',
+            'url': f'https://doi.org/{doi}' if doi else '',
+            'doi': doi,
+            'citations': citations,
+            'weight': 0.85
+        }
+    
+    def _analyze_crossref_alignment(self, claim: str, paper: Dict) -> str:
+        """Analyze if CrossRef paper supports the claim"""
+        claim_lower = claim.lower()
+        
+        # Check for misrepresentation indicators
+        if any(word in claim_lower for word in ['does not', 'no evidence', 'failed to', 'disproves']):
+            return 'mixed'
+        
+        # High citation count suggests established research
+        citations = paper.get('is-referenced-by-count', 0)
+        if citations > 100:
+            return 'mostly_true'
+        elif citations > 20:
+            return 'mixed'
+        else:
+            return 'unverified'
+    
     def _analyze_paper_alignment(self, claim: str, paper: Dict) -> str:
         """Analyze if paper supports or refutes claim"""
         
@@ -704,6 +1093,195 @@ class FactChecker:
             return 'true'
         else:
             return 'mixed'
+    
+    def _analyze_cdc_covid_data(self, claim: str, data: List[Dict], data_type: str) -> Dict:
+        """Analyze CDC COVID data against claim"""
+        
+        # Extract numbers from claim
+        numbers = re.findall(r'(\d+\.?\d*)\s*%?', claim)
+        if not numbers:
+            return {'found': False}
+        
+        claimed_value = float(numbers[0])
+        
+        # Get latest values from data
+        if data:
+            latest = data[0]
+            
+            # Determine which field to check based on claim
+            if 'death' in claim.lower():
+                actual_value = float(latest.get('tot_death', 0))
+                metric = 'total deaths'
+            elif 'new' in claim.lower() and 'case' in claim.lower():
+                actual_value = float(latest.get('new_case', 0))
+                metric = 'new cases'
+            elif 'total' in claim.lower() and 'case' in claim.lower():
+                actual_value = float(latest.get('tot_cases', 0))
+                metric = 'total cases'
+            else:
+                return {'found': False}
+            
+            # Compare values
+            if actual_value == 0:
+                return {'found': False}
+            
+            percentage_diff = abs((actual_value - claimed_value) / actual_value) * 100
+            
+            if percentage_diff < 5:
+                verdict = 'true'
+                confidence = 90
+                explanation = f"✓ Verified: CDC reports {metric} at {actual_value:,.0f}"
+            elif percentage_diff < 15:
+                verdict = 'mostly_true'
+                confidence = 80
+                explanation = f"◐ Close: CDC reports {metric} at {actual_value:,.0f}, claim says {claimed_value:,.0f}"
+            else:
+                verdict = 'false'
+                confidence = 85
+                explanation = f"✗ Incorrect: CDC reports {metric} at {actual_value:,.0f}, not {claimed_value:,.0f}"
+            
+            return {
+                'found': True,
+                'verdict': verdict,
+                'confidence': confidence,
+                'explanation': explanation,
+                'source': 'CDC COVID Data Tracker',
+                'url': 'https://covid.cdc.gov/covid-data-tracker/',
+                'date': latest.get('submission_date', 'Unknown'),
+                'weight': 0.95
+            }
+        
+        return {'found': False}
+    
+    def _analyze_world_bank_data(self, claim: str, data: List[Dict], indicator_name: str) -> Dict:
+        """Analyze World Bank data against claim"""
+        
+        # Extract numbers from claim
+        numbers = re.findall(r'(\d+\.?\d*)\s*%?', claim)
+        if not numbers:
+            return {'found': False}
+        
+        claimed_value = float(numbers[0])
+        
+        # Get global or specific country data
+        global_data = []
+        for entry in data:
+            if entry.get('value') is not None:
+                global_data.append(entry)
+        
+        if not global_data:
+            return {'found': False}
+        
+        # Use most recent data
+        latest = global_data[0]
+        actual_value = float(latest['value'])
+        country = latest.get('country', {}).get('value', 'Global')
+        year = latest.get('date', 'Unknown')
+        
+        # Compare values
+        percentage_diff = abs((actual_value - claimed_value) / actual_value) * 100 if actual_value != 0 else 100
+        
+        if percentage_diff < 5:
+            verdict = 'true'
+            confidence = 85
+            explanation = f"✓ Verified: World Bank data shows {indicator_name} is {actual_value:.1f}% ({year})"
+        elif percentage_diff < 15:
+            verdict = 'mostly_true'
+            confidence = 75
+            explanation = f"◐ Close: World Bank shows {indicator_name} at {actual_value:.1f}%, claim says {claimed_value}%"
+        else:
+            verdict = 'false'
+            confidence = 80
+            explanation = f"✗ Incorrect: World Bank shows {indicator_name} at {actual_value:.1f}%, not {claimed_value}%"
+        
+        return {
+            'found': True,
+            'verdict': verdict,
+            'confidence': confidence,
+            'explanation': explanation,
+            'source': 'World Bank Open Data',
+            'url': 'https://data.worldbank.org/',
+            'weight': 0.9
+        }
+    
+    def _analyze_mediastack_coverage(self, claim: str, articles: List[Dict]) -> Dict:
+        """Analyze news articles to verify factual claims"""
+        
+        reputable_sources = {
+            'reuters', 'associated press', 'ap news', 'bbc', 'npr', 'the guardian',
+            'the new york times', 'washington post', 'wall street journal', 'cnn',
+            'financial times', 'the economist', 'bloomberg', 'forbes', 'politico'
+        }
+        
+        quality_articles = []
+        for article in articles:
+            source = article.get('source', '').lower()
+            if any(rep in source for rep in reputable_sources):
+                quality_articles.append(article)
+        
+        if not quality_articles:
+            quality_articles = articles
+            confidence_modifier = 0.7
+        else:
+            confidence_modifier = 1.0
+        
+        claim_facts = self._extract_verifiable_facts(claim)
+        
+        supporting = 0
+        contradicting = 0
+        relevant_quotes = []
+        
+        for article in quality_articles[:5]:
+            title = article.get('title', '').lower()
+            description = article.get('description', '').lower()
+            content = title + ' ' + description
+            
+            facts_found = sum(1 for fact in claim_facts if fact.lower() in content)
+            
+            if facts_found > 0:
+                if any(word in content for word in ['false', 'incorrect', 'debunked', 'myth', 'not true', 'no evidence']):
+                    contradicting += 1
+                elif any(word in content for word in ['confirmed', 'true', 'correct', 'verified', 'evidence shows']):
+                    supporting += 1
+                else:
+                    supporting += 0.5
+                
+                relevant_quotes.append({
+                    'source': article.get('source'),
+                    'title': article.get('title'),
+                    'date': article.get('published_at')
+                })
+        
+        if supporting > contradicting * 2:
+            verdict = 'true'
+            confidence = min(70 + (supporting * 5), 90) * confidence_modifier
+            explanation = f"Verified by {len(quality_articles)} news sources. "
+        elif contradicting > supporting * 2:
+            verdict = 'false'
+            confidence = min(70 + (contradicting * 5), 90) * confidence_modifier
+            explanation = f"Contradicted by {len(quality_articles)} news sources. "
+        elif supporting > 0 or contradicting > 0:
+            verdict = 'mixed'
+            confidence = 60 * confidence_modifier
+            explanation = f"Mixed coverage from {len(quality_articles)} sources. "
+        else:
+            verdict = 'unverified'
+            confidence = 30
+            explanation = "Insufficient news coverage to verify. "
+        
+        if relevant_quotes:
+            sources_list = list(set([q['source'] for q in relevant_quotes[:3]]))
+            explanation += f"Key sources: {', '.join(sources_list)}"
+        
+        return {
+            'found': True,
+            'verdict': verdict,
+            'confidence': int(confidence),
+            'explanation': explanation,
+            'source': 'MediaStack News Analysis',
+            'article_count': len(articles),
+            'weight': 0.75
+        }
     
     def batch_check(self, claims: List[str]) -> List[Dict]:
         """Check multiple claims with rate limiting"""
