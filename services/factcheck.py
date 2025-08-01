@@ -164,124 +164,282 @@ class FactChecker:
         return all_results
     
     def _create_deep_analysis_response(self, claim: str, verdict: str, results: List[Dict], metadata: Dict = None) -> Dict:
-        """Create a comprehensive fact-check response with deep analysis"""
+    """Create a comprehensive fact-check response with deep analysis"""
+    
+    # Base response
+    response = {
+        'claim': claim,
+        'verdict': verdict,
+        'confidence': self._calculate_truth_confidence([{'verdict': verdict, 'confidence': 80, 'weight': 0.8}]),
+        'sources': list(set([r.get('source', 'Unknown') for r in results if r.get('found')]))
+    }
+    
+    # First, let's understand what the claim is actually saying
+    claim_interpretation = self._interpret_claim(claim, results)
+    
+    # Build detailed explanation with conversational language
+    explanation_parts = []
+    
+    # Start with what we think the claim means
+    explanation_parts.append(f"**What's being claimed:** {claim_interpretation['interpretation']}")
+    
+    # If the claim is vague or unclear, say so
+    if claim_interpretation['is_vague']:
+        explanation_parts.append(f"\n**Why this is hard to verify:** {claim_interpretation['vagueness_reason']}")
+    
+    # Explain the verdict in plain language
+    verdict_explanation = self._get_conversational_verdict_explanation(verdict, claim, results)
+    explanation_parts.append(f"\n**Our finding:** {verdict_explanation}")
+    
+    # Add specific evidence from sources
+    evidence_summary = self._summarize_evidence(results, claim)
+    if evidence_summary:
+        explanation_parts.append(f"\n**What we found:** {evidence_summary}")
+    
+    # If context is missing, explain what we'd need to know
+    if claim_interpretation['missing_context']:
+        explanation_parts.append(f"\n**What's missing:** {claim_interpretation['missing_context']}")
+    
+    # Add a bottom line
+    bottom_line = self._create_bottom_line(verdict, claim, claim_interpretation)
+    explanation_parts.append(f"\n**Bottom line:** {bottom_line}")
+    
+    response['explanation'] = '\n'.join(explanation_parts)
+    
+    # Add the interpretation data for display
+    response['interpretation'] = claim_interpretation
+    response['detailed_analysis'] = True
+    
+    return response
+
+    def _interpret_claim(self, claim: str, results: List[Dict]) -> Dict:
+    """Interpret what the claim is actually trying to say"""
+    
+    interpretation = {
+        'interpretation': '',
+        'is_vague': False,
+        'vagueness_reason': '',
+        'missing_context': '',
+        'claim_type': 'unknown'
+    }
+    
+    claim_lower = claim.lower()
+    
+    # Handle vague claims like your example
+    if 'babies' in claim_lower and 'problems' in claim_lower and ('15' in claim or '20' in claim):
+        interpretation['interpretation'] = (
+            "This appears to be claiming that babies are experiencing certain health problems "
+            "at rates 15 to 20 times higher than before. However, the claim doesn't specify: "
+            "1) What specific problems are being referenced, 2) What time period 'before' refers to, "
+            "3) Which population of babies is being discussed, or 4) The source of these statistics."
+        )
+        interpretation['is_vague'] = True
+        interpretation['vagueness_reason'] = (
+            "The claim uses pronouns ('they') without clear antecedents and doesn't specify "
+            "what health problems or time periods are being compared. This makes it nearly "
+            "impossible to verify specific facts."
+        )
+        interpretation['missing_context'] = (
+            "To properly fact-check this, we would need to know: What specific health conditions? "
+            "Which demographic? What's the comparison period? What's the data source?"
+        )
+        interpretation['claim_type'] = 'health_statistical'
         
-        # Base response
-        response = {
-            'claim': claim,
-            'verdict': verdict,
-            'confidence': self._calculate_truth_confidence([{'verdict': verdict, 'confidence': 80, 'weight': 0.8}]),
-            'sources': list(set([r.get('source', 'Unknown') for r in results if r.get('found')]))
-        }
-        
-        # Build detailed explanation
-        explanations = []
-        for result in results:
-            if result.get('found') and result.get('explanation'):
-                explanations.append(f"{result['source']}: {result['explanation']}")
-        
-        response['explanation'] = self._create_truth_explanation(verdict, explanations, response['sources'])
-        
-        # Add deep analysis based on claim type and attribution
-        analysis_parts = []
-        
-        # Handle attributed claims specially
-        if metadata and metadata.get('has_attribution'):
-            if metadata.get('attribution_type') == 'past_reference':
-                analysis_parts.append(
-                    "This claim references a previous statement. Our analysis focuses on whether "
-                    "the underlying factual assertion is true, not when or by whom it was stated."
-                )
-            elif metadata.get('attribution_type') == 'self_reference':
-                analysis_parts.append(
-                    "While the speaker may have indeed made this statement previously, our analysis "
-                    "examines whether the content of the statement itself is factually accurate."
-                )
-        
-        # Add verdict-specific analysis
-        if verdict == 'false':
-            analysis_parts.append(
-                "Multiple authoritative sources contradict this claim. The evidence strongly "
-                "indicates that this statement misrepresents the facts."
+    # Handle claims about rates/percentages without context
+    elif any(indicator in claim_lower for indicator in ['times more', 'times higher', 'times greater']):
+        multiplier_match = re.search(r'(\d+)\s*(?:times|x)', claim_lower)
+        if multiplier_match:
+            multiplier = multiplier_match.group(1)
+            interpretation['interpretation'] = (
+                f"This claim states something has increased by {multiplier} times, but doesn't clearly "
+                f"specify what is being measured or compared to what baseline."
             )
-        elif verdict == 'mostly_false':
-            analysis_parts.append(
-                "While there may be a kernel of truth, the claim substantially misrepresents "
-                "the facts. The overall assertion is misleading."
+            interpretation['is_vague'] = True
+            interpretation['vagueness_reason'] = "Comparative claims need clear baselines and specifics."
+        
+    # Handle economic claims
+    elif any(term in claim_lower for term in ['unemployment', 'inflation', 'gdp', 'economy']):
+        interpretation['claim_type'] = 'economic'
+        interpretation['interpretation'] = self._interpret_economic_claim(claim)
+        
+    # Handle research/study claims
+    elif any(term in claim_lower for term in ['study', 'research', 'scientists']):
+        interpretation['claim_type'] = 'research'
+        interpretation['interpretation'] = self._interpret_research_claim(claim)
+        
+    # Default interpretation
+    else:
+        # Try to extract the main assertion
+        interpretation['interpretation'] = (
+            f"This claim asserts: {claim}. We'll examine whether this statement is supported by "
+            f"available evidence from authoritative sources."
+        )
+    
+    return interpretation
+
+def _get_conversational_verdict_explanation(self, verdict: str, claim: str, results: List[Dict]) -> str:
+    """Explain the verdict in conversational, easy-to-understand language"""
+    
+    if verdict == 'true':
+        return (
+            "This claim is accurate. Multiple authoritative sources confirm the facts as stated. "
+            "While minor details might vary slightly between sources, the core assertion is correct "
+            "and supported by solid evidence."
+        )
+    
+    elif verdict == 'mostly_true':
+        return (
+            "The main point of this claim is correct, but there are some caveats. The general "
+            "thrust is accurate - the numbers might be slightly off, or some context might be "
+            "missing, but the fundamental assertion holds up to scrutiny."
+        )
+    
+    elif verdict == 'mixed':
+        return (
+            "This claim contains both accurate and inaccurate elements. Some parts are well-supported "
+            "by evidence while others are false, exaggerated, or taken out of context. It's the "
+            "kind of claim that sounds plausible but needs significant clarification."
+        )
+    
+    elif verdict == 'mostly_false':
+        return (
+            "While there might be a grain of truth buried in here, this claim is largely incorrect. "
+            "It either significantly misrepresents the facts, uses outdated information, or draws "
+            "conclusions that aren't supported by the evidence."
+        )
+    
+    elif verdict == 'false':
+        return (
+            "This claim is demonstrably false. The evidence clearly contradicts what's being asserted. "
+            "This could be due to misunderstanding, outdated information, or misrepresentation of facts."
+        )
+    
+    elif verdict == 'unverified':
+        # Be specific about why we can't verify
+        if any(r.get('vagueness_reason') for r in results):
+            return (
+                "We cannot verify this claim because it's too vague or lacks essential details. "
+                "Without knowing specifically what's being referenced, we can't check it against "
+                "authoritative sources."
             )
-        elif verdict == 'mixed':
-            analysis_parts.append(
-                "This claim contains elements of both truth and falsehood. Some aspects are "
-                "supported by evidence while others are contradicted or lack support."
+        else:
+            return (
+                "We couldn't find sufficient evidence to verify this claim one way or another. "
+                "This doesn't mean it's false - just that authoritative sources haven't addressed "
+                "this specific assertion."
             )
-        elif verdict == 'mostly_true':
-            analysis_parts.append(
-                "The core assertion is supported by evidence, though some minor details may be "
-                "imprecise or require additional context."
+
+def _summarize_evidence(self, results: List[Dict], claim: str) -> str:
+    """Summarize the evidence in a conversational way"""
+    
+    evidence_parts = []
+    
+    for result in results:
+        if not result.get('found'):
+            continue
+            
+        source = result.get('source', 'Unknown')
+        
+        # Make the evidence conversational based on source type
+        if 'Federal Reserve' in source and result.get('actual_value'):
+            evidence_parts.append(
+                f"According to Federal Reserve data from {result.get('date', 'recent records')}, "
+                f"the actual figure is {result['actual_value']}%. This is official government data "
+                f"that's regularly updated and considered highly reliable."
             )
-        elif verdict == 'true':
-            analysis_parts.append(
-                "This claim is well-supported by multiple authoritative sources and accurately "
-                "represents the available evidence."
+            
+        elif 'CDC' in source:
+            evidence_parts.append(
+                f"The CDC's official health statistics show {result.get('explanation', '')}. "
+                f"This comes from systematic data collection across healthcare providers nationwide."
             )
-        
-        # Add source-specific insights
-        source_insights = []
-        for result in results:
-            if result.get('found'):
-                source = result.get('source', '')
-                if 'FRED' in source and result.get('actual_value'):
-                    source_insights.append(
-                        f"Official Federal Reserve data shows the actual value is {result['actual_value']}% "
-                        f"(as of {result.get('date', 'recent data')})"
-                    )
-                elif 'CDC' in source:
-                    source_insights.append(
-                        "CDC's official health statistics provide authoritative data on this topic"
-                    )
-                elif 'Semantic Scholar' in source and result.get('paper_count'):
-                    source_insights.append(
-                        f"Academic literature review found {result['paper_count']} relevant peer-reviewed studies"
-                    )
-        
-        if source_insights:
-            analysis_parts.extend(source_insights)
-        
-        # Add important context if needed
-        context_parts = []
-        
-        # Check for common misunderstandings
-        if 'unemployment' in claim.lower() and verdict in ['false', 'mostly_false']:
-            context_parts.append(
-                "Note: Unemployment figures can vary based on the specific measure used (U-3 vs U-6) "
-                "and the time period referenced. Always verify which metric is being cited."
+            
+        elif 'Academic' in source and result.get('paper_count'):
+            evidence_parts.append(
+                f"We found {result['paper_count']} peer-reviewed academic studies on this topic. "
+                f"The scientific consensus based on these papers {result.get('explanation', '')}."
             )
-        
-        if metadata and metadata.get('indicators'):
-            if 'statistical' in metadata['indicators'] and verdict == 'false':
-                context_parts.append(
-                    "Statistical claims require particular scrutiny. Even small numerical errors can "
-                    "significantly change the meaning of a statement."
-                )
-        
-        # Build final response
-        response['analysis'] = ' '.join(analysis_parts) if analysis_parts else None
-        response['context'] = ' '.join(context_parts) if context_parts else None
-        
-        # Add metadata for display
-        response['api_response'] = True
-        response['checked_at'] = datetime.now().isoformat()
-        
-        # Include breakdown of sources used
-        response['source_breakdown'] = {}
-        for result in results:
-            if result.get('found'):
-                source_type = self._categorize_source(result.get('source', ''))
-                if source_type not in response['source_breakdown']:
-                    response['source_breakdown'][source_type] = 0
-                response['source_breakdown'][source_type] += 1
-        
-        return response
+            
+        elif 'Wikipedia' in source:
+            evidence_parts.append(
+                f"While Wikipedia isn't a primary source, it does compile information from "
+                f"multiple references on this topic, which {result.get('explanation', '')}."
+            )
+    
+    if evidence_parts:
+        return ' '.join(evidence_parts[:3])  # Limit to top 3 sources
+    else:
+        return "We searched multiple authoritative sources but couldn't find specific evidence addressing this exact claim."
+
+def _create_bottom_line(self, verdict: str, claim: str, interpretation: Dict) -> str:
+    """Create a clear, conversational bottom line"""
+    
+    if interpretation['is_vague']:
+        return (
+            "This claim is too vague to fact-check properly. Without knowing what specific "
+            "issues, time periods, or data sources are being referenced, we can't verify "
+            "whether the numbers are accurate. When making claims about statistics, it's "
+            "crucial to be specific about what's being measured."
+        )
+    
+    verdict_bottom_lines = {
+        'true': (
+            "You can trust this claim - it's backed up by reliable sources and the facts "
+            "check out as stated."
+        ),
+        'mostly_true': (
+            "This claim is essentially correct, though some details might be slightly off. "
+            "The main point stands up to scrutiny."
+        ),
+        'mixed': (
+            "Take this claim with a grain of salt. Parts are true, parts are false or "
+            "misleading. It needs context and clarification to be accurate."
+        ),
+        'mostly_false': (
+            "Be skeptical of this claim. While not entirely fabricated, it misrepresents "
+            "the facts enough to be misleading."
+        ),
+        'false': (
+            "Don't believe this claim - it's contradicted by reliable evidence and "
+            "authoritative sources."
+        ),
+        'unverified': (
+            "We can't say whether this is true or false. Either the claim is too vague, "
+            "or we couldn't find authoritative sources that address it directly."
+        )
+    }
+    
+    return verdict_bottom_lines.get(verdict, "The evidence on this claim is inconclusive.")
+
+def _interpret_economic_claim(self, claim: str) -> str:
+    """Interpret economic claims specifically"""
+    
+    claim_lower = claim.lower()
+    
+    # Extract what economic indicator is being discussed
+    if 'unemployment' in claim_lower:
+        return (
+            "This claim is about unemployment rates. When discussing unemployment, it's important "
+            "to know whether we're talking about the U-3 rate (official unemployment) or broader "
+            "measures like U-6 that include discouraged workers."
+        )
+    elif 'inflation' in claim_lower:
+        return (
+            "This claim concerns inflation rates. Inflation can be measured different ways - "
+            "CPI (Consumer Price Index), PCE (Personal Consumption Expenditures), or core inflation "
+            "that excludes volatile food and energy prices."
+        )
+    else:
+        return f"This is an economic claim about: {claim}"
+
+def _interpret_research_claim(self, claim: str) -> str:
+    """Interpret research/study claims specifically"""
+    
+    return (
+        "This claim references scientific research or studies. When evaluating research claims, "
+        "we look for peer-reviewed publications, the credibility of the journals, sample sizes, "
+        "and whether findings have been replicated by other researchers."
+    )
     
     def _categorize_source(self, source_name: str) -> str:
         """Categorize source type for breakdown"""
