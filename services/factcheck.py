@@ -91,6 +91,193 @@ class FactChecker:
         finally:
             loop.close()
     
+    def check_claim_enhanced(self, claim: str, metadata: Dict = None) -> Dict:
+        """Enhanced claim checking with metadata support"""
+        # Run async function in sync context
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            # Run the check
+            result = loop.run_until_complete(self._async_check_claim(claim))
+            
+            # If we have a verdict, enhance it with deep analysis
+            if 'verdict' in result:
+                # Get the valid results for analysis
+                all_results = loop.run_until_complete(self._gather_results_for_claim(claim))
+                valid_results = [r for r in all_results if isinstance(r, dict) and r.get('found')]
+                
+                # Create deep analysis
+                enhanced = self._create_deep_analysis_response(
+                    claim,
+                    result['verdict'],
+                    valid_results,
+                    metadata
+                )
+                result.update(enhanced)
+            
+            return result
+        finally:
+            loop.close()
+    
+    async def _gather_results_for_claim(self, claim: str) -> List[Dict]:
+        """Gather results for deep analysis"""
+        claim_lower = claim.lower()
+        tasks = []
+        
+        # Always check Google Fact Check
+        tasks.append(self._check_google_factcheck(claim))
+        
+        # Add checks based on claim type (simplified version)
+        if any(term in claim_lower for term in ['unemployment', 'inflation', 'gdp', 'economy']):
+            if self.fred_api_key:
+                tasks.append(self._check_fred_data(claim))
+        
+        if any(term in claim_lower for term in ['study', 'research', 'scientists']):
+            tasks.append(self._check_semantic_scholar(claim))
+        
+        # Gather results
+        all_results = await asyncio.gather(*tasks, return_exceptions=True)
+        return all_results
+    
+    def _create_deep_analysis_response(self, claim: str, verdict: str, results: List[Dict], metadata: Dict = None) -> Dict:
+        """Create a comprehensive fact-check response with deep analysis"""
+        
+        # Base response
+        response = {
+            'claim': claim,
+            'verdict': verdict,
+            'confidence': self._calculate_truth_confidence([{'verdict': verdict, 'confidence': 80, 'weight': 0.8}]),
+            'sources': list(set([r.get('source', 'Unknown') for r in results if r.get('found')]))
+        }
+        
+        # Build detailed explanation
+        explanations = []
+        for result in results:
+            if result.get('found') and result.get('explanation'):
+                explanations.append(f"{result['source']}: {result['explanation']}")
+        
+        response['explanation'] = self._create_truth_explanation(verdict, explanations, response['sources'])
+        
+        # Add deep analysis based on claim type and attribution
+        analysis_parts = []
+        
+        # Handle attributed claims specially
+        if metadata and metadata.get('has_attribution'):
+            if metadata.get('attribution_type') == 'past_reference':
+                analysis_parts.append(
+                    "This claim references a previous statement. Our analysis focuses on whether "
+                    "the underlying factual assertion is true, not when or by whom it was stated."
+                )
+            elif metadata.get('attribution_type') == 'self_reference':
+                analysis_parts.append(
+                    "While the speaker may have indeed made this statement previously, our analysis "
+                    "examines whether the content of the statement itself is factually accurate."
+                )
+        
+        # Add verdict-specific analysis
+        if verdict == 'false':
+            analysis_parts.append(
+                "Multiple authoritative sources contradict this claim. The evidence strongly "
+                "indicates that this statement misrepresents the facts."
+            )
+        elif verdict == 'mostly_false':
+            analysis_parts.append(
+                "While there may be a kernel of truth, the claim substantially misrepresents "
+                "the facts. The overall assertion is misleading."
+            )
+        elif verdict == 'mixed':
+            analysis_parts.append(
+                "This claim contains elements of both truth and falsehood. Some aspects are "
+                "supported by evidence while others are contradicted or lack support."
+            )
+        elif verdict == 'mostly_true':
+            analysis_parts.append(
+                "The core assertion is supported by evidence, though some minor details may be "
+                "imprecise or require additional context."
+            )
+        elif verdict == 'true':
+            analysis_parts.append(
+                "This claim is well-supported by multiple authoritative sources and accurately "
+                "represents the available evidence."
+            )
+        
+        # Add source-specific insights
+        source_insights = []
+        for result in results:
+            if result.get('found'):
+                source = result.get('source', '')
+                if 'FRED' in source and result.get('actual_value'):
+                    source_insights.append(
+                        f"Official Federal Reserve data shows the actual value is {result['actual_value']}% "
+                        f"(as of {result.get('date', 'recent data')})"
+                    )
+                elif 'CDC' in source:
+                    source_insights.append(
+                        "CDC's official health statistics provide authoritative data on this topic"
+                    )
+                elif 'Semantic Scholar' in source and result.get('paper_count'):
+                    source_insights.append(
+                        f"Academic literature review found {result['paper_count']} relevant peer-reviewed studies"
+                    )
+        
+        if source_insights:
+            analysis_parts.extend(source_insights)
+        
+        # Add important context if needed
+        context_parts = []
+        
+        # Check for common misunderstandings
+        if 'unemployment' in claim.lower() and verdict in ['false', 'mostly_false']:
+            context_parts.append(
+                "Note: Unemployment figures can vary based on the specific measure used (U-3 vs U-6) "
+                "and the time period referenced. Always verify which metric is being cited."
+            )
+        
+        if metadata and metadata.get('indicators'):
+            if 'statistical' in metadata['indicators'] and verdict == 'false':
+                context_parts.append(
+                    "Statistical claims require particular scrutiny. Even small numerical errors can "
+                    "significantly change the meaning of a statement."
+                )
+        
+        # Build final response
+        response['analysis'] = ' '.join(analysis_parts) if analysis_parts else None
+        response['context'] = ' '.join(context_parts) if context_parts else None
+        
+        # Add metadata for display
+        response['api_response'] = True
+        response['checked_at'] = datetime.now().isoformat()
+        
+        # Include breakdown of sources used
+        response['source_breakdown'] = {}
+        for result in results:
+            if result.get('found'):
+                source_type = self._categorize_source(result.get('source', ''))
+                if source_type not in response['source_breakdown']:
+                    response['source_breakdown'][source_type] = 0
+                response['source_breakdown'][source_type] += 1
+        
+        return response
+    
+    def _categorize_source(self, source_name: str) -> str:
+        """Categorize source type for breakdown"""
+        source_lower = source_name.lower()
+        
+        if any(term in source_lower for term in ['fred', 'federal reserve', 'economic']):
+            return 'Economic Data'
+        elif any(term in source_lower for term in ['cdc', 'health', 'medical', 'pubmed']):
+            return 'Health/Medical'
+        elif any(term in source_lower for term in ['academic', 'scholar', 'crossref', 'research']):
+            return 'Academic Research'
+        elif any(term in source_lower for term in ['news', 'media']):
+            return 'News Media'
+        elif any(term in source_lower for term in ['government', 'fec', 'fbi', 'sec']):
+            return 'Government Data'
+        elif any(term in source_lower for term in ['climate', 'noaa', 'nasa', 'usgs']):
+            return 'Scientific Data'
+        else:
+            return 'Other Sources'
+    
     async def _async_check_claim(self, claim: str) -> Dict:
         """Verify the truth of a claim using multiple methods"""
         
