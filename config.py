@@ -17,6 +17,9 @@ class Config:
     # Primary Fact-Checking APIs
     GOOGLE_FACTCHECK_API_KEY = os.getenv('GOOGLE_FACTCHECK_API_KEY')
     
+    # Economic Data API
+    FRED_API_KEY = os.getenv('FRED_API_KEY')  # Federal Reserve Economic Data
+    
     # News and Media APIs
     NEWS_API_KEY = os.getenv('NEWS_API_KEY')  # newsapi.org
     
@@ -60,6 +63,9 @@ class Config:
         if not cls.GOOGLE_FACTCHECK_API_KEY:
             warnings.append("GOOGLE_FACTCHECK_API_KEY not set - using limited analysis")
         
+        if not cls.FRED_API_KEY:
+            warnings.append("FRED_API_KEY not set - economic data verification disabled")
+        
         if not cls.NEWS_API_KEY:
             warnings.append("NEWS_API_KEY not set - news verification disabled")
         
@@ -73,6 +79,17 @@ class Config:
         else:
             print("✅ All API keys configured for enhanced fact-checking")
         
+        # Show what's active
+        print("\n📊 Active Data Sources:")
+        if cls.GOOGLE_FACTCHECK_API_KEY:
+            print("   ✓ Google Fact Check API")
+        if cls.FRED_API_KEY:
+            print("   ✓ Federal Reserve Economic Data (FRED)")
+        if cls.NEWS_API_KEY:
+            print("   ✓ News API")
+        if cls.SCRAPERAPI_KEY or cls.SCRAPINGBEE_API_KEY:
+            print("   ✓ Web Scraping")
+        
         return True
     
     @classmethod
@@ -82,6 +99,8 @@ class Config:
         
         if cls.GOOGLE_FACTCHECK_API_KEY:
             active.append("Google Fact Check")
+        if cls.FRED_API_KEY:
+            active.append("Federal Reserve Economic Data")
         if cls.NEWS_API_KEY:
             active.append("News API")
         if cls.SCRAPERAPI_KEY or cls.SCRAPINGBEE_API_KEY:
