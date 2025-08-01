@@ -22,6 +22,7 @@ class Config:
     
     # News and Media APIs
     NEWS_API_KEY = os.getenv('NEWS_API_KEY')  # newsapi.org
+    MEDIASTACK_API_KEY = os.getenv('MEDIASTACK_API_KEY')  # mediastack.com - better news coverage
     
     # Web Scraping APIs (for accessing fact-checker sites)
     SCRAPERAPI_KEY = os.getenv('SCRAPERAPI_KEY')  # scraperapi.com
@@ -66,8 +67,8 @@ class Config:
         if not cls.FRED_API_KEY:
             warnings.append("FRED_API_KEY not set - economic data verification disabled")
         
-        if not cls.NEWS_API_KEY:
-            warnings.append("NEWS_API_KEY not set - news verification disabled")
+        if not cls.NEWS_API_KEY and not cls.MEDIASTACK_API_KEY:
+            warnings.append("No news APIs configured - news verification disabled")
         
         if not cls.SCRAPERAPI_KEY and not cls.SCRAPINGBEE_API_KEY:
             warnings.append("No web scraping API keys - fact-checker site access limited")
@@ -85,8 +86,8 @@ class Config:
             print("   ✓ Google Fact Check API")
         if cls.FRED_API_KEY:
             print("   ✓ Federal Reserve Economic Data (FRED)")
-        if cls.NEWS_API_KEY:
-            print("   ✓ News API")
+        if cls.NEWS_API_KEY or cls.MEDIASTACK_API_KEY:
+            print("   ✓ News APIs (News API/MediaStack)")
         if cls.SCRAPERAPI_KEY or cls.SCRAPINGBEE_API_KEY:
             print("   ✓ Web Scraping")
         
