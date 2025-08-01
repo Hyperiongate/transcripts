@@ -7,6 +7,7 @@ import sys
 import json
 import logging
 import uuid
+import time
 from datetime import datetime
 from flask import Flask, render_template, request, jsonify, send_file
 from flask_cors import CORS
@@ -260,7 +261,7 @@ def allowed_file(filename):
            filename.rsplit('.', 1)[1].lower() in Config.ALLOWED_EXTENSIONS
 
 def process_transcript(job_id, transcript, source):
-    """Process transcript through the fact-checking pipeline"""
+    """Process transcript through the enhanced fact-checking pipeline"""
     try:
         job = jobs[job_id]
         
@@ -268,7 +269,7 @@ def process_transcript(job_id, transcript, source):
         job['progress'] = 20
         cleaned_transcript = transcript_processor.clean_transcript(transcript)
         
-        # Extract claims
+        # Extract claims with attribution handling
         job['progress'] = 40
         claims = claim_extractor.extract_claims(cleaned_transcript)
         logger.info(f"Extracted {len(claims)} claims from transcript")
@@ -278,13 +279,41 @@ def process_transcript(job_id, transcript, source):
         verified_claims = claim_extractor.filter_verifiable(claims)
         prioritized_claims = claim_extractor.prioritize_claims(verified_claims)
         
-        # Fact check claims
+        # Prepare claims with metadata
+        prepared_claims = claim_extractor.prepare_claims_for_checking(
+            prioritized_claims[:Config.MAX_CLAIMS_PER_TRANSCRIPT]
+        )
+        
+        # Fact check claims with enhanced analysis
         job['progress'] = 70
-        fact_check_results = fact_checker.batch_check(prioritized_claims[:Config.MAX_CLAIMS_PER_TRANSCRIPT])
+        fact_check_results = []
+        
+        for idx, prepared_claim in enumerate(prepared_claims):
+            # Update progress
+            progress_increment = 20 / len(prepared_claims)
+            job['progress'] = 70 + (idx * progress_increment)
+            
+            # Check claim with metadata
+            result = fact_checker.check_claim_enhanced(
+                prepared_claim['claim'],
+                prepared_claim.get('metadata', {})
+            )
+            
+            # Add original text for context
+            result['original_text'] = prepared_claim['metadata'].get('original_text', '')
+            
+            fact_check_results.append(result)
+            
+            # Rate limiting
+            if idx < len(prepared_claims) - 1:
+                time.sleep(Config.FACT_CHECK_RATE_LIMIT_DELAY)
         
         # Calculate overall credibility
         job['progress'] = 90
         credibility_score = fact_checker.calculate_credibility(fact_check_results)
+        
+        # Generate enhanced summary
+        summary = generate_enhanced_summary(fact_check_results, credibility_score, claims)
         
         # Compile results
         results = {
@@ -297,7 +326,8 @@ def process_transcript(job_id, transcript, source):
             'credibility_score': credibility_score,
             'credibility_label': get_credibility_label(credibility_score),
             'fact_checks': fact_check_results,
-            'summary': generate_summary(fact_check_results, credibility_score),
+            'summary': summary,
+            'analysis_notes': generate_analysis_notes(fact_check_results),
             'analyzed_at': datetime.now().isoformat()
         }
         
@@ -322,8 +352,61 @@ def get_credibility_label(score):
     else:
         return "Very Low Credibility"
 
+def generate_enhanced_summary(fact_checks, credibility_score, all_claims):
+    """Generate an enhanced analysis summary"""
+    verified_count = sum(1 for fc in fact_checks if fc.get('verdict') in ['true', 'mostly_true'])
+    false_count = sum(1 for fc in fact_checks if fc.get('verdict') in ['false', 'mostly_false'])
+    unverified_count = sum(1 for fc in fact_checks if fc.get('verdict') == 'unverified')
+    attributed_count = sum(1 for fc in fact_checks if fc.get('original_text') and 'I said' in fc.get('original_text', ''))
+    
+    summary = f"Analysis complete. Out of {len(fact_checks)} claims checked: "
+    summary += f"{verified_count} verified as true, {false_count} found to be false, "
+    summary += f"and {unverified_count} could not be verified. "
+    
+    if attributed_count > 0:
+        summary += f"\n\nNote: {attributed_count} claims referenced previous statements. "
+        summary += "These were evaluated based on their factual accuracy, not attribution. "
+    
+    summary += f"\n\nOverall credibility score: {credibility_score}%. "
+    
+    # Add specific warnings for low credibility
+    if credibility_score < 40:
+        summary += "\n\n⚠️ Warning: This transcript contains multiple false or misleading claims. "
+        summary += "Readers should verify information from authoritative sources."
+    elif credibility_score < 60:
+        summary += "\n\n⚠️ Caution: This transcript contains a mix of accurate and inaccurate information. "
+        summary += "Critical evaluation of specific claims is recommended."
+    
+    return summary
+
+def generate_analysis_notes(fact_checks):
+    """Generate important notes about the analysis"""
+    notes = []
+    
+    # Check for patterns
+    false_claims = [fc for fc in fact_checks if fc.get('verdict') in ['false', 'mostly_false']]
+    if len(false_claims) > 3:
+        notes.append("Multiple false claims detected. This may indicate systematic misinformation.")
+    
+    # Check for attribution patterns
+    attributed_false = [fc for fc in false_claims if fc.get('original_text') and 'said' in fc.get('original_text', '')]
+    if attributed_false:
+        notes.append("Some claims attribute false information to past statements. The accuracy of the claims themselves, not their attribution, has been verified.")
+    
+    # Check source diversity
+    all_sources = []
+    for fc in fact_checks:
+        if fc.get('sources'):
+            all_sources.extend(fc['sources'])
+    
+    unique_sources = set(all_sources)
+    if len(unique_sources) < 3:
+        notes.append("Limited verification sources available. Results may benefit from additional fact-checking.")
+    
+    return notes
+
 def generate_summary(fact_checks, credibility_score):
-    """Generate analysis summary"""
+    """Generate analysis summary (fallback for old function calls)"""
     verified_count = sum(1 for fc in fact_checks if fc.get('verdict') in ['true', 'mostly_true'])
     false_count = sum(1 for fc in fact_checks if fc.get('verdict') in ['false', 'mostly_false'])
     unverified_count = sum(1 for fc in fact_checks if fc.get('verdict') == 'unverified')
@@ -351,9 +434,16 @@ SUMMARY
 -------
 {results['summary']}
 
-DETAILED FACT CHECKS
--------------------
 """
+    
+    # Add analysis notes if present
+    if results.get('analysis_notes'):
+        report += "ANALYSIS NOTES\n--------------\n"
+        for note in results['analysis_notes']:
+            report += f"• {note}\n"
+        report += "\n"
+    
+    report += "DETAILED FACT CHECKS\n-------------------\n"
     
     for i, fc in enumerate(results['fact_checks'], 1):
         report += f"\n{i}. CLAIM: {fc['claim']}\n"
@@ -361,6 +451,10 @@ DETAILED FACT CHECKS
         report += f"   CONFIDENCE: {fc.get('confidence', 'N/A')}%\n"
         if fc.get('explanation'):
             report += f"   EXPLANATION: {fc['explanation']}\n"
+        if fc.get('analysis'):
+            report += f"   ANALYSIS: {fc['analysis']}\n"
+        if fc.get('context'):
+            report += f"   CONTEXT: {fc['context']}\n"
         if fc.get('sources'):
             report += f"   SOURCES: {', '.join(fc['sources'])}\n"
     
