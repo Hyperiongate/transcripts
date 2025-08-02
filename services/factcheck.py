@@ -1246,8 +1246,8 @@ class FactChecker:
                                 'format': 'json',
                                 'prop': 'extracts|revisions',
                                 'titles': page_title,
-                                'exintro': True,
-                                'explaintext': True,
+                                'exintro': 1,
+                                'explaintext': 1,
                                 'exlimit': 1
                             }
                             
