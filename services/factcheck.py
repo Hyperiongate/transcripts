@@ -1948,28 +1948,53 @@ class FactChecker:
         return min(int(base_confidence + agreement_bonus + weight_bonus), 95)
     
     def _create_truth_explanation(self, verdict: str, explanations: List[str], sources: List[str]) -> str:
-        """Create clear explanation of WHY claim is true/false"""
-        
+        """Create detailed explanation of WHY claim is true/false"""
+    
         verdict_meaning = self.verdict_definitions.get(verdict, '')
-        
+    
+        # Create header based on verdict
         if verdict == 'true':
-            prefix = "✓ TRUE: "
+            header = "✓ VERIFIED AS TRUE"
+            summary = "This claim is accurate based on the following evidence:"
         elif verdict == 'false':
-            prefix = "✗ FALSE: "
+            header = "✗ DETERMINED TO BE FALSE"
+            summary = "This claim is contradicted by the following evidence:"
         elif verdict == 'mostly_true':
-            prefix = "◐ MOSTLY TRUE: "
+            header = "◐ MOSTLY TRUE"
+            summary = "This claim is largely accurate with some minor caveats:"
         elif verdict == 'mostly_false':
-            prefix = "◑ MOSTLY FALSE: "
+            header = "◑ MOSTLY FALSE"
+            summary = "This claim contains significant inaccuracies:"
         elif verdict == 'mixed':
-            prefix = "◓ MIXED: "
+            header = "◓ MIXED ACCURACY"
+            summary = "This claim contains both true and false elements:"
         else:
-            prefix = "? UNVERIFIED: "
-        
+            header = "? UNVERIFIED"
+            summary = "Could not verify this claim with available sources."
+    
+        # Build detailed explanation
+        explanation_parts = [
+            f"**{header}**",
+            f"\n{summary}"
+        ]
+    
+        # Add source count
+        if sources:
+            unique_sources = list(set(sources))
+            explanation_parts.append(f"\n**Sources consulted ({len(unique_sources)}):**")
+            for source in unique_sources:
+                explanation_parts.append(f"• {source}")
+    
+        # Add detailed explanations from each source
         if explanations:
-            evidence = explanations[0] if len(explanations) == 1 else f"Multiple sources report: {'; '.join(explanations[:2])}"
-            return f"{prefix}{verdict_meaning}. {evidence}"
-        else:
-            return f"{prefix}{verdict_meaning}. Verified by {len(sources)} source(s)."
+            explanation_parts.append("\n**Detailed findings:**")
+            for i, exp in enumerate(explanations, 1):
+                explanation_parts.append(f"\n{i}. {exp}")
+    
+        # Add confidence note
+        explanation_parts.append(f"\n**Why this verdict?** {verdict_meaning}")
+    
+        return "\n".join(explanation_parts)
     
     def _create_unverified_response(self, claim: str, reason: str) -> Dict:
         """Create response when unable to verify"""
