@@ -8,6 +8,7 @@ import json
 import logging
 import uuid
 import time
+import threading
 from datetime import datetime
 from flask import Flask, render_template, request, jsonify, send_file
 from flask_cors import CORS
@@ -29,7 +30,7 @@ from services.claims import ClaimExtractor
 from services.factcheck import FactChecker
 
 # Configure logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 # Initialize Flask app
@@ -45,8 +46,10 @@ transcript_processor = TranscriptProcessor()
 claim_extractor = ClaimExtractor()
 fact_checker = FactChecker()
 
-# In-memory job storage (replace with Redis in production)
+# In-memory job storage with thread safety
+import threading
 jobs = {}
+jobs_lock = threading.Lock()
 
 # Routes
 @app.route('/')
@@ -61,7 +64,8 @@ def health_check():
         'status': 'healthy',
         'timestamp': datetime.now().isoformat(),
         'service': 'transcript-factchecker',
-        'version': '1.0.0'
+        'version': '1.0.0',
+        'active_jobs': len(jobs)
     }), 200
 
 @app.route('/api/analyze', methods=['POST'])
@@ -78,17 +82,19 @@ def analyze():
         
         # Generate job ID
         job_id = str(uuid.uuid4())
+        logger.info(f"Creating new job: {job_id}")
         
-        # Initialize job
-        jobs[job_id] = {
-            'id': job_id,
-            'status': 'processing',
-            'progress': 0,
-            'created_at': datetime.now().isoformat(),
-            'input_type': input_type,
-            'results': None,
-            'error': None
-        }
+        # Initialize job with thread safety
+        with jobs_lock:
+            jobs[job_id] = {
+                'id': job_id,
+                'status': 'processing',
+                'progress': 0,
+                'created_at': datetime.now().isoformat(),
+                'input_type': input_type,
+                'results': None,
+                'error': None
+            }
         
         # Process based on input type
         try:
@@ -97,8 +103,12 @@ def analyze():
                 if not transcript:
                     raise ValueError("No transcript text provided")
                 
-                # Process transcript
-                process_transcript(job_id, transcript, 'Direct Input')
+                # Process transcript in a separate thread
+                thread = threading.Thread(
+                    target=process_transcript_async,
+                    args=(job_id, transcript, 'Direct Input')
+                )
+                thread.start()
                 
             elif input_type == 'file':
                 if 'file' not in request.files:
@@ -114,29 +124,36 @@ def analyze():
                 
                 # Read file content
                 content = file.read().decode('utf-8')
-                process_transcript(job_id, content, file.filename)
+                
+                # Process in thread
+                thread = threading.Thread(
+                    target=process_transcript_async,
+                    args=(job_id, content, file.filename)
+                )
+                thread.start()
                 
             elif input_type == 'youtube':
                 url = data.get('url', '') if request.is_json else request.form.get('url', '')
                 if not url:
                     raise ValueError("No YouTube URL provided")
                 
-                # Extract transcript from YouTube
-                jobs[job_id]['progress'] = 10
-                transcript_data = transcript_processor.parse_youtube(url)
-                
-                if not transcript_data['success']:
-                    raise ValueError(transcript_data.get('error', 'Failed to extract YouTube transcript'))
-                
-                process_transcript(job_id, transcript_data['transcript'], transcript_data['title'])
+                # Process YouTube URL in thread
+                thread = threading.Thread(
+                    target=process_youtube_async,
+                    args=(job_id, url)
+                )
+                thread.start()
                 
             else:
                 raise ValueError(f"Invalid input type: {input_type}")
                 
         except Exception as e:
-            jobs[job_id]['status'] = 'error'
-            jobs[job_id]['error'] = str(e)
+            with jobs_lock:
+                jobs[job_id]['status'] = 'error'
+                jobs[job_id]['error'] = str(e)
             logger.error(f"Analysis error for job {job_id}: {str(e)}")
+        
+        logger.info(f"Job {job_id} created successfully")
         
         return jsonify({
             'success': True,
@@ -153,10 +170,17 @@ def analyze():
 @app.route('/api/status/<job_id>')
 def get_status(job_id):
     """Get job status"""
-    if job_id not in jobs:
-        return jsonify({'error': 'Job not found'}), 404
+    logger.debug(f"Status check for job {job_id}")
     
-    job = jobs[job_id]
+    with jobs_lock:
+        if job_id not in jobs:
+            logger.error(f"Job {job_id} not found. Available jobs: {list(jobs.keys())}")
+            return jsonify({'error': 'Job not found'}), 404
+        
+        job = jobs[job_id].copy()  # Create a copy to avoid race conditions
+    
+    logger.debug(f"Job {job_id} status: {job['status']}, progress: {job['progress']}")
+    
     return jsonify({
         'id': job['id'],
         'status': job['status'],
@@ -168,11 +192,17 @@ def get_status(job_id):
 @app.route('/api/results/<job_id>')
 def get_results(job_id):
     """Get analysis results"""
-    if job_id not in jobs:
-        return jsonify({'error': 'Job not found'}), 404
+    logger.debug(f"Getting results for job {job_id}")
     
-    job = jobs[job_id]
+    with jobs_lock:
+        if job_id not in jobs:
+            logger.error(f"Job {job_id} not found for results")
+            return jsonify({'error': 'Job not found'}), 404
+        
+        job = jobs[job_id].copy()
+    
     if job['status'] != 'complete':
+        logger.info(f"Job {job_id} not complete yet. Status: {job['status']}")
         return jsonify({'error': 'Analysis not complete'}), 400
     
     return jsonify({
@@ -183,10 +213,12 @@ def get_results(job_id):
 @app.route('/api/export/<job_id>', methods=['POST'])
 def export_results(job_id):
     """Export results in various formats"""
-    if job_id not in jobs:
-        return jsonify({'error': 'Job not found'}), 404
+    with jobs_lock:
+        if job_id not in jobs:
+            return jsonify({'error': 'Job not found'}), 404
+        
+        job = jobs[job_id].copy()
     
-    job = jobs[job_id]
     if job['status'] != 'complete':
         return jsonify({'error': 'Analysis not complete'}), 400
     
@@ -231,10 +263,12 @@ def export_results(job_id):
 @app.route('/api/download/<job_id>/<format_type>')
 def download_file(job_id, format_type):
     """Download exported file"""
-    if job_id not in jobs:
-        return jsonify({'error': 'Job not found'}), 404
+    with jobs_lock:
+        if job_id not in jobs:
+            return jsonify({'error': 'Job not found'}), 404
+        
+        job = jobs[job_id].copy()
     
-    job = jobs[job_id]
     if job['status'] != 'complete':
         return jsonify({'error': 'Analysis not complete'}), 400
     
@@ -260,59 +294,92 @@ def allowed_file(filename):
     return '.' in filename and \
            filename.rsplit('.', 1)[1].lower() in Config.ALLOWED_EXTENSIONS
 
-def process_transcript(job_id, transcript, source):
-    """Process transcript through the enhanced fact-checking pipeline"""
+def update_job_progress(job_id, progress, status=None):
+    """Safely update job progress"""
+    with jobs_lock:
+        if job_id in jobs:
+            jobs[job_id]['progress'] = progress
+            if status:
+                jobs[job_id]['status'] = status
+            logger.debug(f"Updated job {job_id}: progress={progress}, status={status}")
+
+def process_youtube_async(job_id, url):
+    """Process YouTube URL asynchronously"""
     try:
-        job = jobs[job_id]
+        logger.info(f"Starting YouTube processing for job {job_id}")
+        
+        # Extract transcript from YouTube
+        update_job_progress(job_id, 10)
+        transcript_data = transcript_processor.parse_youtube(url)
+        
+        if not transcript_data['success']:
+            raise ValueError(transcript_data.get('error', 'Failed to extract YouTube transcript'))
+        
+        # Process the transcript
+        process_transcript_async(job_id, transcript_data['transcript'], transcript_data['title'])
+        
+    except Exception as e:
+        logger.error(f"YouTube processing error for job {job_id}: {str(e)}")
+        with jobs_lock:
+            jobs[job_id]['status'] = 'error'
+            jobs[job_id]['error'] = str(e)
+
+def process_transcript_async(job_id, transcript, source):
+    """Process transcript asynchronously with proper progress updates"""
+    try:
+        logger.info(f"Starting transcript processing for job {job_id}")
         
         # Clean transcript
-        job['progress'] = 20
+        update_job_progress(job_id, 20)
         cleaned_transcript = transcript_processor.clean_transcript(transcript)
         
-        # Extract claims with attribution handling
-        job['progress'] = 40
+        # Extract claims
+        update_job_progress(job_id, 40)
         claims = claim_extractor.extract_claims(cleaned_transcript)
-        logger.info(f"Extracted {len(claims)} claims from transcript")
+        logger.info(f"Job {job_id}: Extracted {len(claims)} claims")
         
         # Prioritize and filter claims
-        job['progress'] = 50
+        update_job_progress(job_id, 50)
         verified_claims = claim_extractor.filter_verifiable(claims)
         prioritized_claims = claim_extractor.prioritize_claims(verified_claims)
         
-        # Prepare claims with metadata
-        prepared_claims = claim_extractor.prepare_claims_for_checking(
-            prioritized_claims[:Config.MAX_CLAIMS_PER_TRANSCRIPT]
-        )
+        # Limit claims to process
+        claims_to_check = prioritized_claims[:Config.MAX_CLAIMS_PER_TRANSCRIPT]
+        logger.info(f"Job {job_id}: Checking {len(claims_to_check)} prioritized claims")
         
-        # Fact check claims with enhanced analysis
-        job['progress'] = 70
+        # Fact check claims
+        update_job_progress(job_id, 70)
         fact_check_results = []
         
-        for idx, prepared_claim in enumerate(prepared_claims):
+        for idx, claim in enumerate(claims_to_check):
             # Update progress
-            progress_increment = 20 / len(prepared_claims)
-            job['progress'] = 70 + (idx * progress_increment)
+            progress = 70 + (20 * idx / len(claims_to_check))
+            update_job_progress(job_id, progress)
             
-            # Check claim with metadata
-            result = fact_checker.check_claim_enhanced(
-                prepared_claim['claim'],
-                prepared_claim.get('metadata', {})
-            )
-            
-            # Add original text for context
-            result['original_text'] = prepared_claim['metadata'].get('original_text', '')
-            
-            fact_check_results.append(result)
+            # Check claim
+            try:
+                result = fact_checker.check_claim(claim)
+                fact_check_results.append(result)
+                logger.debug(f"Job {job_id}: Checked claim {idx+1}/{len(claims_to_check)}")
+            except Exception as e:
+                logger.error(f"Error checking claim '{claim}': {str(e)}")
+                fact_check_results.append({
+                    'claim': claim,
+                    'verdict': 'unverified',
+                    'confidence': 0,
+                    'explanation': f'Error during fact-checking: {str(e)}',
+                    'sources': []
+                })
             
             # Rate limiting
-            if idx < len(prepared_claims) - 1:
+            if idx < len(claims_to_check) - 1:
                 time.sleep(Config.FACT_CHECK_RATE_LIMIT_DELAY)
         
         # Calculate overall credibility
-        job['progress'] = 90
+        update_job_progress(job_id, 90)
         credibility_score = fact_checker.calculate_credibility(fact_check_results)
         
-        # Generate enhanced summary
+        # Generate summary
         summary = generate_enhanced_summary(fact_check_results, credibility_score, claims)
         
         # Compile results
@@ -332,14 +399,22 @@ def process_transcript(job_id, transcript, source):
         }
         
         # Complete job
-        job['progress'] = 100
-        job['status'] = 'complete'
-        job['results'] = results
+        with jobs_lock:
+            jobs[job_id]['progress'] = 100
+            jobs[job_id]['status'] = 'complete'
+            jobs[job_id]['results'] = results
+        
+        logger.info(f"Job {job_id} completed successfully")
         
     except Exception as e:
-        logger.error(f"Processing error for job {job_id}: {str(e)}")
-        job['status'] = 'error'
-        job['error'] = str(e)
+        logger.error(f"Processing error for job {job_id}: {str(e)}", exc_info=True)
+        with jobs_lock:
+            jobs[job_id]['status'] = 'error'
+            jobs[job_id]['error'] = str(e)
+
+def process_transcript(job_id, transcript, source):
+    """Legacy synchronous processing function - redirects to async version"""
+    process_transcript_async(job_id, transcript, source)
 
 def get_credibility_label(score):
     """Convert credibility score to label"""
@@ -357,17 +432,11 @@ def generate_enhanced_summary(fact_checks, credibility_score, all_claims):
     verified_count = sum(1 for fc in fact_checks if fc.get('verdict') in ['true', 'mostly_true'])
     false_count = sum(1 for fc in fact_checks if fc.get('verdict') in ['false', 'mostly_false'])
     unverified_count = sum(1 for fc in fact_checks if fc.get('verdict') == 'unverified')
-    attributed_count = sum(1 for fc in fact_checks if fc.get('original_text') and 'I said' in fc.get('original_text', ''))
     
     summary = f"Analysis complete. Out of {len(fact_checks)} claims checked: "
     summary += f"{verified_count} verified as true, {false_count} found to be false, "
     summary += f"and {unverified_count} could not be verified. "
-    
-    if attributed_count > 0:
-        summary += f"\n\nNote: {attributed_count} claims referenced previous statements. "
-        summary += "These were evaluated based on their factual accuracy, not attribution. "
-    
-    summary += f"\n\nOverall credibility score: {credibility_score}%. "
+    summary += f"Overall credibility score: {credibility_score}%."
     
     # Add specific warnings for low credibility
     if credibility_score < 40:
@@ -388,11 +457,6 @@ def generate_analysis_notes(fact_checks):
     if len(false_claims) > 3:
         notes.append("Multiple false claims detected. This may indicate systematic misinformation.")
     
-    # Check for attribution patterns
-    attributed_false = [fc for fc in false_claims if fc.get('original_text') and 'said' in fc.get('original_text', '')]
-    if attributed_false:
-        notes.append("Some claims attribute false information to past statements. The accuracy of the claims themselves, not their attribution, has been verified.")
-    
     # Check source diversity
     all_sources = []
     for fc in fact_checks:
@@ -404,19 +468,6 @@ def generate_analysis_notes(fact_checks):
         notes.append("Limited verification sources available. Results may benefit from additional fact-checking.")
     
     return notes
-
-def generate_summary(fact_checks, credibility_score):
-    """Generate analysis summary (fallback for old function calls)"""
-    verified_count = sum(1 for fc in fact_checks if fc.get('verdict') in ['true', 'mostly_true'])
-    false_count = sum(1 for fc in fact_checks if fc.get('verdict') in ['false', 'mostly_false'])
-    unverified_count = sum(1 for fc in fact_checks if fc.get('verdict') == 'unverified')
-    
-    summary = f"Analysis complete. Out of {len(fact_checks)} claims checked: "
-    summary += f"{verified_count} verified as true, {false_count} found to be false, "
-    summary += f"and {unverified_count} could not be verified. "
-    summary += f"Overall credibility score: {credibility_score}%."
-    
-    return summary
 
 def generate_text_report(results):
     """Generate plain text report"""
@@ -451,10 +502,6 @@ SUMMARY
         report += f"   CONFIDENCE: {fc.get('confidence', 'N/A')}%\n"
         if fc.get('explanation'):
             report += f"   EXPLANATION: {fc['explanation']}\n"
-        if fc.get('analysis'):
-            report += f"   ANALYSIS: {fc['analysis']}\n"
-        if fc.get('context'):
-            report += f"   CONTEXT: {fc['context']}\n"
         if fc.get('sources'):
             report += f"   SOURCES: {', '.join(fc['sources'])}\n"
     
@@ -483,6 +530,7 @@ if __name__ == '__main__':
     # Log startup information
     logger.info(f"Starting Flask app on port {port}")
     logger.info(f"Debug mode: {Config.DEBUG}")
+    logger.info(f"Active APIs: {Config.get_active_apis()}")
     
     # Run the app
     app.run(host='0.0.0.0', port=port, debug=Config.DEBUG)
