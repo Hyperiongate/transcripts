@@ -460,139 +460,95 @@ class FactChecker:
         else:
             return 'Other Sources'
     async def _async_check_claim(self, claim: str) -> Dict:
-        """Verify the truth of a claim using multiple methods"""
-        
-        # Check claim type
-        claim_lower = claim.lower()
-        
-        # Economic claim detection
-        economic_terms = list(self.fred_series.keys()) + ['economy', 'economic', 'recession', 'growth']
-        is_economic = any(term in claim_lower for term in economic_terms)
-        
-        # Research claim detection
-        research_terms = ['study', 'research', 'scientists', 'researchers', 'paper', 'journal', 
-                         'university', 'professor', 'academic', 'peer-reviewed', 'published']
-        is_research = any(term in claim_lower for term in research_terms)
-        
-        # Health claim detection
-        health_terms = ['covid', 'vaccine', 'disease', 'health', 'medical', 'mortality', 'cdc']
-        is_health = any(term in claim_lower for term in health_terms)
-        
-        # Global/international claim detection
-        global_terms = ['world', 'global', 'international', 'countries', 'worldwide', 'poverty', 'development']
-        is_global = any(term in claim_lower for term in global_terms)
-        
-        # Historical claim detection
-        historical_terms = ['history', 'historical', 'first', 'invented', 'founded', 'discovered', 'ancient']
-        is_historical = any(term in claim_lower for term in historical_terms)
-        
-        # Company/financial claim detection
-        financial_terms = ['revenue', 'earnings', 'profit', 'company', 'corporation', 'stock', 'market cap']
-        is_financial = any(term in claim_lower for term in financial_terms)
-        
-        # Crime claim detection
-        crime_terms = ['crime', 'murder', 'assault', 'robbery', 'criminal', 'arrest', 'police']
-        is_crime = any(term in claim_lower for term in crime_terms)
-        
-        # Climate claim detection
-        climate_terms = ['climate', 'temperature', 'weather', 'warming', 'hurricane', 'drought']
-        is_climate = any(term in claim_lower for term in climate_terms)
-        
-        # Political/Election claim detection
-        political_terms = ['election', 'campaign', 'donated', 'contribution', 'fundraising', 
-                          'pac', 'spending', 'candidate', 'vote', 'senator', 'congress', 
-                          'representative', 'president', 'governor', 'mayor']
-        is_political = any(term in claim_lower for term in political_terms)
-        
-        # Medical/Health research claim detection (beyond CDC)
-        medical_terms = ['treatment', 'therapy', 'drug', 'medication', 'clinical trial', 
-                        'side effects', 'efficacy', 'fda', 'approved', 'cure', 'cancer',
-                        'diabetes', 'alzheimer', 'symptoms', 'diagnosis']
-        is_medical = any(term in claim_lower for term in medical_terms)
-        
-        # Natural disaster claim detection
-        disaster_terms = ['earthquake', 'tsunami', 'volcano', 'flood', 'wildfire', 
-                         'hurricane', 'tornado', 'landslide', 'avalanche', 'magnitude']
-        is_disaster = any(term in claim_lower for term in disaster_terms)
-        
-        # Space/Astronomy claim detection
-        space_terms = ['nasa', 'space', 'astronaut', 'planet', 'satellite', 'iss', 
-                      'mars', 'moon', 'asteroid', 'comet', 'galaxy', 'telescope']
-        is_space = any(term in claim_lower for term in space_terms)
-        
-        # Nutrition/Food claim detection
-        nutrition_terms = ['calories', 'protein', 'vitamin', 'nutrient', 'nutrition', 
-                          'carbs', 'fat', 'sugar', 'sodium', 'dietary', 'usda']
-        is_nutrition = any(term in claim_lower for term in nutrition_terms)
-        
-        # Build task list based on claim type
+        """Verify claim using ALL available sources, not just keyword matches"""
+    
+        logger.info(f"Checking claim with ALL available sources: {claim[:100]}")
+    
         tasks = []
-        
-        # Always check Google Fact Check
-        tasks.append(self._check_google_factcheck(claim))
-        
-        # Add specialized checks based on claim type
-        if is_economic and self.fred_api_key:
-            tasks.append(self._check_fred_data(claim))
-        
-        if is_research:
-            tasks.append(self._check_semantic_scholar(claim))
-            tasks.append(self._check_crossref(claim))
-        
-        if is_health:
-            tasks.append(self._check_cdc_data(claim))
-        
-        if is_global:
-            tasks.append(self._check_world_bank(claim))
-        
-        if is_historical:
-            tasks.append(self._check_wikipedia(claim))
-        
-        if is_financial:
-            tasks.append(self._check_sec_edgar(claim))
-        
-        if is_crime:
-            tasks.append(self._check_fbi_crime_data(claim))
-        
-        if is_climate:
-            tasks.append(self._check_noaa_climate(claim))
-        
-        # Add new free API checks
-        if is_political:
-            tasks.append(self._check_fec_data(claim))
-        
-        if is_medical:
-            tasks.append(self._check_pubmed(claim))
-        
-        if is_disaster:
-            tasks.append(self._check_usgs_data(claim))
-        
-        if is_space:
-            tasks.append(self._check_nasa_data(claim))
-        
-        if is_nutrition:
-            tasks.append(self._check_usda_nutrition(claim))
-        
-        # Add news verification
+    
+            # ALWAYS check these primary sources
+        if self.google_api_key:
+            tasks.append(self._check_google_factcheck(claim))
+            logger.info("✓ Adding Google Fact Check")
+    
         if self.mediastack_api_key:
             tasks.append(self._check_mediastack_news(claim))
+            logger.info("✓ Adding MediaStack News (7,500+ sources)")
         elif self.news_api_key:
-            tasks.append(self._search_news_verification(claim))
-        
-        # Use OpenAI for complex analysis if available
-        if self.openai_api_key and len(tasks) > 1:
+            tasks.append(self._check_news_api(claim))
+            logger.info("✓ Adding News API")
+    
+        # ALWAYS check academic sources - they're FREE!
+        tasks.append(self._check_semantic_scholar(claim))
+        logger.info("✓ Adding Semantic Scholar (200M+ papers)")
+    
+        tasks.append(self._check_crossref(claim))
+        logger.info("✓ Adding CrossRef (130M+ works)")
+    
+        # ALWAYS check Wikipedia for general knowledge
+        tasks.append(self._check_wikipedia(claim))
+        logger.info("✓ Adding Wikipedia")
+    
+        # Add specialized sources based on detected keywords
+        # But don't EXCLUDE them if keywords aren't found!
+        claim_lower = claim.lower()
+    
+        # Economic data - but also check for ANY numbers that might be economic
+        if self.fred_api_key and (
+            any(term in claim_lower for term in ['unemployment', 'inflation', 'gdp', 'economy']) or
+            re.search(r'\d+\.?\d*\s*%', claim)  # Any percentage might be economic
+        ):
+            tasks.append(self._check_fred_data(claim))
+            logger.info("✓ Adding Federal Reserve data")
+    
+        # Health/medical - check more broadly
+        if any(term in claim_lower for term in ['health', 'medical', 'disease', 'treatment', 'death', 'life']):
+            tasks.append(self._check_cdc_data(claim))
+            tasks.append(self._check_pubmed(claim))
+            logger.info("✓ Adding CDC and PubMed")
+    
+        # For ANY claim with numbers, check relevant statistical databases
+        if re.search(r'\d+', claim):
+            # Could be crime statistics
+            tasks.append(self._check_fbi_crime_data(claim))
+            # Could be climate data
+            tasks.append(self._check_noaa_climate(claim))
+            # Could be political donations
+            tasks.append(self._check_fec_data(claim))
+            logger.info("✓ Adding FBI, NOAA, FEC for numerical claims")
+    
+        # If we have OpenAI, use it for additional analysis
+        if self.openai_api_key:
             tasks.append(self._analyze_with_openai(claim))
-        
+            logger.info("✓ Adding OpenAI for complex analysis")
+    
+        logger.info(f"Total verification sources: {len(tasks)}")
+    
         # Gather all results
         all_results = await asyncio.gather(*tasks, return_exceptions=True)
-        
-        # Process results focusing on TRUTH
-        valid_results = [r for r in all_results if isinstance(r, dict) and r.get('found')]
-        
+    
+        # Process results
+        valid_results = []
+        for i, result in enumerate(all_results):
+            if isinstance(result, dict) and result.get('found'):
+                valid_results.append(result)
+            elif isinstance(result, Exception):
+                logger.error(f"Error from source {i}: {str(result)}")
+    
+        logger.info(f"Got {len(valid_results)} valid results out of {len(tasks)} sources checked")
+    
         if not valid_results:
-            return self._create_unverified_response(claim, "No verification sources available")
-        
-        # Synthesize based on agreement about TRUTH
+            # If NO sources found anything, at least explain what we tried
+            sources_tried = [
+                "Google Fact Check", "News Media", "Academic Databases", 
+                "Wikipedia", "Government Statistics"
+            ]
+            return self._create_unverified_response(
+                claim, 
+                f"Checked {len(tasks)} sources ({', '.join(sources_tried[:3])}, etc.) but none had relevant information about this specific claim."
+            )
+    
+        # Synthesize results from ALL sources
         return self._synthesize_truth_verdict(claim, valid_results)
     
     async def _check_google_factcheck(self, claim: str) -> Dict:
