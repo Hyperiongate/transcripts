@@ -28,11 +28,15 @@ window.displayFactChecks = function(factChecks) {
         // Create unique ID for this fact check
         const itemId = `fact-check-${index}`;
         
+        // Use snippet for header, full context in details
+        const claimSnippet = check.claim.length > 100 ? 
+            check.claim.substring(0, 100) + '...' : check.claim;
+        
         item.innerHTML = `
             <div class="fact-check-header" onclick="toggleFactCheck('${itemId}')">
                 <div class="fact-check-claim">
                     <i class="fas fa-chevron-right toggle-icon" id="${itemId}-icon"></i>
-                    ${check.claim}
+                    ${claimSnippet}
                 </div>
                 <div class="fact-check-verdict ${verdictInfo.class}">
                     <i class="fas ${verdictInfo.icon}"></i>
@@ -41,12 +45,17 @@ window.displayFactChecks = function(factChecks) {
             </div>
             <div class="fact-check-details-wrapper" id="${itemId}" style="display: none;">
                 <div class="fact-check-details">
-                    ${check.original_text && check.original_text !== check.claim ? `
+                    ${check.full_context && check.full_context !== check.claim ? `
                     <div class="original-text-section">
-                        <h4>Original Statement</h4>
-                        <p class="original-text">"${check.original_text}"</p>
+                        <h4>Full Context</h4>
+                        <p class="original-text">"${check.full_context}"</p>
                     </div>
-                    ` : ''}
+                    ` : `
+                    <div class="original-text-section">
+                        <h4>Full Claim</h4>
+                        <p class="original-text">"${check.claim}"</p>
+                    </div>
+                    `}
                     
                     <div class="explanation-section">
                         <h4>Explanation</h4>
@@ -129,8 +138,26 @@ window.displayResults = function(results) {
     const pointer = document.getElementById('credibility-pointer');
     pointer.style.left = `${credibilityScore}%`;
     
-    // Update summary
-    document.getElementById('analysis-summary').textContent = results.summary;
+    // Display conversational summary if available
+    let summaryHtml = '';
+    if (results.conversational_summary) {
+        summaryHtml = `<p>${results.conversational_summary}</p>`;
+    } else {
+        summaryHtml = `<p>${results.summary}</p>`;
+    }
+    
+    // Add speaker history if available
+    if (results.speaker && results.speaker_history) {
+        summaryHtml += `
+            <div class="speaker-history">
+                <h4>About ${results.speaker}:</h4>
+                <p>We've analyzed content from this speaker ${results.speaker_history.total_analyses} times. 
+                Their average credibility score is ${results.speaker_history.average_credibility.toFixed(0)}%.</p>
+            </div>
+        `;
+    }
+    
+    document.getElementById('analysis-summary').innerHTML = summaryHtml;
     
     // Display analysis notes if present
     if (results.analysis_notes && results.analysis_notes.length > 0) {
