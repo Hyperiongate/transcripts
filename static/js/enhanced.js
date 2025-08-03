@@ -7,7 +7,7 @@ const VERDICT_MAPPINGS = {
     'mixed': { class: 'mixed', icon: 'fa-adjust', label: 'Mixed' },
     'misleading': { class: 'misleading', icon: 'fa-exclamation-triangle', label: 'Misleading' },
     'lacks_context': { class: 'lacks_context', icon: 'fa-info-circle', label: 'Lacks Context' },
-    'unsubstantiated': { class: 'unverified', icon: 'fa-question-circle', label: 'Unsubstantiated' },
+    'unsubstantiated': { class: 'unsubstantiated', icon: 'fa-question-circle', label: 'Unsubstantiated' },
     'mostly_false': { class: 'false', icon: 'fa-times-circle', label: 'Mostly False' },
     'false': { class: 'false', icon: 'fa-times-circle', label: 'False' },
     'unverified': { class: 'unverified', icon: 'fa-question-circle', label: 'Unverified' }
