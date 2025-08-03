@@ -67,8 +67,19 @@ class ClaimExtractor:
             score, indicators = self._score_sentence(sentence)
             
             if score > 0:
+                # Get surrounding context (previous and next sentence)
+                context_parts = []
+                if idx > 0:
+                    context_parts.append(sentences[idx-1])
+                context_parts.append(sentence)
+                if idx < len(sentences) - 1:
+                    context_parts.append(sentences[idx+1])
+                
+                full_context = ' '.join(context_parts)
+                
                 claim = {
                     'text': sentence.strip(),
+                    'full_context': full_context.strip(),
                     'score': score,
                     'indicators': indicators,
                     'position': idx,
@@ -99,7 +110,7 @@ class ClaimExtractor:
         logger.info(f"Filtered to {len(verifiable)} verifiable claims")
         return verifiable
     
-    def prioritize_claims(self, claims: List[Dict]) -> List[str]:
+    def prioritize_claims(self, claims: List[Dict]) -> List[Dict]:
         """Prioritize claims by importance and verifiability"""
         # Calculate priority score for each claim
         for claim in claims:
@@ -126,8 +137,8 @@ class ClaimExtractor:
         # Sort by priority
         sorted_claims = sorted(claims, key=lambda x: x['priority'], reverse=True)
         
-        # Return just the claim text strings for fact checking
-        return [claim['text'] for claim in sorted_claims]
+        # Return full claim objects (not just text)
+        return sorted_claims
     
     def _split_sentences(self, text: str) -> List[str]:
         """Split text into sentences"""
