@@ -75,6 +75,9 @@ class FactChecker:
             if context_info.get('resolved'):
                 result['context_resolution'] = context_info
             
+            # Normalize the result
+            result = self._normalize_fact_check_result(result)
+            
             results.append(result)
             
             # Rate limiting
@@ -101,12 +104,23 @@ class FactChecker:
         if claim_source:
             historical_context = self.history.get_historical_context(claim, claim_source)
         
-        # Run async checks
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-        
+        # Run async checks with better event loop handling
         try:
-            result = loop.run_until_complete(self._check_all_sources(claim))
+            # Check if there's already an event loop running
+            try:
+                loop = asyncio.get_running_loop()
+                # If we're already in an async context, create a task
+                future = asyncio.create_task(self._check_all_sources(claim))
+                result = asyncio.run_coroutine_threadsafe(future, loop).result()
+            except RuntimeError:
+                # No event loop running, create a new one
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    result = loop.run_until_complete(self._check_all_sources(claim))
+                finally:
+                    loop.close()
+                    asyncio.set_event_loop(None)
             
             # Add historical context
             if historical_context:
@@ -118,8 +132,9 @@ class FactChecker:
             
             return result
             
-        finally:
-            loop.close()
+        except Exception as e:
+            logger.error(f"Error checking claim: {str(e)}")
+            return self._create_unverified_response(claim, f"Error during fact-checking: {str(e)}")
     
     async def _check_all_sources(self, claim: str) -> Dict:
         """Check claim with ALL available sources - no filtering"""
@@ -339,6 +354,103 @@ class FactChecker:
         
         response.update(kwargs)
         return response
+    
+    def calculate_credibility(self, fact_checks: List[Dict]) -> float:
+        """Calculate overall credibility score based on fact checks"""
+        if not fact_checks:
+            return 50.0
+        
+        # First try to use VerdictDefinitions.calculate_credibility_score if it exists
+        if hasattr(self, 'verdict_defs') and hasattr(self.verdict_defs, 'calculate_credibility_score'):
+            try:
+                # Extract just the verdicts for the VerdictDefinitions method
+                verdicts = [check.get('verdict', 'unverified') for check in fact_checks]
+                return self.verdict_defs.calculate_credibility_score(verdicts)
+            except Exception as e:
+                logger.warning(f"Failed to use VerdictDefinitions.calculate_credibility_score: {e}")
+                # Fall through to our implementation
+        
+        # Our implementation
+        total_score = 0
+        total_weight = 0
+        
+        for check in fact_checks:
+            verdict = check.get('verdict', 'unverified')
+            # Normalize verdict string
+            if isinstance(verdict, str):
+                verdict = verdict.lower().replace(' ', '_')
+            
+            confidence = check.get('confidence', 50)
+            # Ensure confidence is a number between 0 and 1
+            if isinstance(confidence, (int, float)):
+                confidence = confidence / 100 if confidence > 1 else confidence
+            else:
+                confidence = 0.5
+            
+            # Get base score
+            base_score = 50  # default
+            
+            # Try VerdictDefinitions first
+            if hasattr(self, 'verdict_defs') and hasattr(self.verdict_defs, 'VERDICTS'):
+                verdict_info = self.verdict_defs.VERDICTS.get(verdict, {})
+                weight = verdict_info.get('weight')
+                if weight is not None:
+                    base_score = weight * 100
+            
+            # Fallback to hardcoded scores
+            if base_score == 50:
+                verdict_scores = {
+                    'true': 100,
+                    'mostly_true': 80,
+                    'misleading': 30,
+                    'lacks_context': 40,
+                    'mixed': 50,
+                    'unsubstantiated': 20,
+                    'mostly_false': 20,
+                    'false': 0,
+                    'unverified': 50
+                }
+                base_score = verdict_scores.get(verdict, 50)
+            
+            weighted_score = base_score * confidence
+            total_score += weighted_score
+            total_weight += confidence
+        
+        if total_weight > 0:
+            credibility = total_score / total_weight
+        else:
+            credibility = 50.0
+        
+        return round(credibility, 1)
+    
+    def _normalize_fact_check_result(self, result: Dict) -> Dict:
+        """Ensure fact check result has all required fields"""
+        # Required fields with defaults
+        normalized = {
+            'claim': result.get('claim', ''),
+            'verdict': result.get('verdict', 'unverified'),
+            'confidence': result.get('confidence', 0),
+            'explanation': result.get('explanation', 'Unable to verify'),
+            'sources': result.get('sources', []),
+            'api_response': result.get('api_response', False)
+        }
+        
+        # Ensure confidence is in 0-100 range
+        if normalized['confidence'] > 100:
+            normalized['confidence'] = 100
+        elif normalized['confidence'] < 0:
+            normalized['confidence'] = 0
+        
+        # Add optional fields if present
+        optional_fields = ['url', 'publisher', 'source_count', 'source_breakdown', 
+                          'misleading_flags', 'context_flags', 'vagueness_reason',
+                          'context_resolution', 'original_text']
+        
+        for field in optional_fields:
+            if field in result:
+                normalized[field] = result[field]
+        
+        return normalized
     
     def get_historical_summary(self) -> Dict:
         """Get summary of historical fact-checking patterns"""
