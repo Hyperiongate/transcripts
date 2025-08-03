@@ -217,7 +217,7 @@ class APICheckers:
                 'format': 'json',
                 'list': 'search',
                 'srsearch': search_query,
-                'srlimit': 3
+                'srlimit': '3'  # FIXED: Changed to string
             }
             
             async with aiohttp.ClientSession() as session:
@@ -228,14 +228,15 @@ class APICheckers:
                         if data.get('query', {}).get('search'):
                             page_id = data['query']['search'][0]['pageid']
                             
+                            # FIXED: All parameters must be strings
                             content_params = {
                                 'action': 'query',
                                 'format': 'json',
-                                'pageids': page_id,
+                                'pageids': str(page_id),  # Ensure page_id is string
                                 'prop': 'extracts',
-                                'exintro': True,
-                                'explaintext': True,
-                                'exsentences': 5
+                                'exintro': '1',      # FIXED: Changed from True to '1'
+                                'explaintext': '1',   # FIXED: Changed from True to '1'
+                                'exsentences': '5'    # FIXED: Changed from 5 to '5'
                             }
                             
                             async with session.get(search_url, params=content_params) as content_response:
