@@ -7,6 +7,7 @@ import sys
 import json
 import logging
 import uuid
+import asyncio
 from datetime import datetime
 from flask import Flask, render_template, request, jsonify, send_file
 from flask_cors import CORS
@@ -29,6 +30,8 @@ from config import Config
 from services.transcript import TranscriptProcessor
 from services.claims import ClaimExtractor
 from services.factcheck import FactChecker
+from services.export import PDFExporter
+from services.speaker_analyzer import SpeakerAnalyzer
 
 # Import job storage
 from job_storage import get_job_storage
@@ -49,6 +52,8 @@ Config.validate()
 transcript_processor = TranscriptProcessor()
 claim_extractor = ClaimExtractor()
 fact_checker = FactChecker()
+pdf_exporter = PDFExporter()
+speaker_analyzer = SpeakerAnalyzer()
 
 # Initialize job storage
 job_storage = get_job_storage()
@@ -235,7 +240,6 @@ def export_results(job_id):
     
     try:
         if format_type == 'json':
-            # Return JSON file
             filename = f'factcheck_report_{job_id}.json'
             return jsonify({
                 'success': True,
@@ -244,7 +248,6 @@ def export_results(job_id):
             })
         
         elif format_type == 'pdf':
-            # Generate PDF (implement in services/export.py)
             filename = f'factcheck_report_{job_id}.pdf'
             return jsonify({
                 'success': True,
@@ -253,7 +256,6 @@ def export_results(job_id):
             })
         
         else:
-            # Text format
             filename = f'factcheck_report_{job_id}.txt'
             return jsonify({
                 'success': True,
@@ -275,20 +277,32 @@ def download_file(job_id, format_type):
     if job['status'] != 'complete':
         return jsonify({'error': 'Analysis not complete'}), 400
     
+    results = job['results']
+    
     # Generate file content based on format
     if format_type == 'json':
-        content = json.dumps(job['results'], indent=2)
+        content = json.dumps(results, indent=2)
         mimetype = 'application/json'
+        filename = f'factcheck_report_{job_id}.json'
     elif format_type == 'txt':
-        content = generate_text_report(job['results'])
+        content = generate_text_report(results)
         mimetype = 'text/plain'
+        filename = f'factcheck_report_{job_id}.txt'
+    elif format_type == 'pdf':
+        # Get speaker info if available
+        speaker_info = results.get('speaker_info', {})
+        
+        # Generate PDF
+        content = pdf_exporter.generate_pdf(results, speaker_info)
+        mimetype = 'application/pdf'
+        filename = f'factcheck_report_{job_id}.pdf'
     else:
-        return jsonify({'error': 'Format not implemented yet'}), 501
+        return jsonify({'error': 'Format not supported'}), 400
     
     # Return file
     return content, 200, {
         'Content-Type': mimetype,
-        'Content-Disposition': f'attachment; filename=factcheck_report_{job_id}.{format_type}'
+        'Content-Disposition': f'attachment; filename={filename}'
     }
 
 # Helper functions
@@ -348,6 +362,11 @@ def process_transcript(job_id, transcript, source):
         job_storage.update(job_id, {'progress': 20})
         cleaned_transcript = transcript_processor.clean_transcript(transcript)
         
+        # Analyze speaker (NEW)
+        job_storage.update(job_id, {'progress': 25})
+        speaker_info = asyncio.run(speaker_analyzer.analyze_speaker(cleaned_transcript))
+        speaker_modifier = speaker_analyzer.calculate_speaker_credibility_modifier(speaker_info)
+        
         # Extract claims
         job_storage.update(job_id, {'progress': 40})
         claims = claim_extractor.extract_claims(cleaned_transcript)
@@ -395,7 +414,19 @@ def process_transcript(job_id, transcript, source):
         
         # Calculate overall credibility
         job_storage.update(job_id, {'progress': 90})
-        credibility_score = fact_checker.calculate_credibility(fact_check_results)
+        base_credibility = fact_checker.calculate_credibility(fact_check_results)
+        
+        # Apply speaker modifier (NEW)
+        adjusted_credibility = base_credibility * speaker_modifier
+        adjusted_credibility = max(0, min(100, adjusted_credibility))  # Keep in 0-100 range
+        
+        # Generate enhanced summary with speaker info (NEW)
+        enhanced_summary = generate_enhanced_summary(
+            fact_check_results, 
+            adjusted_credibility, 
+            speaker_info,
+            base_credibility
+        )
         
         # Compile results
         results = {
@@ -405,10 +436,13 @@ def process_transcript(job_id, transcript, source):
             'total_claims': len(claims),
             'verified_claims': len(verified_claims),
             'checked_claims': len(fact_check_results),
-            'credibility_score': credibility_score,
-            'credibility_label': get_credibility_label(credibility_score),
+            'credibility_score': adjusted_credibility,
+            'base_credibility_score': base_credibility,  # Before speaker adjustment
+            'credibility_label': get_credibility_label(adjusted_credibility),
             'fact_checks': fact_check_results,
-            'summary': generate_summary(fact_check_results, credibility_score),
+            'summary': enhanced_summary,
+            'speaker_info': speaker_info,  # NEW
+            'speaker_summary': speaker_analyzer.generate_speaker_summary(speaker_info),  # NEW
             'analyzed_at': datetime.now().isoformat()
         }
         
@@ -453,6 +487,30 @@ def generate_summary(fact_checks, credibility_score):
     summary += f"{verified_count} verified as true, {false_count} found to be false, "
     summary += f"and {unverified_count} could not be verified. "
     summary += f"Overall credibility score: {credibility_score}%."
+    
+    return summary
+
+def generate_enhanced_summary(fact_checks, credibility_score, speaker_info, base_score):
+    """Generate enhanced analysis summary with speaker context"""
+    if not fact_checks:
+        return "No claims could be fact-checked."
+    
+    verified_count = sum(1 for fc in fact_checks if fc.get('verdict') in ['true', 'mostly_true'])
+    false_count = sum(1 for fc in fact_checks if fc.get('verdict') in ['false', 'mostly_false'])
+    unverified_count = sum(1 for fc in fact_checks if fc.get('verdict') == 'unverified')
+    
+    summary = f"Analysis complete. Out of {len(fact_checks)} claims checked: "
+    summary += f"{verified_count} verified as true, {false_count} found to be false, "
+    summary += f"and {unverified_count} could not be verified. "
+    
+    # Add speaker context if available
+    if speaker_info and speaker_info.get('full_name'):
+        summary += f"\n\nSpeaker Analysis: {speaker_analyzer.generate_speaker_summary(speaker_info)} "
+        
+        if base_score != credibility_score:
+            summary += f"The credibility score was adjusted from {base_score:.0f}% to {credibility_score:.0f}% based on the speaker's historical accuracy record."
+    else:
+        summary += f"Overall credibility score: {credibility_score:.0f}%."
     
     return summary
 
