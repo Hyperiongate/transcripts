@@ -334,9 +334,52 @@ body {
     display: flex;
     justify-content: space-between;
     max-width: 400px;
-    /* Enhanced Fact Check Styles - Add to end of main.css */
+    margin: 0 auto;
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+}
 
-/* Expandable Fact Check Items */
+.credibility-value {
+    font-size: 3rem;
+    font-weight: 700;
+    color: var(--text-primary);
+}
+
+.credibility-label {
+    font-size: 1.2rem;
+    color: var(--text-secondary);
+    margin-top: 0.5rem;
+}
+
+/* Stats Grid */
+.stats-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 1rem;
+    margin-top: 2rem;
+}
+
+.stat {
+    text-align: center;
+    padding: 1rem;
+    background-color: var(--light-bg);
+    border-radius: 8px;
+}
+
+.stat-value {
+    font-size: 2rem;
+    font-weight: 700;
+    color: var(--text-primary);
+    display: block;
+}
+
+.stat-label {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    margin-top: 0.25rem;
+}
+
+/* Fact Check Items */
 .fact-check-item {
     border: 2px solid #e5e7eb;
     border-radius: 12px;
@@ -375,6 +418,32 @@ body {
     min-width: 14px;
     margin-top: 3px;
     transition: transform 0.2s ease;
+}
+
+.fact-check-verdict {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border-radius: 20px;
+    font-size: 14px;
+    font-weight: 500;
+    white-space: nowrap;
+}
+
+.fact-check-verdict.true {
+    background: #10b981;
+    color: white;
+}
+
+.fact-check-verdict.false {
+    background: #ef4444;
+    color: white;
+}
+
+.fact-check-verdict.unverified {
+    background: #f59e0b;
+    color: white;
 }
 
 .fact-check-details-wrapper {
@@ -518,7 +587,93 @@ body {
     background-color: rgba(245, 158, 11, 0.05);
 }
 
-/* Analysis notes in summary */
+/* Export Options */
+.export-options {
+    margin-top: 2rem;
+    padding-top: 2rem;
+    border-top: 1px solid var(--border-color);
+    text-align: center;
+}
+
+.export-options h3 {
+    font-size: 1.2rem;
+    margin-bottom: 1rem;
+}
+
+.export-buttons {
+    display: flex;
+    gap: 1rem;
+    justify-content: center;
+}
+
+.export-buttons button {
+    padding: 0.75rem 1.5rem;
+    background-color: white;
+    border: 2px solid var(--border-color);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.export-buttons button:hover {
+    border-color: var(--primary-color);
+    color: var(--primary-color);
+}
+
+/* New Analysis Button */
+.new-analysis-button {
+    margin: 2rem auto 0;
+    padding: 1rem 2rem;
+    background-color: white;
+    border: 2px solid var(--primary-color);
+    color: var(--primary-color);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.3s ease;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+}
+
+.new-analysis-button:hover {
+    background-color: var(--primary-color);
+    color: white;
+}
+
+/* Footer */
+.footer {
+    background-color: var(--dark-bg);
+    color: white;
+    padding: 2rem 0;
+    text-align: center;
+    margin-top: 4rem;
+}
+
+.footer p {
+    color: #d1d5db;
+}
+
+/* Additional styles for speaker and topic info */
+.speaker-info,
+.topic-info {
+    margin-top: 12px;
+    padding: 8px 12px;
+    background-color: #f3f4f6;
+    border-radius: 6px;
+    font-size: 14px;
+    color: #4b5563;
+}
+
+.speaker-info strong,
+.topic-info strong {
+    color: #1f2937;
+    margin-right: 6px;
+}
+
+/* Demo mode notice styling */
 .analysis-notes {
     margin-top: 20px;
     padding: 16px;
@@ -544,6 +699,19 @@ body {
     margin-bottom: 4px;
 }
 
+/* Fix for fact check items in demo mode */
+.fact-check-item .demo-badge {
+    display: inline-block;
+    padding: 2px 8px;
+    background-color: #f59e0b;
+    color: white;
+    font-size: 11px;
+    font-weight: 600;
+    border-radius: 4px;
+    margin-left: 8px;
+    text-transform: uppercase;
+}
+
 /* Animation for dropdown */
 @keyframes slideDown {
     from {
@@ -558,4 +726,43 @@ body {
 
 .fact-check-details-wrapper[style*="block"] {
     animation: slideDown 0.3s ease;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+    .container {
+        padding: 0 15px;
+    }
+    
+    .input-tabs {
+        flex-direction: column;
+        gap: 0.5rem;
+    }
+    
+    .tab-button {
+        width: 100%;
+        justify-content: center;
+    }
+    
+    .stats-grid {
+        grid-template-columns: repeat(2, 1fr);
+    }
+    
+    .export-buttons {
+        flex-direction: column;
+    }
+    
+    .fact-check-header {
+        flex-direction: column;
+        gap: 10px;
+    }
+    
+    .fact-check-verdict {
+        align-self: flex-start;
+    }
+}
+
+/* Utilities */
+.hidden {
+    display: none !important;
 }
