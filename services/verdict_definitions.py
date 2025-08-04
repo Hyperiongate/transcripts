@@ -6,7 +6,7 @@ Defines verdict types and handles verdict mapping from various sources
 class VerdictDefinitions:
     """Define and manage fact-checking verdicts"""
     
-    # Enhanced verdict definitions
+    # Enhanced verdict definitions with clearer language
     VERDICTS = {
         'true': {
             'label': 'True',
@@ -26,16 +26,16 @@ class VerdictDefinitions:
             'description': 'The claim contains both true and false elements',
             'weight': 0.5
         },
-        'misleading': {
-            'label': 'Misleading',
+        'deceptive': {  # Renamed from 'misleading'
+            'label': 'Deceptive',
             'icon': '⚠️',
-            'description': 'The claim is technically true but presented in a deceptive way',
+            'description': 'The claim uses true facts in a deliberately deceptive way',
             'weight': 0.3
         },
         'lacks_context': {
-            'label': 'Lacks Context',
+            'label': 'Lacks Critical Context',
             'icon': '🔍',
-            'description': 'The claim is true but missing critical context',
+            'description': 'The claim omits crucial information that changes its meaning',
             'weight': 0.4
         },
         'unsubstantiated': {
@@ -67,6 +67,9 @@ class VerdictDefinitions:
     @classmethod
     def get_verdict_info(cls, verdict: str) -> dict:
         """Get information about a verdict"""
+        # Handle old 'misleading' verdicts
+        if verdict == 'misleading':
+            verdict = 'deceptive'
         return cls.VERDICTS.get(verdict, cls.VERDICTS['unverified'])
     
     @classmethod
@@ -82,7 +85,7 @@ class VerdictDefinitions:
             'mostly false': 'mostly_false',
             'false': 'false',
             'pants on fire': 'false',
-            'misleading': 'misleading',
+            'misleading': 'deceptive',  # Changed
             'lacks context': 'lacks_context',
             'missing context': 'lacks_context',
             'unsubstantiated': 'unsubstantiated',
@@ -92,7 +95,8 @@ class VerdictDefinitions:
             'scam': 'false',
             'legend': 'false',
             'fiction': 'false',
-            'satire': 'false'
+            'satire': 'false',
+            'deceptive': 'deceptive'
         }
         
         # Check each mapping
@@ -124,7 +128,10 @@ class VerdictDefinitions:
         
         # Check for explicit verdict mentions (in order of specificity)
         verdict_keywords = [
-            ('misleading', 'misleading'),
+            ('deceptive', 'deceptive'),
+            ('deliberately misleading', 'deceptive'),
+            ('intentionally misleading', 'deceptive'),
+            ('misleading', 'deceptive'),
             ('lacks context', 'lacks_context'),
             ('missing context', 'lacks_context'),
             ('unsubstantiated', 'unsubstantiated'),
@@ -184,6 +191,10 @@ class VerdictDefinitions:
         weighted_sum = 0
         
         for verdict in verdicts:
+            # Handle old 'misleading' verdicts
+            if verdict == 'misleading':
+                verdict = 'deceptive'
+            
             verdict_info = cls.get_verdict_info(verdict)
             weight = verdict_info.get('weight')
             
@@ -195,3 +206,33 @@ class VerdictDefinitions:
             return 50  # Default neutral score
         
         return int((weighted_sum / total_weight) * 100)
+    
+    @classmethod
+    def get_deception_analysis(cls, verdicts: list) -> dict:
+        """Analyze patterns of deception"""
+        deceptive_count = sum(1 for v in verdicts if v in ['deceptive', 'misleading'])
+        lacks_context_count = sum(1 for v in verdicts if v == 'lacks_context')
+        false_count = sum(1 for v in verdicts if v in ['false', 'mostly_false'])
+        
+        analysis = {
+            'deceptive_statements': deceptive_count,
+            'context_omissions': lacks_context_count,
+            'false_statements': false_count,
+            'deception_pattern': None
+        }
+        
+        # Identify patterns
+        total_problematic = deceptive_count + lacks_context_count + false_count
+        
+        if total_problematic == 0:
+            analysis['deception_pattern'] = 'No deception detected'
+        elif deceptive_count >= 3:
+            analysis['deception_pattern'] = 'Pattern of deliberate deception'
+        elif lacks_context_count >= 3:
+            analysis['deception_pattern'] = 'Pattern of strategic omission'
+        elif false_count >= 3:
+            analysis['deception_pattern'] = 'Pattern of false statements'
+        elif total_problematic >= 5:
+            analysis['deception_pattern'] = 'Mixed pattern of deception'
+        
+        return analysis
