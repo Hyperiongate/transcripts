@@ -353,14 +353,13 @@ def process_transcript(job_id, transcript, source):
         job_storage.update(job_id, {'progress': 10})
         cleaned_transcript = transcript_processor.clean_transcript(transcript)
         
-        # Identify speakers
+        # Identify speakers - returns a tuple (speakers, topics)
         job_storage.update(job_id, {'progress': 20})
-        speaker_info = claim_extractor.identify_speakers(transcript)
-        logger.info(f"Job {job_id}: Identified speakers: {speaker_info.get('all_speakers', [])}")
+        speakers, topics = claim_extractor.identify_speakers(transcript)
+        logger.info(f"Job {job_id}: Identified speakers: {speakers}")
         
-        # Extract key topics
-        topics = claim_extractor.extract_key_topics(cleaned_transcript)
-        logger.info(f"Job {job_id}: Key topics: {topics[:5]}")
+        # Log topics (topics is a list from identify_speakers)
+        logger.info(f"Job {job_id}: Key topics: {topics[:5] if topics else []}")
         
         # Extract claims
         job_storage.update(job_id, {'progress': 30})
@@ -386,32 +385,17 @@ def process_transcript(job_id, transcript, source):
         
         # Check speaker background (if main speaker identified)
         speaker_analysis = {}
-        if speaker_info.get('main_speaker'):
-            job_storage.update(job_id, {'progress': 50})
-            logger.info(f"Checking background for speaker: {speaker_info['main_speaker']}")
-            
-            # Run async background check
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-            try:
-                background = loop.run_until_complete(
-                    fact_checker.check_speaker_background(speaker_info['main_speaker'])
-                )
-                speaker_analysis = {
-                    'main_speaker': speaker_info['main_speaker'],
-                    'speaker_mentions': speaker_info.get('speaker_mentions', {}),
-                    'background': background.get('credibility_assessment', ''),
-                    'credibility_history': background.get('fact_check_history', {}).get('details', ''),
-                    'credibility_score': background.get('credibility_score', 'Unknown'),
-                    'controversies': ', '.join([c['type'] for c in background.get('controversies', [])[:3]]),
-                    'lawsuits': len(background.get('lawsuits', [])) > 0,
-                    'criminal_record': background.get('criminal_record') is not None
-                }
-            finally:
-                loop.close()
+        if speakers and len(speakers) > 0:
+            # Simple speaker analysis without background check
+            speaker_analysis = {
+                'main_speaker': speakers[0],  # Use first speaker as main
+                'all_speakers': speakers[:10],  # Include all speakers (limited to 10)
+                'speaker_count': len(speakers)
+            }
+            logger.info(f"Main speaker identified: {speakers[0]}")
         
         # Fact check claims
-        job_storage.update(job_id, {'progress': 60})
+        job_storage.update(job_id, {'progress': 50})
         fact_check_results = []
         
         for i in range(0, len(claims_to_check), Config.FACT_CHECK_BATCH_SIZE):
@@ -428,7 +412,7 @@ def process_transcript(job_id, transcript, source):
                 fact_check_results.extend(batch_results)
                 
                 # Update progress
-                progress = 60 + int((len(fact_check_results) / len(claims_to_check)) * 30)
+                progress = 50 + int((len(fact_check_results) / len(claims_to_check)) * 40)
                 job_storage.update(job_id, {'progress': progress})
             except Exception as e:
                 logger.error(f"Error checking batch starting at {i}: {str(e)}")
@@ -462,10 +446,6 @@ def process_transcript(job_id, transcript, source):
             'speaker_analysis': speaker_analysis if speaker_analysis else None,
             'key_topics': topics[:10] if topics else []
         }
-        
-        # Generate executive summary
-        job_storage.update(job_id, {'progress': 95})
-        results['executive_summary'] = fact_checker.generate_executive_summary(results)
         
         # Complete job
         job_storage.update(job_id, {
