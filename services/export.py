@@ -127,18 +127,18 @@ class PDFExporter:
         # Title page
         story.extend(self._create_title_page(results))
         
-        # Executive summary with conversational tone
-        story.extend(self._create_executive_summary(results))
+        # Overall Assessment - NEW SECTION
+        story.extend(self._create_overall_assessment(results))
         
         # Speaker history analysis
-        if results.get('speaker_history'):
-            story.extend(self._create_speaker_history(results['speaker_history']))
+        if results.get('speaker') and results.get('speaker_history'):
+            story.extend(self._create_speaker_history(results['speaker'], results['speaker_history']))
+        
+        # Deception Pattern Analysis
+        story.extend(self._create_deception_analysis(results))
         
         # Detailed fact checks
         story.extend(self._create_fact_checks(results))
-        
-        # Pattern analysis
-        story.extend(self._create_pattern_analysis(results))
         
         # Build PDF
         doc.build(story)
@@ -176,15 +176,19 @@ class PDFExporter:
         
         return elements
     
-    def _create_executive_summary(self, results):
-        """Create conversational executive summary"""
+    def _create_overall_assessment(self, results):
+        """Create overall assessment section"""
         elements = []
         
-        elements.append(Paragraph("Executive Summary", self.styles['SectionHeader']))
+        elements.append(Paragraph("Overall Assessment", self.styles['SectionHeader']))
         
-        # Generate conversational summary
-        summary_text = self._generate_conversational_summary(results)
-        elements.append(Paragraph(summary_text, self.styles['Conversational']))
+        # Use conversational summary if available
+        if results.get('conversational_summary'):
+            elements.append(Paragraph(results['conversational_summary'], self.styles['Conversational']))
+        else:
+            # Generate one if not available
+            summary_text = self._generate_assessment(results)
+            elements.append(Paragraph(summary_text, self.styles['Conversational']))
         
         elements.append(Spacer(1, 0.3*inch))
         
@@ -195,79 +199,92 @@ class PDFExporter:
         
         return elements
     
-    def _generate_conversational_summary(self, results):
-        """Generate a natural, conversational summary"""
+    def _generate_assessment(self, results):
+        """Generate assessment if conversational summary not available"""
         score = results['credibility_score']
         total_claims = results['checked_claims']
-        false_count = sum(1 for fc in results['fact_checks'] 
-                         if fc.get('verdict') in ['false', 'mostly_false'])
-        misleading_count = sum(1 for fc in results['fact_checks'] 
-                              if fc.get('verdict') == 'misleading')
+        
+        # Get verdict counts
+        verdicts = [fc['verdict'] for fc in results['fact_checks']]
+        false_count = sum(1 for v in verdicts if v in ['false', 'mostly_false'])
+        deceptive_count = sum(1 for v in verdicts if v in ['deceptive', 'misleading'])
+        lacks_context_count = sum(1 for v in verdicts if v == 'lacks_context')
         
         # Opening based on credibility score
         if score >= 80:
-            opening = "The good news is that this transcript appears to be highly credible. "
+            assessment = "This transcript demonstrates high overall credibility. "
         elif score >= 60:
-            opening = "This transcript shows moderate credibility with some concerns. "
+            assessment = "This transcript shows moderate credibility with some significant concerns. "
         elif score >= 40:
-            opening = "This transcript raises significant credibility concerns. "
+            assessment = "This transcript has serious credibility issues that warrant careful scrutiny. "
         else:
-            opening = "This transcript has serious credibility issues that need attention. "
+            assessment = "This transcript exhibits very low credibility with numerous problematic claims. "
         
         # Details about claims
-        details = f"Out of {total_claims} factual claims we examined, "
+        assessment += f"\n\nWe analyzed {total_claims} factual claims in this transcript. "
         
-        if false_count == 0 and misleading_count == 0:
-            details += "we didn't find any that were outright false or misleading. "
-        elif false_count > 0 and misleading_count > 0:
-            details += f"we found {false_count} false statements and {misleading_count} misleading claims. "
-        elif false_count > 0:
-            details += f"we found {false_count} false statements. "
-        else:
-            details += f"we found {misleading_count} misleading claims. "
+        if false_count > 0:
+            assessment += f"{false_count} were demonstrably false. "
         
-        # Pattern observations
-        if misleading_count >= 3:
-            pattern = (f"\n\nOf particular concern is the pattern of misleading statements. "
-                      f"While one or two might be inadvertent, {misleading_count} misleading claims "
-                      f"suggests a pattern of misrepresentation that readers should be aware of.")
-        else:
-            pattern = ""
+        if deceptive_count > 0:
+            assessment += (f"{deceptive_count} used true facts in deliberately deceptive ways - "
+                          f"this is not simply misspeaking but appears to be intentional manipulation. ")
         
-        # Context about verification
-        context = ("\n\nIt's important to note that not all claims could be independently verified. "
-                  "Some statements are matters of opinion or prediction, while others lack sufficient "
-                  "public information for fact-checking. We've focused on verifiable factual claims.")
+        if lacks_context_count > 0:
+            assessment += (f"{lacks_context_count} omitted critical context that would change "
+                          f"how listeners understand the claim. ")
         
-        return opening + details + pattern + context
+        # Pattern assessment
+        if deceptive_count >= 3 or (deceptive_count + lacks_context_count) >= 5:
+            assessment += ("\n\nThe pattern of deceptive statements and strategic omissions suggests "
+                          "this is not accidental but a deliberate communication strategy designed to mislead.")
+        
+        return assessment
     
-    def _create_speaker_history(self, history):
+    def _create_speaker_history(self, speaker_name, history):
         """Create speaker history section"""
         elements = []
         
-        elements.append(Paragraph("Speaker Background & History", self.styles['SectionHeader']))
+        elements.append(Paragraph(f"Speaker Profile: {speaker_name}", self.styles['SectionHeader']))
         
-        if history.get('previous_analyses'):
-            text = (f"This is not the first time we've analyzed content from this source. "
-                   f"Over {history['total_analyses']} previous analyses, we've observed:")
-            elements.append(Paragraph(text, self.styles['Conversational']))
+        # Historical overview
+        overview = (f"This analysis adds to our growing understanding of {speaker_name}'s "
+                   f"communication patterns. Over {history['total_analyses']} analyses, "
+                   f"we've tracked {history['total_claims']} factual claims.")
+        elements.append(Paragraph(overview, self.styles['Conversational']))
+        
+        # Credibility trend
+        avg_cred = history['average_credibility']
+        recent_cred = history.get('recent_credibility', avg_cred)
+        
+        if abs(recent_cred - avg_cred) > 10:
+            if recent_cred < avg_cred:
+                trend = (f"\n\nConcerningly, their credibility has been declining. "
+                        f"Their recent average ({recent_cred:.0f}%) is significantly lower "
+                        f"than their historical average ({avg_cred:.0f}%).")
+            else:
+                trend = (f"\n\nEncouragingly, their credibility has been improving. "
+                        f"Their recent average ({recent_cred:.0f}%) is higher "
+                        f"than their historical average ({avg_cred:.0f}%).")
+            elements.append(Paragraph(trend, self.styles['Conversational']))
+        
+        # Pattern analysis
+        if history['total_false_claims'] > 0 or history['total_misleading_claims'] > 0:
+            false_rate = history.get('false_claim_rate', 0)
+            pattern_text = f"\n\nHistorical Pattern Analysis:"
+            elements.append(Paragraph(pattern_text, self.styles['Heading3']))
             
-            # Historical patterns
-            history_items = []
-            if history.get('average_credibility'):
-                history_items.append(f"Average credibility score: {history['average_credibility']:.1f}%")
-            if history.get('total_false_claims'):
-                history_items.append(f"Total false claims: {history['total_false_claims']}")
-            if history.get('total_misleading_claims'):
-                history_items.append(f"Total misleading claims: {history['total_misleading_claims']}")
+            stats = []
+            stats.append(f"• Total false claims: {history['total_false_claims']} ({false_rate:.1%} of all claims)")
+            stats.append(f"• Deliberately deceptive claims: {history['total_misleading_claims']}")
             
-            for item in history_items:
-                elements.append(Paragraph(f"• {item}", self.styles['Normal']))
+            for stat in stats:
+                elements.append(Paragraph(stat, self.styles['Normal']))
         
         # Notable patterns
         if history.get('patterns'):
             elements.append(Spacer(1, 0.2*inch))
-            elements.append(Paragraph("Notable Patterns:", self.styles['Heading3']))
+            elements.append(Paragraph("Identified Patterns:", self.styles['Heading3']))
             for pattern in history['patterns']:
                 elements.append(Paragraph(f"• {pattern}", self.styles['Normal']))
         
@@ -275,10 +292,43 @@ class PDFExporter:
         
         return elements
     
+    def _create_deception_analysis(self, results):
+        """Create deception pattern analysis"""
+        elements = []
+        
+        # Analyze deception patterns
+        from services.verdict_definitions import VerdictDefinitions
+        verdicts = [fc['verdict'] for fc in results['fact_checks']]
+        deception_analysis = VerdictDefinitions.get_deception_analysis(verdicts)
+        
+        if deception_analysis['deception_pattern'] != 'No deception detected':
+            elements.append(Paragraph("Deception Analysis", self.styles['SectionHeader']))
+            
+            # Main pattern
+            pattern_text = (f"Pattern Identified: {deception_analysis['deception_pattern']}\n\n"
+                           f"This transcript contains {deception_analysis['deceptive_statements']} "
+                           f"deliberately deceptive statements, {deception_analysis['context_omissions']} "
+                           f"critical context omissions, and {deception_analysis['false_statements']} "
+                           f"outright false claims.")
+            
+            elements.append(Paragraph(pattern_text, self.styles['Conversational']))
+            
+            # Interpretation
+            if deception_analysis['deceptive_statements'] >= 3:
+                interpretation = ("\n\nThe repeated use of technically true statements presented in "
+                                "deliberately misleading ways indicates sophisticated deception. This is "
+                                "not simply getting facts wrong - it's using facts as weapons of misinformation.")
+                elements.append(Paragraph(interpretation, self.styles['Conversational']))
+            
+            elements.append(Spacer(1, 0.3*inch))
+        
+        return elements
+    
     def _create_fact_checks(self, results):
         """Create detailed fact checks section"""
         elements = []
         
+        elements.append(PageBreak())
         elements.append(Paragraph("Detailed Fact Checks", self.styles['SectionHeader']))
         
         for i, check in enumerate(results['fact_checks'], 1):
@@ -300,9 +350,10 @@ class PDFExporter:
                     self.styles['Claim']
                 ))
             
-            # Verdict
+            # Verdict with updated language
+            verdict_label = check['verdict'].replace('misleading', 'deceptive').replace('_', ' ').title()
             elements.append(Paragraph(
-                f"Verdict: {check['verdict'].replace('_', ' ').title()}",
+                f"Verdict: {verdict_label}",
                 verdict_style
             ))
             
@@ -320,64 +371,6 @@ class PDFExporter:
                                      spaceBefore=12, spaceAfter=12))
         
         return elements
-    
-    def _create_pattern_analysis(self, results):
-        """Create pattern analysis section"""
-        elements = []
-        
-        # Analyze patterns
-        patterns = self._analyze_patterns(results['fact_checks'])
-        
-        if patterns:
-            elements.append(PageBreak())
-            elements.append(Paragraph("Pattern Analysis", self.styles['SectionHeader']))
-            
-            for pattern_type, details in patterns.items():
-                elements.append(Paragraph(pattern_type, self.styles['Heading3']))
-                elements.append(Paragraph(details, self.styles['Conversational']))
-                elements.append(Spacer(1, 0.2*inch))
-        
-        return elements
-    
-    def _analyze_patterns(self, fact_checks):
-        """Analyze patterns in fact checks"""
-        patterns = {}
-        
-        # Count verdict types
-        verdict_counts = {}
-        topics = {}
-        
-        for check in fact_checks:
-            verdict = check['verdict']
-            verdict_counts[verdict] = verdict_counts.get(verdict, 0) + 1
-            
-            # Extract topics (simplified - could be enhanced with NLP)
-            claim_lower = check['claim'].lower()
-            if any(word in claim_lower for word in ['economy', 'jobs', 'unemployment']):
-                topics['economic'] = topics.get('economic', 0) + 1
-            elif any(word in claim_lower for word in ['health', 'medical', 'covid']):
-                topics['health'] = topics.get('health', 0) + 1
-        
-        # Misleading pattern
-        if verdict_counts.get('misleading', 0) >= 3:
-            patterns['Pattern of Misleading Statements'] = (
-                f"We identified {verdict_counts['misleading']} misleading statements in this transcript. "
-                f"This pattern suggests a tendency to present information in a way that, while not entirely "
-                f"false, could lead listeners to incorrect conclusions. This is often more subtle than "
-                f"outright falsehoods but can be equally problematic."
-            )
-        
-        # Topic concentration
-        if topics:
-            max_topic = max(topics.items(), key=lambda x: x[1])
-            if max_topic[1] >= 3:
-                patterns[f'Concentration on {max_topic[0].title()} Claims'] = (
-                    f"A significant number of claims ({max_topic[1]}) were related to {max_topic[0]} topics. "
-                    f"When false or misleading claims cluster around specific topics, it may indicate either "
-                    f"a lack of knowledge in that area or intentional misrepresentation."
-                )
-        
-        return patterns
     
     def _create_credibility_visual(self, score):
         """Create visual representation of credibility score"""
@@ -418,8 +411,10 @@ class PDFExporter:
                                     if fc.get('verdict') in ['true', 'mostly_true']))],
             ['Found False', str(sum(1 for fc in results['fact_checks'] 
                                   if fc.get('verdict') in ['false', 'mostly_false']))],
-            ['Misleading', str(sum(1 for fc in results['fact_checks'] 
-                                 if fc.get('verdict') == 'misleading'))],
+            ['Deliberately Deceptive', str(sum(1 for fc in results['fact_checks'] 
+                                 if fc.get('verdict') in ['deceptive', 'misleading']))],
+            ['Missing Critical Context', str(sum(1 for fc in results['fact_checks'] 
+                                 if fc.get('verdict') == 'lacks_context'))],
             ['Unverified', str(sum(1 for fc in results['fact_checks'] 
                                  if fc.get('verdict') == 'unverified'))],
         ]
