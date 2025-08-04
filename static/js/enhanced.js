@@ -1,12 +1,13 @@
 // Enhanced JavaScript for Transcript Fact Checker
 
-// Enhanced verdict handling
+// Enhanced verdict handling with clearer language
 const VERDICT_MAPPINGS = {
     'true': { class: 'true', icon: 'fa-check-circle', label: 'True' },
     'mostly_true': { class: 'true', icon: 'fa-check-circle', label: 'Mostly True' },
     'mixed': { class: 'mixed', icon: 'fa-adjust', label: 'Mixed' },
-    'misleading': { class: 'misleading', icon: 'fa-exclamation-triangle', label: 'Misleading' },
-    'lacks_context': { class: 'lacks_context', icon: 'fa-info-circle', label: 'Lacks Context' },
+    'misleading': { class: 'deceptive', icon: 'fa-exclamation-triangle', label: 'Deceptive' }, // Legacy support
+    'deceptive': { class: 'deceptive', icon: 'fa-exclamation-triangle', label: 'Deceptive' },
+    'lacks_context': { class: 'lacks_context', icon: 'fa-info-circle', label: 'Lacks Critical Context' },
     'unsubstantiated': { class: 'unsubstantiated', icon: 'fa-question-circle', label: 'Unsubstantiated' },
     'mostly_false': { class: 'false', icon: 'fa-times-circle', label: 'Mostly False' },
     'false': { class: 'false', icon: 'fa-times-circle', label: 'False' },
@@ -148,11 +149,19 @@ window.displayResults = function(results) {
     
     // Add speaker history if available
     if (results.speaker && results.speaker_history) {
+        const history = results.speaker_history;
         summaryHtml += `
             <div class="speaker-history">
                 <h4>About ${results.speaker}:</h4>
-                <p>We've analyzed content from this speaker ${results.speaker_history.total_analyses} times. 
-                Their average credibility score is ${results.speaker_history.average_credibility.toFixed(0)}%.</p>
+                <p>We've analyzed content from this speaker ${history.total_analyses} times. 
+                Their average credibility score is ${history.average_credibility.toFixed(0)}%.</p>
+                ${history.patterns && history.patterns.length > 0 ? `
+                    <p><strong>Historical Patterns:</strong> ${history.patterns.join(', ')}</p>
+                ` : ''}
+                ${history.total_false_claims > 0 ? `
+                    <p><strong>Track Record:</strong> ${history.total_false_claims} false claims and 
+                    ${history.total_misleading_claims} deliberately deceptive claims across all analyses.</p>
+                ` : ''}
             </div>
         `;
     }
@@ -189,7 +198,7 @@ window.displayResults = function(results) {
         else if (verdict === 'false' || verdict === 'mostly_false') {
             falseCount++;
         }
-        // Everything else is unverified (including mixed, misleading, lacks_context)
+        // Everything else is unverified (including mixed, deceptive, lacks_context)
         else {
             unverifiedCount++;
         }
