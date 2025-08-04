@@ -146,15 +146,16 @@ class ClaimExtractor:
         
         speakers = []
         speaker_lines = {}  # Track what each speaker says
+        identified_names = set()  # Track unique speaker names
         
-        # Common speaker patterns
-        patterns = [
-            # "SPEAKER NAME:" format
-            r'^([A-Z][A-Z\s\.]+):',
-            # "Speaker Name:" format  
-            r'^([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*):',
-            # Interview format "Q:" and "A:"
-            r'^(Q|A|QUESTION|ANSWER|INTERVIEWER|INTERVIEWEE):'
+        # Enhanced speaker patterns - more flexible
+        speaker_patterns = [
+            # Standard formats
+            r'^([A-Z][A-Z\s\.]+):',  # ALL CAPS
+            r'^([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*):',  # Title Case
+            r'^((?:President|Senator|Rep\.|Representative|Gov\.|Governor|Dr\.|Mr\.|Mrs\.|Ms\.|Judge|Secretary)\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*):',  # With titles
+            r'^([A-Z]+):',  # Single word caps (Q:, A:)
+            r'^(\w+):(?=\s)',  # Any word followed by colon and space
         ]
         
         # Name patterns for mentions within text
@@ -163,44 +164,52 @@ class ClaimExtractor:
             r'\b(President|Senator|Representative|Governor|Mayor|Dr\.|Mr\.|Mrs\.|Ms\.|Judge|Secretary)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)',
             # Full names (First Last)
             r'\b([A-Z][a-z]+\s+[A-Z][a-z]+(?:\s+(?:Jr\.|Sr\.|III|IV))?)\b',
-            # Last names after verbs
-            r'(?:said|says?|stated|claimed|announced|declared|according to)\s+([A-Z][a-z]+)'
+            # Names after speaking verbs
+            r'(?:said|says?|stated|claimed|announced|declared|according to)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)',
+            # Names in quotes attribution
+            r'["""]\s*(?:said|says?)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)',
         ]
         
         lines = transcript.split('\n')
         current_speaker = None
         
-        for line in lines:
+        logger.info(f"Analyzing {len(lines)} lines for speakers")
+        
+        for line_num, line in enumerate(lines):
             line = line.strip()
             if not line:
                 continue
-                
+            
             # Check for speaker labels
             speaker_found = False
-            for pattern in patterns:
+            for pattern in speaker_patterns:
                 match = re.match(pattern, line)
                 if match:
                     speaker = match.group(1).strip()
-                    # Normalize Q&A format
-                    if speaker in ['Q', 'QUESTION', 'INTERVIEWER']:
+                    
+                    # Normalize common formats
+                    if speaker.upper() in ['Q', 'QUESTION', 'INTERVIEWER']:
                         speaker = 'INTERVIEWER'
-                    elif speaker in ['A', 'ANSWER', 'INTERVIEWEE']:
+                    elif speaker.upper() in ['A', 'ANSWER', 'INTERVIEWEE', 'RESPONSE']:
                         speaker = 'INTERVIEWEE'
                     
                     current_speaker = speaker
                     speakers.append(speaker)
+                    identified_names.add(speaker)
                     
                     # Track what they say
                     content = line[match.end():].strip()
                     if speaker not in speaker_lines:
                         speaker_lines[speaker] = []
-                    speaker_lines[speaker].append(content)
+                    if content:  # Only add if there's content after the speaker label
+                        speaker_lines[speaker].append(content)
                     
                     speaker_found = True
+                    logger.debug(f"Line {line_num}: Found speaker '{speaker}'")
                     break
             
             # If no speaker label, attribute to current speaker
-            if not speaker_found and current_speaker:
+            if not speaker_found and current_speaker and line:
                 if current_speaker in speaker_lines:
                     speaker_lines[current_speaker].append(line)
             
@@ -218,23 +227,45 @@ class ClaimExtractor:
                         name = match
                     
                     # Filter out common false positives
-                    if name and len(name.split()) >= 2 and not any(word in name.lower() for word in ['the', 'and', 'or', 'but']):
+                    if name and len(name.split()) >= 2 and not any(word in name.lower() for word in ['the', 'and', 'or', 'but', 'new', 'next']):
                         speakers.append(name)
+                        identified_names.add(name)
         
         # Count speaker occurrences
         speaker_counts = Counter(speakers)
         
-        # Analyze who speaks the most
+        # Analyze who speaks the most based on word count
         word_counts = {}
         for speaker, lines in speaker_lines.items():
             total_words = sum(len(line.split()) for line in lines)
             word_counts[speaker] = total_words
         
+        # Determine main speaker
+        main_speaker = None
+        if word_counts:
+            # Get speaker with most words
+            main_speaker = max(word_counts.items(), key=lambda x: x[1])[0]
+            
+            # If main speaker is generic (INTERVIEWER/INTERVIEWEE), try to find actual name
+            if main_speaker in ['INTERVIEWER', 'INTERVIEWEE']:
+                # Look for most mentioned actual name
+                actual_names = [name for name in identified_names if name not in ['INTERVIEWER', 'INTERVIEWEE']]
+                if actual_names:
+                    name_counts = {name: speaker_counts[name] for name in actual_names if name in speaker_counts}
+                    if name_counts:
+                        most_mentioned = max(name_counts.items(), key=lambda x: x[1])[0]
+                        # If this person is mentioned frequently, they might be the main speaker
+                        if name_counts[most_mentioned] > 3:
+                            main_speaker = most_mentioned
+        
+        logger.info(f"Speaker identification complete. Found {len(identified_names)} unique speakers")
+        logger.info(f"Main speaker: {main_speaker}, Word counts: {word_counts}")
+        
         return {
             'speaker_mentions': dict(speaker_counts),
             'speaker_word_counts': word_counts,
-            'main_speaker': max(word_counts.items(), key=lambda x: x[1])[0] if word_counts else None,
-            'all_speakers': list(set(speakers))
+            'main_speaker': main_speaker,
+            'all_speakers': list(identified_names)
         }
     
     def extract_key_topics(self, transcript: str) -> List[str]:
