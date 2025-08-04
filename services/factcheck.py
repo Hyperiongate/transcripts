@@ -9,6 +9,7 @@ import asyncio
 from typing import List, Dict, Optional, Tuple
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 
 from config import Config
 from .factcheck_history import FactCheckHistory
@@ -354,6 +355,142 @@ class FactChecker:
         
         # Use the centralized credibility calculation
         return self.verdict_defs.calculate_credibility_score(verdicts)
+    
+    async def check_speaker_background(self, speaker_name: str) -> Dict:
+        """Check speaker's background and credibility history"""
+        if not speaker_name or speaker_name in ['INTERVIEWER', 'INTERVIEWEE', 'Unknown']:
+            return {}
+        
+        background_info = {
+            'name': speaker_name,
+            'credibility_issues': [],
+            'criminal_record': None,
+            'lawsuits': [],
+            'fact_check_history': {},
+            'controversies': []
+        }
+        
+        # Search for fact-check history
+        if self.api_checkers.google_api_key:
+            try:
+                # Search for past fact checks of this person
+                search_query = f'"{speaker_name}" fact check false misleading'
+                results = await self.api_checkers.check_google_factcheck(search_query)
+                
+                if results.get('found'):
+                    background_info['fact_check_history']['has_false_claims'] = True
+                    background_info['fact_check_history']['details'] = results.get('explanation', '')
+                    background_info['credibility_issues'].append('Previously made false claims')
+            except:
+                pass
+        
+        # Search news for controversies, lawsuits, criminal records
+        controversy_keywords = [
+            'lawsuit', 'sued', 'criminal', 'convicted', 'arrested', 'indicted',
+            'scandal', 'controversy', 'investigation', 'fraud', 'corruption',
+            'lying', 'false claims', 'misleading', 'deception'
+        ]
+        
+        for keyword in controversy_keywords[:5]:  # Limit searches
+            search_query = f'"{speaker_name}" {keyword}'
+            news_results = await self.api_checkers.check_news_sources(search_query)
+            
+            if news_results.get('found'):
+                if keyword in ['lawsuit', 'sued']:
+                    background_info['lawsuits'].append({
+                        'keyword': keyword,
+                        'found': True,
+                        'details': news_results.get('explanation', '')
+                    })
+                elif keyword in ['criminal', 'convicted', 'arrested', 'indicted']:
+                    if not background_info['criminal_record']:
+                        background_info['criminal_record'] = {
+                            'found': True,
+                            'details': news_results.get('explanation', '')
+                        }
+                else:
+                    background_info['controversies'].append({
+                        'type': keyword,
+                        'details': news_results.get('explanation', '')
+                    })
+        
+        # Check Wikipedia for general background
+        wiki_results = await self.api_checkers.check_wikipedia(speaker_name)
+        if wiki_results.get('found'):
+            background_info['wikipedia_entry'] = True
+            background_info['is_public_figure'] = True
+        
+        # Compile credibility assessment
+        if background_info['fact_check_history'].get('has_false_claims'):
+            background_info['credibility_assessment'] = 'History of false or misleading claims'
+            background_info['credibility_score'] = 'Low'
+        elif background_info['criminal_record']:
+            background_info['credibility_assessment'] = 'Criminal record found - evaluate claims carefully'
+            background_info['credibility_score'] = 'Questionable'
+        elif len(background_info['lawsuits']) > 2:
+            background_info['credibility_assessment'] = 'Multiple lawsuits found - potential credibility concerns'
+            background_info['credibility_score'] = 'Mixed'
+        elif background_info['controversies']:
+            background_info['credibility_assessment'] = 'Some controversies found - standard verification recommended'
+            background_info['credibility_score'] = 'Moderate'
+        else:
+            background_info['credibility_assessment'] = 'No major credibility issues found'
+            background_info['credibility_score'] = 'Standard'
+        
+        return background_info
+    
+    def generate_executive_summary(self, results: Dict) -> str:
+        """Generate an executive summary of the fact-check analysis"""
+        summary_parts = []
+        
+        # Overall assessment
+        score = results.get('credibility_score', 0)
+        label = results.get('credibility_label', 'Unknown')
+        total_claims = results.get('checked_claims', 0)
+        
+        if score >= 80:
+            assessment = "The transcript demonstrates high credibility with most claims verified as accurate."
+        elif score >= 60:
+            assessment = "The transcript shows moderate credibility with a mix of accurate and questionable claims."
+        elif score >= 40:
+            assessment = "The transcript exhibits low credibility with numerous false or unverifiable claims."
+        else:
+            assessment = "The transcript shows very low credibility with predominantly false or misleading claims."
+        
+        summary_parts.append(assessment)
+        
+        # Key findings
+        fact_checks = results.get('fact_checks', [])
+        false_claims = [fc for fc in fact_checks if fc.get('verdict') in ['false', 'mostly_false']]
+        misleading_claims = [fc for fc in fact_checks if fc.get('verdict') in ['misleading', 'lacks_context']]
+        
+        if false_claims:
+            summary_parts.append(f"\n\nKey False Claims Identified ({len(false_claims)}):")
+            for fc in false_claims[:3]:  # Top 3 false claims
+                summary_parts.append(f"• \"{fc['claim'][:100]}...\" - {fc.get('explanation', 'No explanation available')}")
+        
+        if misleading_claims:
+            summary_parts.append(f"\n\nMisleading or Context-Lacking Claims ({len(misleading_claims)}):")
+            for fc in misleading_claims[:2]:
+                summary_parts.append(f"• \"{fc['claim'][:100]}...\" - Missing important context")
+        
+        # Speaker credibility (if available)
+        if results.get('speaker_analysis'):
+            speaker_info = results['speaker_analysis']
+            if speaker_info.get('credibility_score') in ['Low', 'Questionable']:
+                summary_parts.append(f"\n\n⚠️ Speaker Credibility Warning: {speaker_info.get('credibility_assessment', 'Issues found with speaker credibility')}")
+        
+        # Recommendations
+        summary_parts.append("\n\nRecommendations:")
+        if score < 60:
+            summary_parts.append("• Verify all claims independently before accepting as fact")
+            summary_parts.append("• Cross-reference with multiple reliable sources")
+            summary_parts.append("• Be aware of potential bias or misinformation")
+        else:
+            summary_parts.append("• Most claims appear accurate but always verify critical information")
+            summary_parts.append("• Pay attention to claims flagged as lacking context")
+        
+        return '\n'.join(summary_parts)
     
     def get_historical_summary(self) -> Dict:
         """Get summary of historical fact-checking patterns"""
