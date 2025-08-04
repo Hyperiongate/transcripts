@@ -286,63 +286,76 @@ function displayResults(results) {
     const pointer = document.getElementById('credibility-pointer');
     pointer.style.left = `${credibilityScore}%`;
     
-    // Clear existing summary content
-    const summaryContainer = document.getElementById('analysis-summary');
-    summaryContainer.innerHTML = '';
+    // Get the summary paragraph element
+    const summaryParagraph = document.getElementById('analysis-summary');
     
-    // Display Executive Summary at the top
+    // Replace the paragraph with a div container that can hold structured content
+    const summaryContainer = document.createElement('div');
+    summaryContainer.id = 'analysis-summary';
+    summaryContainer.style.cssText = 'margin-bottom: 20px;';
+    
+    // Display Executive Summary at the top - FIXED to display pre-formatted text
     if (results.executive_summary) {
-        summaryContainer.innerHTML = `
-            <div style="background: #f3f4f6; padding: 20px; border-radius: 8px; margin-bottom: 20px;">
-                <h4 style="color: #1f2937; margin-bottom: 12px;">Executive Summary</h4>
-                <div style="white-space: pre-line; line-height: 1.6;">${results.executive_summary}</div>
-            </div>
+        const execSummaryDiv = document.createElement('div');
+        execSummaryDiv.style.cssText = 'background: #f3f4f6; padding: 20px; border-radius: 8px; margin-bottom: 20px;';
+        execSummaryDiv.innerHTML = `
+            <h4 style="color: #1f2937; margin-bottom: 12px; font-size: 18px; font-weight: 600;">Executive Summary</h4>
+            <div style="white-space: pre-line; line-height: 1.8; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; color: #374151;">${results.executive_summary}</div>
         `;
+        summaryContainer.appendChild(execSummaryDiv);
     }
     
-    // Display Speaker Analysis
-    if (results.speaker_analysis) {
+    // Display Speaker Analysis if it exists and has meaningful content
+    if (results.speaker_analysis && results.speaker_analysis.main_speaker && results.speaker_analysis.main_speaker !== 'Not identified') {
         const speaker = results.speaker_analysis;
-        let speakerHtml = `
-            <div style="background: #fff3cd; padding: 16px; border-radius: 8px; margin-bottom: 16px; border-left: 4px solid #f59e0b;">
-                <h4 style="color: #1f2937; margin-bottom: 8px;">Primary Speaker: ${speaker.main_speaker}</h4>
-        `;
+        const speakerDiv = document.createElement('div');
+        speakerDiv.style.cssText = 'background: #fff3cd; padding: 16px; border-radius: 8px; margin-bottom: 16px; border-left: 4px solid #f59e0b;';
+        
+        let speakerHtml = `<h4 style="color: #1f2937; margin-bottom: 8px;">Primary Speaker: ${speaker.main_speaker}</h4>`;
         
         if (speaker.credibility_score === 'Low' || speaker.credibility_score === 'Questionable') {
-            speakerHtml += `<p style="color: #dc3545; font-weight: bold;">⚠️ Credibility Warning: ${speaker.background}</p>`;
+            speakerHtml += `<p style="color: #dc3545; font-weight: bold; margin: 8px 0;">⚠️ Credibility Warning: ${speaker.background || 'Issues found with speaker credibility'}</p>`;
         } else {
-            speakerHtml += `<p>Credibility Assessment: ${speaker.background}</p>`;
+            speakerHtml += `<p style="margin: 8px 0;">Credibility Assessment: ${speaker.background || 'No assessment available'}</p>`;
         }
         
         if (speaker.criminal_record) {
-            speakerHtml += `<p style="color: #dc3545;">• Criminal record found</p>`;
+            speakerHtml += `<p style="color: #dc3545; margin: 4px 0;">• Criminal record found</p>`;
         }
         
-        if (speaker.lawsuits) {
-            speakerHtml += `<p style="color: #f59e0b;">• Currently involved in lawsuits</p>`;
+        if (speaker.lawsuits && speaker.lawsuits.length > 0) {
+            speakerHtml += `<p style="color: #f59e0b; margin: 4px 0;">• Currently involved in lawsuits</p>`;
         }
         
-        if (speaker.controversies) {
-            speakerHtml += `<p>• Notable controversies: ${speaker.controversies}</p>`;
+        if (speaker.controversies && speaker.controversies !== 'None found' && speaker.controversies !== '') {
+            speakerHtml += `<p style="margin: 4px 0;">• Notable controversies: ${speaker.controversies}</p>`;
         }
         
-        speakerHtml += '</div>';
-        summaryContainer.innerHTML += speakerHtml;
+        speakerDiv.innerHTML = speakerHtml;
+        summaryContainer.appendChild(speakerDiv);
     }
     
     // Add the regular summary
-    summaryContainer.innerHTML += `<p>${results.summary}</p>`;
+    const regularSummaryDiv = document.createElement('div');
+    regularSummaryDiv.style.cssText = 'padding: 16px 0;';
+    regularSummaryDiv.innerHTML = `<p style="margin: 0; line-height: 1.6;">${results.summary}</p>`;
+    summaryContainer.appendChild(regularSummaryDiv);
     
     // Display analysis notes if present
     if (results.analysis_notes && results.analysis_notes.length > 0) {
+        const notesDiv = document.createElement('div');
+        notesDiv.className = 'analysis-notes';
+        notesDiv.style.cssText = 'background: #fef3c7; padding: 16px; border-radius: 8px; margin-top: 16px;';
         const notesHtml = results.analysis_notes.map(note => `<li>${note}</li>`).join('');
-        summaryContainer.innerHTML += `
-            <div class="analysis-notes">
-                <h4>Important Notes:</h4>
-                <ul>${notesHtml}</ul>
-            </div>
+        notesDiv.innerHTML = `
+            <h4 style="color: #92400e; margin-bottom: 8px;">Important Notes:</h4>
+            <ul style="margin: 0; padding-left: 20px;">${notesHtml}</ul>
         `;
+        summaryContainer.appendChild(notesDiv);
     }
+    
+    // Replace the original paragraph with our new container
+    summaryParagraph.parentNode.replaceChild(summaryContainer, summaryParagraph);
     
     // Update statistics
     document.getElementById('total-claims').textContent = results.checked_claims;
