@@ -8,7 +8,6 @@ gunicorn==21.2.0
 requests==2.31.0
 urllib3==2.0.5
 aiohttp==3.9.1
-asyncio==3.4.3
 
 # Transcript processing
 youtube-transcript-api==0.6.1
@@ -30,3 +29,5 @@ beautifulsoup4==4.12.2
 
 # Job storage (for production)
 redis==5.0.1
+
+# Remove asyncio as it's built into Python 3.11
