@@ -140,6 +140,136 @@ class ClaimExtractor:
         # Return full claim objects (not just text)
         return sorted_claims
     
+    def identify_speakers(self, transcript: str) -> Dict[str, int]:
+        """Identify and count speaker mentions in transcript"""
+        from collections import Counter
+        
+        speakers = []
+        speaker_lines = {}  # Track what each speaker says
+        
+        # Common speaker patterns
+        patterns = [
+            # "SPEAKER NAME:" format
+            r'^([A-Z][A-Z\s\.]+):',
+            # "Speaker Name:" format  
+            r'^([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*):',
+            # Interview format "Q:" and "A:"
+            r'^(Q|A|QUESTION|ANSWER|INTERVIEWER|INTERVIEWEE):'
+        ]
+        
+        # Name patterns for mentions within text
+        name_patterns = [
+            # Titles + Names
+            r'\b(President|Senator|Representative|Governor|Mayor|Dr\.|Mr\.|Mrs\.|Ms\.|Judge|Secretary)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)',
+            # Full names (First Last)
+            r'\b([A-Z][a-z]+\s+[A-Z][a-z]+(?:\s+(?:Jr\.|Sr\.|III|IV))?)\b',
+            # Last names after verbs
+            r'(?:said|says?|stated|claimed|announced|declared|according to)\s+([A-Z][a-z]+)'
+        ]
+        
+        lines = transcript.split('\n')
+        current_speaker = None
+        
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+                
+            # Check for speaker labels
+            speaker_found = False
+            for pattern in patterns:
+                match = re.match(pattern, line)
+                if match:
+                    speaker = match.group(1).strip()
+                    # Normalize Q&A format
+                    if speaker in ['Q', 'QUESTION', 'INTERVIEWER']:
+                        speaker = 'INTERVIEWER'
+                    elif speaker in ['A', 'ANSWER', 'INTERVIEWEE']:
+                        speaker = 'INTERVIEWEE'
+                    
+                    current_speaker = speaker
+                    speakers.append(speaker)
+                    
+                    # Track what they say
+                    content = line[match.end():].strip()
+                    if speaker not in speaker_lines:
+                        speaker_lines[speaker] = []
+                    speaker_lines[speaker].append(content)
+                    
+                    speaker_found = True
+                    break
+            
+            # If no speaker label, attribute to current speaker
+            if not speaker_found and current_speaker:
+                if current_speaker in speaker_lines:
+                    speaker_lines[current_speaker].append(line)
+            
+            # Also look for name mentions in the content
+            for pattern in name_patterns:
+                matches = re.findall(pattern, line, re.IGNORECASE)
+                for match in matches:
+                    if isinstance(match, tuple):
+                        # Handle title + name pattern
+                        if len(match) == 2 and match[0] in ['President', 'Senator', 'Representative', 'Governor', 'Mayor', 'Secretary', 'Judge']:
+                            name = f"{match[0]} {match[1]}"
+                        else:
+                            name = match[1] if len(match) > 1 else match[0]
+                    else:
+                        name = match
+                    
+                    # Filter out common false positives
+                    if name and len(name.split()) >= 2 and not any(word in name.lower() for word in ['the', 'and', 'or', 'but']):
+                        speakers.append(name)
+        
+        # Count speaker occurrences
+        speaker_counts = Counter(speakers)
+        
+        # Analyze who speaks the most
+        word_counts = {}
+        for speaker, lines in speaker_lines.items():
+            total_words = sum(len(line.split()) for line in lines)
+            word_counts[speaker] = total_words
+        
+        return {
+            'speaker_mentions': dict(speaker_counts),
+            'speaker_word_counts': word_counts,
+            'main_speaker': max(word_counts.items(), key=lambda x: x[1])[0] if word_counts else None,
+            'all_speakers': list(set(speakers))
+        }
+    
+    def extract_key_topics(self, transcript: str) -> List[str]:
+        """Extract main topics discussed in the transcript"""
+        # Common topic indicators
+        topic_patterns = [
+            r'(?:about|regarding|concerning|on the topic of|discussing)\s+([A-Za-z\s]+)',
+            r'(?:issue of|matter of|question of|problem of)\s+([A-Za-z\s]+)',
+            r'(?:the|this)\s+([A-Za-z]+)\s+(?:crisis|situation|problem|issue|matter)'
+        ]
+        
+        topics = []
+        
+        # Also look for frequently mentioned noun phrases
+        words = transcript.lower().split()
+        # Count 2-3 word phrases
+        phrases = []
+        for i in range(len(words) - 2):
+            two_word = f"{words[i]} {words[i+1]}"
+            three_word = f"{words[i]} {words[i+1]} {words[i+2]}"
+            
+            # Filter out phrases with common words
+            if not any(common in two_word for common in ['the', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for']):
+                phrases.append(two_word)
+            if not any(common in three_word for common in ['the', 'and', 'or', 'but']):
+                phrases.append(three_word)
+        
+        # Count phrase frequency
+        phrase_counts = Counter(phrases)
+        
+        # Get top topics
+        top_phrases = [phrase for phrase, count in phrase_counts.most_common(10) if count > 2]
+        
+        return top_phrases
+    
     def _split_sentences(self, text: str) -> List[str]:
         """Split text into sentences"""
         # Basic sentence splitting
