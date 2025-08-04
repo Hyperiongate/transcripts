@@ -200,17 +200,20 @@
     color: white;
 }
 
-/* Misleading verdict styling */
-.fact-check-item.misleading {
-    border-color: #ec4899;
+/* Deceptive verdict styling (renamed from misleading) */
+.fact-check-item.deceptive,
+.fact-check-item.misleading { /* Support both for backward compatibility */
+    border-color: #dc2626;
 }
 
+.fact-check-item.deceptive .fact-check-header,
 .fact-check-item.misleading .fact-check-header {
-    background-color: rgba(236, 72, 153, 0.05);
+    background-color: rgba(220, 38, 38, 0.05);
 }
 
+.fact-check-verdict.deceptive,
 .fact-check-verdict.misleading {
-    background: #ec4899;
+    background: #dc2626;
     color: white;
 }
 
@@ -286,7 +289,12 @@
 
 .speaker-history p {
     color: #1e3a8a;
-    margin: 0;
+    margin: 4px 0;
+}
+
+.speaker-history p strong {
+    font-weight: 600;
+    color: #1e40af;
 }
 
 /* Animation for dropdown */
@@ -323,5 +331,9 @@
     .analysis-section,
     .context-section {
         padding: 12px;
+    }
+    
+    .speaker-history p {
+        font-size: 14px;
     }
 }
