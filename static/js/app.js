@@ -286,13 +286,57 @@ function displayResults(results) {
     const pointer = document.getElementById('credibility-pointer');
     pointer.style.left = `${credibilityScore}%`;
     
-    // Update summary
-    document.getElementById('analysis-summary').textContent = results.summary;
+    // Clear existing summary content
+    const summaryContainer = document.getElementById('analysis-summary');
+    summaryContainer.innerHTML = '';
+    
+    // Display Executive Summary at the top
+    if (results.executive_summary) {
+        summaryContainer.innerHTML = `
+            <div style="background: #f3f4f6; padding: 20px; border-radius: 8px; margin-bottom: 20px;">
+                <h4 style="color: #1f2937; margin-bottom: 12px;">Executive Summary</h4>
+                <div style="white-space: pre-line; line-height: 1.6;">${results.executive_summary}</div>
+            </div>
+        `;
+    }
+    
+    // Display Speaker Analysis
+    if (results.speaker_analysis) {
+        const speaker = results.speaker_analysis;
+        let speakerHtml = `
+            <div style="background: #fff3cd; padding: 16px; border-radius: 8px; margin-bottom: 16px; border-left: 4px solid #f59e0b;">
+                <h4 style="color: #1f2937; margin-bottom: 8px;">Primary Speaker: ${speaker.main_speaker}</h4>
+        `;
+        
+        if (speaker.credibility_score === 'Low' || speaker.credibility_score === 'Questionable') {
+            speakerHtml += `<p style="color: #dc3545; font-weight: bold;">⚠️ Credibility Warning: ${speaker.background}</p>`;
+        } else {
+            speakerHtml += `<p>Credibility Assessment: ${speaker.background}</p>`;
+        }
+        
+        if (speaker.criminal_record) {
+            speakerHtml += `<p style="color: #dc3545;">• Criminal record found</p>`;
+        }
+        
+        if (speaker.lawsuits) {
+            speakerHtml += `<p style="color: #f59e0b;">• Currently involved in lawsuits</p>`;
+        }
+        
+        if (speaker.controversies) {
+            speakerHtml += `<p>• Notable controversies: ${speaker.controversies}</p>`;
+        }
+        
+        speakerHtml += '</div>';
+        summaryContainer.innerHTML += speakerHtml;
+    }
+    
+    // Add the regular summary
+    summaryContainer.innerHTML += `<p>${results.summary}</p>`;
     
     // Display analysis notes if present
     if (results.analysis_notes && results.analysis_notes.length > 0) {
         const notesHtml = results.analysis_notes.map(note => `<li>${note}</li>`).join('');
-        document.getElementById('analysis-summary').innerHTML += `
+        summaryContainer.innerHTML += `
             <div class="analysis-notes">
                 <h4>Important Notes:</h4>
                 <ul>${notesHtml}</ul>
@@ -325,6 +369,13 @@ function displayResults(results) {
     
     // Display fact checks with enhanced dropdowns
     displayFactChecks(results.fact_checks);
+    
+    // Modify export buttons to only show PDF
+    document.querySelector('.export-buttons').innerHTML = `
+        <button onclick="exportResults('pdf')" style="width: 200px;">
+            <i class="fas fa-file-pdf"></i> Download PDF Report
+        </button>
+    `;
 }
 
 // Display individual fact checks with expandable dropdowns
