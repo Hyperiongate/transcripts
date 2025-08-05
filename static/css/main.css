@@ -766,3 +766,125 @@ body {
 .hidden {
     display: none !important;
 }
+
+/* ===== YOUTUBE-SPECIFIC STYLES ===== */
+/* Add this section to the end of your static/css/main.css file */
+
+/* YouTube input validation styles */
+.youtube-input input {
+    transition: border-color 0.3s ease;
+}
+
+.youtube-input input:focus {
+    outline: none;
+}
+
+/* YouTube validation states */
+.youtube-input input.valid {
+    border-color: #10b981 !important;
+}
+
+.youtube-input input.invalid {
+    border-color: #ef4444 !important;
+}
+
+/* YouTube source display in results */
+.youtube-source {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px;
+    background: #fee2e2;
+    border-radius: 8px;
+    margin-bottom: 16px;
+}
+
+.youtube-source i {
+    color: #ff0000;
+    font-size: 24px;
+}
+
+.youtube-source-info {
+    flex: 1;
+}
+
+.youtube-source-title {
+    font-weight: 600;
+    color: #1f2937;
+    margin-bottom: 4px;
+}
+
+.youtube-source-id {
+    font-size: 14px;
+    color: #6b7280;
+}
+
+/* YouTube error messages */
+.youtube-error {
+    display: none;
+    margin-top: 8px;
+    padding: 8px 12px;
+    background: #fef2f2;
+    border: 1px solid #fecaca;
+    border-radius: 6px;
+    color: #dc2626;
+    font-size: 14px;
+}
+
+.youtube-error.show {
+    display: block;
+}
+
+/* YouTube processing indicator */
+.youtube-processing {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: #eff6ff;
+    border-radius: 6px;
+    margin-top: 8px;
+    font-size: 14px;
+    color: #3b82f6;
+}
+
+.youtube-processing i {
+    animation: spin 1s linear infinite;
+}
+
+/* YouTube help text */
+.youtube-help {
+    margin-top: 12px;
+    padding: 12px;
+    background: #f0f9ff;
+    border: 1px solid #bae6fd;
+    border-radius: 6px;
+    font-size: 14px;
+    color: #0369a1;
+}
+
+.youtube-help-title {
+    font-weight: 600;
+    margin-bottom: 4px;
+}
+
+.youtube-help ul {
+    margin: 0;
+    padding-left: 20px;
+}
+
+.youtube-help li {
+    margin-bottom: 2px;
+}
+
+/* YouTube-specific responsive adjustments */
+@media (max-width: 768px) {
+    .youtube-source {
+        flex-direction: column;
+        text-align: center;
+    }
+    
+    .youtube-input input {
+        font-size: 16px; /* Prevent zoom on iOS */
+    }
+}
