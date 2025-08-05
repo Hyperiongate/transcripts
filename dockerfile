@@ -33,5 +33,5 @@ ENV PYTHONUNBUFFERED=1
 EXPOSE ${PORT}
 
 # Run the application with Render's PORT
-# Fix: app:app means app.py:app (module:variable)
-CMD gunicorn --bind 0.0.0.0:${PORT:-10000} --workers 2 --timeout 120 app:app
+# Use only 1 worker when Redis is not available to maintain job state
+CMD gunicorn --bind 0.0.0.0:${PORT} --workers 1 --timeout 120 app:app
