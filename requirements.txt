@@ -12,6 +12,17 @@ aiohttp==3.9.1
 # Transcript processing
 youtube-transcript-api==0.6.1
 
+# YouTube audio download
+yt-dlp>=2023.10.13
+
+# Speech-to-text transcription
+openai-whisper>=20231117
+SpeechRecognition>=3.10.0
+pydub>=0.25.1
+
+# Audio processing
+ffmpeg-python>=0.2.0
+
 # Text processing and NLP
 spacy==3.7.2
 nltk==3.8.1
@@ -29,5 +40,3 @@ beautifulsoup4==4.12.2
 
 # Job storage (for production)
 redis==5.0.1
-
-# Remove asyncio as it's built into Python 3.11
