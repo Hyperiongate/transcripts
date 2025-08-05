@@ -7,7 +7,6 @@ import sys
 import json
 import logging
 import uuid
-import asyncio
 from datetime import datetime
 from flask import Flask, render_template, request, jsonify, send_file
 from flask_cors import CORS
@@ -229,34 +228,40 @@ def export_results(job_id):
         return jsonify({'error': 'Analysis not complete'}), 400
     
     data = request.get_json()
-    format_type = data.get('format', 'pdf')
+    format_type = data.get('format', 'json')
     
-    if format_type != 'pdf':
-        return jsonify({'error': 'Only PDF export is supported'}), 400
+    if format_type not in Config.EXPORT_FORMATS:
+        return jsonify({'error': f'Invalid format. Allowed: {", ".join(Config.EXPORT_FORMATS)}'}), 400
     
     try:
-        # Import the PDF exporter
-        from services.export import PDFExporter
-        
-        # Generate PDF
-        exporter = PDFExporter()
-        pdf_filename = f'factcheck_report_{job_id}.pdf'
-        pdf_path = os.path.join('/tmp', pdf_filename)  # Use /tmp for temporary storage
-        
-        success = exporter.generate_pdf(job['results'], pdf_path)
-        
-        if success:
+        if format_type == 'json':
+            # Return JSON file
+            filename = f'factcheck_report_{job_id}.json'
             return jsonify({
                 'success': True,
-                'download_url': f'/api/download/{job_id}/pdf',
-                'filename': pdf_filename
+                'download_url': f'/api/download/{job_id}/json',
+                'filename': filename
             })
+        
+        elif format_type == 'pdf':
+            # PDF export not implemented yet
+            return jsonify({
+                'success': False,
+                'error': 'PDF export is not available yet. Please use JSON or TXT format.'
+            }), 501
+        
         else:
-            return jsonify({'error': 'PDF generation failed'}), 500
+            # Text format
+            filename = f'factcheck_report_{job_id}.txt'
+            return jsonify({
+                'success': True,
+                'download_url': f'/api/download/{job_id}/txt',
+                'filename': filename
+            })
             
     except Exception as e:
         logger.error(f"Export error: {str(e)}")
-        return jsonify({'error': 'Export failed: ' + str(e)}), 500
+        return jsonify({'error': 'Export failed'}), 500
 
 @app.route('/api/download/<job_id>/<format_type>')
 def download_file(job_id, format_type):
@@ -268,33 +273,21 @@ def download_file(job_id, format_type):
     if job['status'] != 'complete':
         return jsonify({'error': 'Analysis not complete'}), 400
     
-    if format_type == 'pdf':
-        try:
-            from services.export import PDFExporter
-            
-            # Generate PDF
-            exporter = PDFExporter()
-            pdf_filename = f'factcheck_report_{job_id}.pdf'
-            pdf_path = os.path.join('/tmp', pdf_filename)
-            
-            # Generate if not exists
-            if not os.path.exists(pdf_path):
-                success = exporter.generate_pdf(job['results'], pdf_path)
-                if not success:
-                    return jsonify({'error': 'PDF generation failed'}), 500
-            
-            return send_file(
-                pdf_path,
-                mimetype='application/pdf',
-                as_attachment=True,
-                download_name=pdf_filename
-            )
-        except Exception as e:
-            logger.error(f"PDF download error: {str(e)}")
-            return jsonify({'error': 'Download failed'}), 500
-    
+    # Generate file content based on format
+    if format_type == 'json':
+        content = json.dumps(job['results'], indent=2)
+        mimetype = 'application/json'
+    elif format_type == 'txt':
+        content = generate_text_report(job['results'])
+        mimetype = 'text/plain'
     else:
-        return jsonify({'error': 'Format not supported'}), 400
+        return jsonify({'error': 'Format not implemented yet'}), 501
+    
+    # Return file
+    return content, 200, {
+        'Content-Type': mimetype,
+        'Content-Disposition': f'attachment; filename=factcheck_report_{job_id}.{format_type}'
+    }
 
 # Helper functions
 def allowed_file(filename):
@@ -350,79 +343,51 @@ def process_transcript(job_id, transcript, source):
             return
         
         # Clean transcript
-        job_storage.update(job_id, {'progress': 10})
+        job_storage.update(job_id, {'progress': 20})
         cleaned_transcript = transcript_processor.clean_transcript(transcript)
         
-        # Identify speakers - returns a tuple (speakers, topics)
-        job_storage.update(job_id, {'progress': 20})
-        speakers, topics = claim_extractor.identify_speakers(transcript)
-        logger.info(f"Job {job_id}: Identified speakers: {speakers}")
-        
-        # Log topics (topics is a list from identify_speakers)
-        logger.info(f"Job {job_id}: Key topics: {topics[:5] if topics else []}")
-        
         # Extract claims
-        job_storage.update(job_id, {'progress': 30})
+        job_storage.update(job_id, {'progress': 40})
         claims = claim_extractor.extract_claims(cleaned_transcript)
         logger.info(f"Job {job_id}: Extracted {len(claims)} claims")
         
         # Prioritize and filter claims
-        job_storage.update(job_id, {'progress': 40})
+        job_storage.update(job_id, {'progress': 50})
         verified_claims = claim_extractor.filter_verifiable(claims)
         prioritized_claims = claim_extractor.prioritize_claims(verified_claims)
         logger.info(f"Job {job_id}: Checking {len(prioritized_claims)} prioritized claims")
         
-        # Extract claim text properly
-        claims_to_check = []
-        for claim in prioritized_claims[:Config.MAX_CLAIMS_PER_TRANSCRIPT]:
-            if isinstance(claim, dict):
-                claims_to_check.append({
-                    'text': claim['text'],
-                    'context': claim.get('full_context', claim['text'])
-                })
-            else:
-                claims_to_check.append({'text': claim, 'context': claim})
-        
-        # Check speaker background (if main speaker identified)
-        speaker_analysis = {}
-        if speakers and len(speakers) > 0:
-            # Simple speaker analysis without background check
-            speaker_analysis = {
-                'main_speaker': speakers[0],  # Use first speaker as main
-                'all_speakers': speakers[:10],  # Include all speakers (limited to 10)
-                'speaker_count': len(speakers)
-            }
-            logger.info(f"Main speaker identified: {speakers[0]}")
+        # Ensure we have strings, not dictionaries
+        if prioritized_claims and isinstance(prioritized_claims[0], dict):
+            logger.warning("Claims are dictionaries, extracting text")
+            prioritized_claims = [claim['text'] if isinstance(claim, dict) else claim for claim in prioritized_claims]
         
         # Fact check claims
-        job_storage.update(job_id, {'progress': 50})
+        job_storage.update(job_id, {'progress': 70})
         fact_check_results = []
+        
+        # Use batch_check but with error handling for individual claims
+        claims_to_check = prioritized_claims[:Config.MAX_CLAIMS_PER_TRANSCRIPT]
         
         for i in range(0, len(claims_to_check), Config.FACT_CHECK_BATCH_SIZE):
             batch = claims_to_check[i:i + Config.FACT_CHECK_BATCH_SIZE]
             try:
-                # Extract just the text for fact checking
-                batch_texts = [claim['text'] for claim in batch]
-                batch_results = fact_checker.batch_check(batch_texts)
-                
-                # Add context back to results
-                for j, result in enumerate(batch_results):
-                    result['original_text'] = batch[j]['context']
-                
+                batch_results = fact_checker.batch_check(batch)
                 fact_check_results.extend(batch_results)
-                
                 # Update progress
-                progress = 50 + int((len(fact_check_results) / len(claims_to_check)) * 40)
+                progress = 70 + int((len(fact_check_results) / len(claims_to_check)) * 20)
                 job_storage.update(job_id, {'progress': progress})
             except Exception as e:
                 logger.error(f"Error checking batch starting at {i}: {str(e)}")
                 # Add unverified results for failed batch
                 for claim in batch:
                     fact_check_results.append({
-                        'claim': claim['text'],
+                        'claim': claim,
                         'verdict': 'unverified',
                         'confidence': 0,
                         'explanation': 'Error during fact-checking',
+                        'publisher': 'Error',
+                        'url': '',
                         'sources': []
                     })
         
@@ -442,9 +407,7 @@ def process_transcript(job_id, transcript, source):
             'credibility_label': get_credibility_label(credibility_score),
             'fact_checks': fact_check_results,
             'summary': generate_summary(fact_check_results, credibility_score),
-            'analyzed_at': datetime.now().isoformat(),
-            'speaker_analysis': speaker_analysis if speaker_analysis else None,
-            'key_topics': topics[:10] if topics else []
+            'analyzed_at': datetime.now().isoformat()
         }
         
         # Complete job
