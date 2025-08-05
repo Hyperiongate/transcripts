@@ -8,6 +8,14 @@ from typing import Dict, Optional, List
 from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api._errors import TranscriptsDisabled, NoTranscriptFound, VideoUnavailable
 
+# Import the audio transcriber
+try:
+    from .youtube_audio_transcriber import YouTubeAudioTranscriber
+    AUDIO_TRANSCRIPTION_AVAILABLE = True
+except ImportError:
+    AUDIO_TRANSCRIPTION_AVAILABLE = False
+    logging.warning("Audio transcription not available - missing dependencies")
+
 logger = logging.getLogger(__name__)
 
 class TranscriptProcessor:
@@ -28,6 +36,17 @@ class TranscriptProcessor:
             # YouTube Music URLs
             r'(?:https?://)?music\.youtube\.com/watch\?v=([a-zA-Z0-9_-]{11})'
         ]
+        
+        # Initialize audio transcriber if available
+        if AUDIO_TRANSCRIPTION_AVAILABLE:
+            try:
+                self.audio_transcriber = YouTubeAudioTranscriber()
+                logger.info("Audio transcription initialized")
+            except Exception as e:
+                logger.error(f"Failed to initialize audio transcriber: {e}")
+                self.audio_transcriber = None
+        else:
+            self.audio_transcriber = None
     
     def parse_text(self, text: str) -> Dict:
         """Parse plain text transcript"""
@@ -47,7 +66,7 @@ class TranscriptProcessor:
             }
     
     def parse_youtube(self, url: str) -> Dict:
-        """Extract transcript from YouTube video"""
+        """Extract transcript from YouTube video - tries captions first, then audio if available"""
         try:
             logger.info(f"Attempting to parse YouTube URL: {url}")
             
@@ -62,97 +81,137 @@ class TranscriptProcessor:
             
             logger.info(f"Extracted video ID: {video_id}")
             
-            # Get available transcript languages
-            try:
-                transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+            # First, try to get captions (original method)
+            caption_result = self._get_captions(video_id)
+            
+            if caption_result['success']:
+                logger.info("Successfully extracted captions")
+                return caption_result
+            
+            # If captions failed and audio transcriber is available, try audio transcription
+            if self.audio_transcriber:
+                logger.info("No captions available, attempting audio transcription...")
+                logger.info("Note: Audio transcription may take 1-3 minutes depending on video length")
                 
-                # Try to get English transcript first
-                transcript = None
-                languages_available = []
+                audio_result = self.audio_transcriber.transcribe_youtube_video(url)
                 
-                # First, try manually created English transcripts
-                try:
-                    transcript = transcript_list.find_manually_created_transcript(['en', 'en-US', 'en-GB'])
-                    logger.info("Found manually created English transcript")
-                except:
-                    # If no manual English transcript, try auto-generated
-                    try:
-                        transcript = transcript_list.find_generated_transcript(['en', 'en-US', 'en-GB'])
-                        logger.info("Found auto-generated English transcript")
-                    except:
-                        # If no English transcript, get the first available one
-                        for t in transcript_list:
-                            languages_available.append(t.language_code)
-                            if transcript is None:
-                                transcript = t
-                                logger.info(f"Using transcript in language: {t.language}")
-                
-                if transcript is None:
+                if audio_result['success']:
+                    logger.info("Successfully transcribed audio")
+                    # Add video ID and ensure all expected fields are present
+                    audio_result['video_id'] = video_id
+                    audio_result['transcript'] = self.clean_transcript(audio_result['transcript'])
+                    audio_result['format'] = 'youtube'
+                    audio_result['word_count'] = len(audio_result['transcript'].split())
+                    if 'source_type' not in audio_result:
+                        audio_result['source_type'] = 'audio_transcription'
+                    return audio_result
+                else:
+                    # Return specific error message
+                    error_msg = caption_result.get('error', 'No captions available')
+                    if 'audio transcription failed' not in error_msg:
+                        error_msg += f". Audio transcription also failed: {audio_result.get('error', 'Unknown error')}"
                     return {
                         'success': False,
-                        'error': f'No transcript available. Languages found: {", ".join(languages_available) if languages_available else "none"}'
+                        'error': error_msg
                     }
-                
-                # Fetch the transcript
-                transcript_data = transcript.fetch()
-                
-                # Combine transcript segments
-                full_transcript = ' '.join([segment['text'] for segment in transcript_data])
-                
-                # Calculate duration from last segment
-                duration = 0
-                if transcript_data:
-                    last_segment = transcript_data[-1]
-                    duration = last_segment['start'] + last_segment.get('duration', 0)
-                
-                # Get video title (construct from video ID if API doesn't provide)
-                title = f"YouTube Video {video_id}"
-                
-                # Clean the transcript
-                cleaned_transcript = self.clean_transcript(full_transcript)
-                
-                return {
-                    'success': True,
-                    'transcript': cleaned_transcript,
-                    'title': title,
-                    'video_id': video_id,
-                    'duration': duration,
-                    'format': 'youtube',
-                    'language': transcript.language if hasattr(transcript, 'language') else 'unknown',
-                    'is_generated': transcript.is_generated if hasattr(transcript, 'is_generated') else False,
-                    'word_count': len(cleaned_transcript.split())
-                }
-                
-            except TranscriptsDisabled:
-                logger.error(f"Transcripts disabled for video: {video_id}")
-                return {
-                    'success': False,
-                    'error': 'Transcripts are disabled for this video. The video owner has disabled captions.'
-                }
-            except NoTranscriptFound:
-                logger.error(f"No transcript found for video: {video_id}")
-                return {
-                    'success': False,
-                    'error': 'No transcript available for this video. This video does not have captions.'
-                }
-            except VideoUnavailable:
-                logger.error(f"Video unavailable: {video_id}")
-                return {
-                    'success': False,
-                    'error': 'Video is unavailable or private. Please check if the video is accessible.'
-                }
-            except Exception as e:
-                logger.error(f"Error listing transcripts: {str(e)}")
-                return {
-                    'success': False,
-                    'error': f'Failed to access video transcripts: {str(e)}'
-                }
+            else:
+                # No audio transcriber available, return original caption error
+                return caption_result
                 
         except Exception as e:
             logger.error(f"YouTube parsing error: {str(e)}", exc_info=True)
             return {
                 'success': False,
                 'error': f'Failed to extract transcript: {str(e)}'
+            }
+    
+    def _get_captions(self, video_id: str) -> Dict:
+        """Get captions from YouTube (original method)"""
+        try:
+            # Get available transcript languages
+            transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+            
+            # Try to get English transcript first
+            transcript = None
+            languages_available = []
+            
+            # First, try manually created English transcripts
+            try:
+                transcript = transcript_list.find_manually_created_transcript(['en', 'en-US', 'en-GB'])
+                logger.info("Found manually created English transcript")
+            except:
+                # If no manual English transcript, try auto-generated
+                try:
+                    transcript = transcript_list.find_generated_transcript(['en', 'en-US', 'en-GB'])
+                    logger.info("Found auto-generated English transcript")
+                except:
+                    # If no English transcript, get the first available one
+                    for t in transcript_list:
+                        languages_available.append(t.language_code)
+                        if transcript is None:
+                            transcript = t
+                            logger.info(f"Using transcript in language: {t.language}")
+            
+            if transcript is None:
+                return {
+                    'success': False,
+                    'error': f'No transcript available. Languages found: {", ".join(languages_available) if languages_available else "none"}'
+                }
+            
+            # Fetch the transcript
+            transcript_data = transcript.fetch()
+            
+            # Combine transcript segments
+            full_transcript = ' '.join([segment['text'] for segment in transcript_data])
+            
+            # Calculate duration from last segment
+            duration = 0
+            if transcript_data:
+                last_segment = transcript_data[-1]
+                duration = last_segment['start'] + last_segment.get('duration', 0)
+            
+            # Get video title (construct from video ID if API doesn't provide)
+            title = f"YouTube Video {video_id}"
+            
+            # Clean the transcript
+            cleaned_transcript = self.clean_transcript(full_transcript)
+            
+            return {
+                'success': True,
+                'transcript': cleaned_transcript,
+                'title': title,
+                'video_id': video_id,
+                'duration': duration,
+                'format': 'youtube',
+                'language': transcript.language if hasattr(transcript, 'language') else 'unknown',
+                'is_generated': transcript.is_generated if hasattr(transcript, 'is_generated') else False,
+                'word_count': len(cleaned_transcript.split()),
+                'source_type': 'captions'
+            }
+            
+        except TranscriptsDisabled:
+            logger.error(f"Transcripts disabled for video: {video_id}")
+            return {
+                'success': False,
+                'error': 'Transcripts are disabled for this video. The video owner has disabled captions.'
+            }
+        except NoTranscriptFound:
+            logger.error(f"No transcript found for video: {video_id}")
+            return {
+                'success': False,
+                'error': 'No transcript available for this video. This video does not have captions.'
+            }
+        except VideoUnavailable:
+            logger.error(f"Video unavailable: {video_id}")
+            return {
+                'success': False,
+                'error': 'Video is unavailable or private. Please check if the video is accessible.'
+            }
+        except Exception as e:
+            logger.error(f"Error listing transcripts: {str(e)}")
+            return {
+                'success': False,
+                'error': f'Failed to access video transcripts: {str(e)}'
             }
     
     def parse_srt(self, content: str) -> Dict:
