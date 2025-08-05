@@ -1,6 +1,5 @@
 """
-Enhanced Fact Checking Service - Complete Working Implementation
-Coordinates fact-checking using multiple sources with all features
+Enhanced Fact Checking Service - Complete Implementation with Better Explanations
 """
 import os
 import re
@@ -8,8 +7,6 @@ import time
 import json
 import logging
 import requests
-import asyncio
-import aiohttp
 from typing import List, Dict, Optional, Tuple
 from datetime import datetime
 from collections import defaultdict
@@ -20,7 +17,7 @@ from config import Config
 logger = logging.getLogger(__name__)
 
 class FactChecker:
-    """Enhanced fact-checking with speaker context and comprehensive analysis"""
+    """Enhanced fact-checking with speaker context and meaningful explanations"""
     
     def __init__(self):
         # Initialize ALL API keys
@@ -32,7 +29,7 @@ class FactChecker:
         self.scraperapi_key = Config.SCRAPERAPI_KEY
         self.scrapingbee_api_key = Config.SCRAPINGBEE_API_KEY
         
-        # Known speaker backgrounds (should be in a database in production)
+        # Known speaker backgrounds
         self.speaker_backgrounds = {
             'Donald Trump': {
                 'criminal_record': 'Convicted felon - 34 counts of falsifying business records (May 2024)',
@@ -108,12 +105,8 @@ class FactChecker:
         
         # Check if just "President" - need more context
         if speaker_name.lower() == 'president':
-            # Could check date or source to determine which president
-            # For now, return generic
-            return {
-                'speaker': speaker_name,
-                'credibility_notes': 'Unable to determine specific president from context'
-            }
+            # For now, assume Trump if no other context
+            return self.get_speaker_context('Donald Trump')
         
         # Check exact matches
         for known_speaker, info in self.speaker_backgrounds.items():
@@ -341,7 +334,7 @@ class FactChecker:
             return {'found': False}
     
     def _check_news_api(self, claim: str) -> Dict:
-        """Enhanced news checking with sentiment analysis"""
+        """Enhanced news checking that explains what was found"""
         try:
             key_terms = self._extract_key_terms(claim)
             search_query = ' '.join(key_terms[:4])
@@ -362,48 +355,41 @@ class FactChecker:
                 articles = data.get('articles', [])
                 
                 if len(articles) >= 3:
-                    # Analyze article titles and descriptions
-                    supporting = 0
-                    contradicting = 0
+                    # Analyze what the articles actually say
+                    supporting = []
+                    contradicting = []
                     sources = set()
                     
-                    for article in articles:
+                    for article in articles[:5]:  # Check top 5
                         source = article.get('source', {}).get('name', 'Unknown')
                         sources.add(source)
-                        
-                        # Simple sentiment analysis
                         title = article.get('title', '').lower()
                         desc = article.get('description', '').lower()
                         combined = title + ' ' + desc
                         
-                        # Check for contradictions
-                        if any(word in combined for word in ['false', 'debunk', 'myth', 'incorrect', 'wrong']):
-                            contradicting += 1
-                        elif any(word in combined for word in ['confirm', 'true', 'correct', 'verify']):
-                            supporting += 1
+                        # Look for specific verdicts in coverage
+                        if any(word in combined for word in ['false', 'debunk', 'myth', 'incorrect', 'misleading']):
+                            contradicting.append(source)
+                        elif any(word in combined for word in ['confirm', 'true', 'accurate', 'correct']):
+                            supporting.append(source)
                     
                     # Create meaningful explanation
-                    if contradicting > supporting:
+                    if len(contradicting) > len(supporting):
                         verdict = 'mostly_false'
-                        sentiment = "Multiple news sources contradict this claim"
-                    elif supporting > contradicting:
+                        explanation = f"News outlets including {', '.join(contradicting[:3])} have reported this claim as false or misleading."
+                    elif len(supporting) > len(contradicting):
                         verdict = 'mostly_true'
-                        sentiment = "Multiple news sources support this claim"
+                        explanation = f"News outlets including {', '.join(supporting[:3])} have confirmed aspects of this claim."
                     else:
                         verdict = 'unverified'
-                        sentiment = "News coverage is mixed or inconclusive"
-                    
-                    explanation = (
-                        f"{sentiment}. Found {len(articles)} relevant articles from "
-                        f"sources including: {', '.join(list(sources)[:3])}. "
-                    )
+                        explanation = f"News coverage from {', '.join(list(sources)[:3])} is inconclusive on this claim."
                     
                     return {
                         'found': True,
                         'verdict': verdict,
                         'confidence': 70,
                         'explanation': explanation,
-                        'source': 'News API Analysis',
+                        'source': 'News Media Analysis',
                         'weight': 0.7
                     }
             
@@ -414,7 +400,7 @@ class FactChecker:
             return {'found': False}
     
     def _check_mediastack(self, claim: str) -> Dict:
-        """Check MediaStack news API with better analysis"""
+        """Check MediaStack with meaningful explanations"""
         try:
             key_terms = self._extract_key_terms(claim)
             search_query = ' '.join(key_terms[:4])
@@ -436,25 +422,40 @@ class FactChecker:
                     articles = data['data']
                     sources = set(art.get('source', 'Unknown') for art in articles)
                     
-                    # Analyze content
-                    relevant_count = 0
+                    # Analyze relevance
+                    highly_relevant = 0
+                    somewhat_relevant = 0
+                    
                     for article in articles:
                         title = article.get('title', '').lower()
-                        if any(term.lower() in title for term in key_terms[:3]):
-                            relevant_count += 1
+                        desc = article.get('description', '').lower()
+                        combined = title + ' ' + desc
+                        
+                        # Count how many key terms appear
+                        matches = sum(1 for term in key_terms[:3] if term.lower() in combined)
+                        if matches >= 3:
+                            highly_relevant += 1
+                        elif matches >= 2:
+                            somewhat_relevant += 1
                     
-                    if relevant_count >= 3:
+                    if highly_relevant >= 3:
                         explanation = (
-                            f"Found {len(articles)} recent news articles from {len(sources)} sources "
-                            f"including: {', '.join(list(sources)[:3])}. "
-                            f"{relevant_count} articles directly address this topic."
+                            f"Multiple recent news articles from {', '.join(list(sources)[:3])} "
+                            f"directly address this topic, suggesting it's a current issue of debate."
                         )
-                        verdict = 'unverified'  # News presence doesn't confirm truth
+                        verdict = 'unverified'
                         confidence = 65
-                    else:
-                        explanation = f"Limited news coverage found from: {', '.join(list(sources)[:3])}"
+                    elif highly_relevant + somewhat_relevant >= 3:
+                        explanation = (
+                            f"Some news coverage found from {', '.join(list(sources)[:3])}, "
+                            f"but articles don't definitively confirm or deny this claim."
+                        )
                         verdict = 'unverified'
                         confidence = 50
+                    else:
+                        explanation = f"Limited relevant news coverage found on this specific claim."
+                        verdict = 'unverified'
+                        confidence = 40
                     
                     return {
                         'found': True,
@@ -474,7 +475,6 @@ class FactChecker:
     def _check_factchecker_sites(self, claim: str) -> Dict:
         """Check major fact-checking websites"""
         try:
-            # Sites to check
             fact_checkers = [
                 ('snopes.com', 'Snopes'),
                 ('factcheck.org', 'FactCheck.org'),
@@ -484,7 +484,6 @@ class FactChecker:
             results = []
             
             for domain, name in fact_checkers:
-                # Use web scraping API to search the site
                 if self.scraperapi_key:
                     search_url = f"https://www.{domain}/search/?q={requests.utils.quote(claim[:100])}"
                     scraper_url = f"http://api.scraperapi.com?api_key={self.scraperapi_key}&url={search_url}"
@@ -492,7 +491,6 @@ class FactChecker:
                     try:
                         response = requests.get(scraper_url, timeout=15)
                         if response.status_code == 200:
-                            # Check if claim appears in results
                             if any(term.lower() in response.text.lower() for term in claim.split()[:5]):
                                 results.append(name)
                     except:
@@ -501,9 +499,9 @@ class FactChecker:
             if results:
                 return {
                     'found': True,
-                    'verdict': 'mixed',
+                    'verdict': 'unverified',
                     'confidence': 75,
-                    'explanation': f"Found related fact-checks on: {', '.join(results)}",
+                    'explanation': f"Found related fact-checks on: {', '.join(results)}. These sites have previously examined similar claims.",
                     'source': 'Fact-Checking Websites',
                     'weight': 0.8
                 }
@@ -520,7 +518,6 @@ class FactChecker:
             key_terms = self._extract_key_terms(claim)
             search_query = ' '.join(key_terms[:3])
             
-            # Wikipedia API
             search_url = "https://en.wikipedia.org/w/api.php"
             params = {
                 'action': 'query',
@@ -537,7 +534,6 @@ class FactChecker:
                 search_results = data.get('query', {}).get('search', [])
                 
                 if search_results:
-                    # Get page content
                     page_id = search_results[0]['pageid']
                     content_params = {
                         'action': 'query',
@@ -557,7 +553,6 @@ class FactChecker:
                         if pages:
                             extract = list(pages.values())[0].get('extract', '')
                             
-                            # Check if claim aligns with Wikipedia content
                             claim_terms = set(term.lower() for term in claim.split())
                             wiki_terms = set(term.lower() for term in extract.split())
                             overlap = len(claim_terms & wiki_terms)
@@ -567,7 +562,7 @@ class FactChecker:
                                     'found': True,
                                     'verdict': 'mostly_true',
                                     'confidence': 70,
-                                    'explanation': f"Wikipedia entry on '{search_results[0]['title']}' provides context supporting this claim.",
+                                    'explanation': f"Wikipedia entry on '{search_results[0]['title']}' provides established information that aligns with this claim.",
                                     'source': 'Wikipedia',
                                     'weight': 0.6
                                 }
@@ -584,7 +579,6 @@ class FactChecker:
             return {'found': False}
         
         try:
-            # Prepare context from other checks
             context = "Previous checks:\n"
             for result in other_results:
                 context += f"- {result['source']}: {result['verdict']} - {result.get('explanation', '')[:100]}\n"
@@ -594,7 +588,7 @@ class FactChecker:
                 'Content-Type': 'application/json'
             }
             
-            prompt = f"""As a professional fact-checker, analyze this claim with the following context:
+            prompt = f"""As a professional fact-checker, analyze this claim:
 
 Claim: "{claim}"
 
@@ -602,11 +596,11 @@ Claim: "{claim}"
 
 Determine:
 1. Is this claim deliberately deceptive, a simple error, or factually accurate?
-2. What important context is missing?
+2. What specific context is missing if any?
 3. Final verdict: true, mostly_true, lacks_context, deceptive, mostly_false, or false
 
 Respond in JSON format:
-{{"verdict": "", "confidence": 0-100, "explanation": "", "is_deceptive": true/false}}"""
+{{"verdict": "", "confidence": 0-100, "explanation": "", "missing_context": "", "is_deceptive": true/false}}"""
             
             data = {
                 'model': 'gpt-3.5-turbo',
@@ -641,6 +635,7 @@ Respond in JSON format:
                         'verdict': analysis['verdict'],
                         'confidence': analysis['confidence'],
                         'explanation': analysis['explanation'],
+                        'missing_context': analysis.get('missing_context', ''),
                         'source': 'AI Deep Analysis',
                         'weight': 0.8
                     }
@@ -671,6 +666,7 @@ Respond in JSON format:
         explanations = []
         sources = []
         highest_confidence = 0
+        missing_context = None
         
         for result in all_results:
             weight = result.get('weight', 0.5)
@@ -686,6 +682,10 @@ Respond in JSON format:
             explanations.append(result.get('explanation', ''))
             sources.append(result.get('source', 'Unknown'))
             highest_confidence = max(highest_confidence, result.get('confidence', 0))
+            
+            # Capture missing context if available
+            if result.get('missing_context'):
+                missing_context = result['missing_context']
         
         # Determine final verdict
         final_verdict = max(verdict_weights.items(), key=lambda x: x[1])[0]
@@ -695,10 +695,11 @@ Respond in JSON format:
             final_verdict,
             explanations,
             sources,
-            len(all_results)
+            len(all_results),
+            missing_context
         )
         
-        return {
+        result = {
             'claim': claim,
             'verdict': final_verdict,
             'confidence': highest_confidence,
@@ -707,34 +708,86 @@ Respond in JSON format:
             'source_count': len(all_results),
             'api_response': True
         }
+        
+        # Add missing context for "lacks_context" verdicts
+        if final_verdict == 'lacks_context' and missing_context:
+            result['missing_context'] = missing_context
+        
+        return result
     
     def _create_comprehensive_explanation(self, verdict: str, explanations: List[str], 
-                                        sources: List[str], source_count: int) -> str:
-        """Create detailed, meaningful explanation"""
-        # Start with verdict summary
+                                        sources: List[str], source_count: int, 
+                                        missing_context: Optional[str] = None) -> str:
+        """Create detailed, meaningful explanation that actually explains the verdict"""
+        
+        # Start with verdict-specific introduction
         verdict_intros = {
             'true': "This claim is accurate.",
             'mostly_true': "This claim is largely accurate with minor caveats.",
-            'lacks_context': "This claim omits important context that changes its meaning.",
-            'deceptive': "This claim appears deliberately misleading.",
-            'mostly_false': "This claim is largely inaccurate.",
+            'lacks_context': "This claim is technically true but omits critical information.",
+            'deceptive': "This claim appears deliberately constructed to mislead.",
+            'mostly_false': "This claim contains significant inaccuracies.",
             'false': "This claim is demonstrably false.",
-            'unverified': "This claim cannot be verified with available sources."
+            'unverified': "Insufficient evidence to verify this claim."
         }
         
         explanation = verdict_intros.get(verdict, "Unable to determine accuracy.")
         
-        # Add key findings
-        if explanations:
-            key_finding = next((e for e in explanations if len(e) > 20), None)
-            if key_finding:
-                explanation += f" {key_finding}"
+        # For "lacks context", explain WHAT context is missing
+        if verdict == 'lacks_context':
+            if missing_context:
+                explanation += f" Missing context: {missing_context}"
+            else:
+                # Analyze explanations to determine missing context
+                context_missing = []
+                
+                for exp in explanations:
+                    exp_lower = exp.lower()
+                    if 'outdated' in exp_lower:
+                        context_missing.append("The data cited is outdated")
+                    if 'cherry' in exp_lower or 'selective' in exp_lower:
+                        context_missing.append("Data has been cherry-picked")
+                    if 'complete' in exp_lower or 'full' in exp_lower:
+                        context_missing.append("Only partial information is presented")
+                    if 'misleading' in exp_lower and 'not' not in exp_lower:
+                        context_missing.append("The framing is misleading despite factual elements")
+                    if 'comparison' in exp_lower or 'compared' in exp_lower:
+                        context_missing.append("Lacks necessary comparisons for context")
+                
+                if context_missing:
+                    explanation += f" Missing context: {'; '.join(set(context_missing))}."
         
-        # Add source summary
-        explanation += f" Verified using {source_count} sources"
-        if source_count > 0:
-            unique_sources = list(set(sources))[:3]
-            explanation += f" including {', '.join(unique_sources)}."
+        # Add specific findings from sources
+        if explanations:
+            # Find the most substantive explanation
+            substantive = max(explanations, key=len) if explanations else ""
+            if substantive and len(substantive) > 50 and substantive not in explanation:
+                explanation += f" {substantive}"
+        
+        # For deceptive claims, explain the deception
+        if verdict == 'deceptive':
+            deceptive_patterns = []
+            for exp in explanations:
+                exp_lower = exp.lower()
+                if 'cherry' in exp_lower or 'selective' in exp_lower:
+                    deceptive_patterns.append("selective use of data")
+                if 'misleading' in exp_lower:
+                    deceptive_patterns.append("misleading framing")
+                if 'out of context' in exp_lower:
+                    deceptive_patterns.append("quotes taken out of context")
+            
+            if deceptive_patterns:
+                explanation += f" Deceptive tactics used: {', '.join(set(deceptive_patterns))}."
+        
+        # Add meaningful source information
+        if source_count > 2:
+            unique_sources = list(set(sources))
+            if 'Federal Reserve Economic Data' in unique_sources:
+                explanation += " Official government data was consulted."
+            if any('News' in s for s in unique_sources):
+                explanation += " Multiple news sources were analyzed."
+            if 'Google Fact Check' in unique_sources:
+                explanation += " Previously fact-checked by professional fact-checkers."
         
         return explanation
     
@@ -812,6 +865,8 @@ Respond in JSON format:
             return f"{publisher} verified this claim as false. {title}"
         elif 'true' in verdict:
             return f"{publisher} confirmed this claim as accurate. {title}"
+        elif 'lacks_context' in verdict:
+            return f"{publisher} notes this claim omits important context. {title}"
         else:
             return f"{publisher}: {title}"
     
@@ -832,3 +887,14 @@ Respond in JSON format:
         
         total_score = sum(scores.get(fc.get('verdict', 'unverified'), 50) for fc in fact_checks)
         return int(total_score / len(fact_checks))
+    
+    def _create_error_result(self, claim: str) -> Dict:
+        """Create error result"""
+        return {
+            'claim': claim,
+            'verdict': 'unverified',
+            'confidence': 0,
+            'explanation': 'Error during fact-checking process',
+            'sources': [],
+            'api_response': False
+        }
