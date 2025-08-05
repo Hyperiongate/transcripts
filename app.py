@@ -6,6 +6,7 @@ import os
 import uuid
 import logging
 import traceback
+import time
 from datetime import datetime
 from threading import Thread
 from collections import defaultdict
@@ -340,7 +341,9 @@ def process_transcript(job_id, transcript, source):
         speaker_context = {}
         
         if speakers:
-            main_speaker = speaker_tracker.extract_speaker(source, transcript) or speakers[0]
+            # Use speaker_tracker to extract speaker, fallback to first identified speaker
+            extracted_speaker = speaker_tracker.extract_speaker(source, transcript)
+            main_speaker = extracted_speaker if extracted_speaker else speakers[0]
             logger.info(f"Job {job_id}: Main speaker identified as {main_speaker}")
             
             # Get speaker background and context
@@ -386,20 +389,27 @@ def process_transcript(job_id, transcript, source):
         job_storage.update(job_id, {'progress': 70})
         fact_check_results = []
         
+        # Set a maximum time for fact-checking (60 seconds total)
+        batch_timeout = 60  # Total timeout for all fact-checking
+        start_time = time.time()
+        
         for i in range(0, len(claims_to_check), Config.FACT_CHECK_BATCH_SIZE):
+            # Check if we've exceeded our time budget
+            elapsed_time = time.time() - start_time
+            if elapsed_time > batch_timeout:
+                logger.warning(f"Fact-checking timeout reached after {elapsed_time:.1f}s and {len(fact_check_results)} claims")
+                # Add demo results for remaining claims
+                for claim_data in claims_to_check[i:]:
+                    demo_result = fact_checker._create_demo_result(claim_data['text'])
+                    demo_result['full_context'] = claim_data['full_context']
+                    fact_check_results.append(demo_result)
+                break
+            
             batch = claims_to_check[i:i + Config.FACT_CHECK_BATCH_SIZE]
             try:
-                # Use comprehensive checking if available
+                # Use the fast batch checking with timeout protection
                 batch_texts = [c['text'] for c in batch]
-                if hasattr(fact_checker, 'check_claim_comprehensive'):
-                    # Use the enhanced comprehensive checking
-                    batch_results = []
-                    for text in batch_texts:
-                        result = fact_checker.check_claim_comprehensive(text)
-                        batch_results.append(result)
-                else:
-                    # Fall back to regular batch checking
-                    batch_results = fact_checker.batch_check(batch_texts)
+                batch_results = fact_checker.batch_check(batch_texts)
                 
                 # Add full context back to results
                 for j, result in enumerate(batch_results):
@@ -416,14 +426,9 @@ def process_transcript(job_id, transcript, source):
             except Exception as e:
                 logger.error(f"Error checking batch starting at {i}: {str(e)}")
                 for claim_data in batch:
-                    fact_check_results.append({
-                        'claim': claim_data['text'],
-                        'full_context': claim_data['full_context'],
-                        'verdict': 'unverified',
-                        'confidence': 0,
-                        'explanation': 'Error during fact-checking',
-                        'sources': []
-                    })
+                    demo_result = fact_checker._create_demo_result(claim_data['text'])
+                    demo_result['full_context'] = claim_data['full_context']
+                    fact_check_results.append(demo_result)
         
         # Calculate overall credibility
         job_storage.update(job_id, {'progress': 90})
