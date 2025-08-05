@@ -8,6 +8,7 @@ import logging
 import traceback
 from datetime import datetime
 from threading import Thread
+from collections import defaultdict
 from flask import Flask, render_template, request, jsonify, send_file
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
@@ -169,6 +170,71 @@ def analyze():
         logger.error(traceback.format_exc())
         return jsonify({'success': False, 'error': str(e)}), 500
 
+def generate_conversational_summary(fact_check_results, credibility_score, speaker, speaker_context, speaker_history):
+    """Generate conversational summary with full speaker context"""
+    if not fact_check_results:
+        return "No claims were found to fact-check in this transcript."
+    
+    # Start with speaker context if available
+    summary = ""
+    
+    if speaker and speaker_context:
+        if speaker_context.get('criminal_record'):
+            summary += f"IMPORTANT CONTEXT: {speaker} is a {speaker_context['criminal_record']}. "
+        
+        if speaker_context.get('fraud_history'):
+            summary += f"{speaker_context['fraud_history']}. "
+        
+        if speaker_context.get('fact_check_history'):
+            summary += f"Historical fact-checking shows: {speaker_context['fact_check_history']}. "
+        
+        summary += "\n\n"
+    
+    # Analyze current transcript
+    summary += f"In this transcript, we analyzed {len(fact_check_results)} claims. "
+    
+    # Count verdict types
+    verdict_counts = defaultdict(int)
+    for result in fact_check_results:
+        verdict = result.get('verdict', 'unverified')
+        verdict_counts[verdict] += 1
+    
+    # Overall assessment
+    if credibility_score >= 80:
+        summary += f"The credibility score is {credibility_score}%, indicating high accuracy. "
+    elif credibility_score >= 60:
+        summary += f"The credibility score is {credibility_score}%, showing moderate accuracy with some issues. "
+    elif credibility_score >= 40:
+        summary += f"The credibility score is {credibility_score}%, revealing significant credibility problems. "
+    else:
+        summary += f"The credibility score is only {credibility_score}%, indicating severe credibility issues. "
+    
+    # Specific findings
+    if verdict_counts['false'] + verdict_counts['mostly_false'] > 0:
+        summary += f"Found {verdict_counts['false'] + verdict_counts['mostly_false']} false or mostly false claims. "
+    
+    if verdict_counts['deceptive'] > 0:
+        summary += f"ALERT: {verdict_counts['deceptive']} claims appear deliberately deceptive. "
+    
+    if verdict_counts['lacks_context'] > 0:
+        summary += f"{verdict_counts['lacks_context']} claims omit critical context. "
+    
+    # Pattern analysis
+    if verdict_counts['deceptive'] >= 3:
+        summary += "\n\n⚠️ PATTERN DETECTED: Multiple deliberately deceptive statements suggest intentional misrepresentation."
+    elif verdict_counts['false'] + verdict_counts['mostly_false'] >= 5:
+        summary += "\n\n⚠️ PATTERN DETECTED: High number of false claims indicates unreliable information."
+    
+    # Compare to speaker's history if available
+    if speaker_history and speaker_history.get('total_analyses', 0) > 1:
+        avg_cred = speaker_history['average_credibility']
+        if credibility_score < avg_cred - 15:
+            summary += f"\n\nNOTE: This performance ({credibility_score}%) is significantly worse than {speaker}'s average ({avg_cred:.0f}%)."
+        elif credibility_score > avg_cred + 15:
+            summary += f"\n\nNOTE: This performance ({credibility_score}%) is better than {speaker}'s average ({avg_cred:.0f}%)."
+    
+    return summary
+
 def generate_summary(fact_check_results, credibility_score):
     """Generate a human-readable summary of the fact check results"""
     if not fact_check_results:
@@ -254,7 +320,7 @@ def get_credibility_label(score):
         return "Extremely Low Credibility"
 
 def process_transcript(job_id, transcript, source):
-    """Process transcript through the fact-checking pipeline"""
+    """Process transcript through the fact-checking pipeline with speaker context"""
     try:
         # Ensure job exists
         if not job_storage.exists(job_id):
@@ -271,9 +337,15 @@ def process_transcript(job_id, transcript, source):
         
         # Extract main speaker for history tracking
         main_speaker = None
+        speaker_context = {}
+        
         if speakers:
             main_speaker = speaker_tracker.extract_speaker(source, transcript) or speakers[0]
             logger.info(f"Job {job_id}: Main speaker identified as {main_speaker}")
+            
+            # Get speaker background and context
+            speaker_context = fact_checker.get_speaker_context(main_speaker)
+            logger.info(f"Speaker context retrieved: {speaker_context.get('credibility_notes', 'None')}")
         
         # Extract claims with full context
         job_storage.update(job_id, {'progress': 40})
@@ -285,9 +357,7 @@ def process_transcript(job_id, transcript, source):
             resolved_text, context_info = context_resolver.resolve_context(claim['text'])
             claim['resolved_text'] = resolved_text
             claim['context_info'] = context_info
-            # Keep original full text
             claim['full_text'] = claim['text']
-            # Add to context resolver's history
             context_resolver.add_claim_to_context(claim['text'])
         
         # Prioritize and filter claims
@@ -296,7 +366,7 @@ def process_transcript(job_id, transcript, source):
         prioritized_claims = claim_extractor.prioritize_claims(verified_claims)
         logger.info(f"Job {job_id}: Checking {len(prioritized_claims)} prioritized claims")
         
-        # Ensure we have the right data structure
+        # Prepare claims for checking
         claims_to_check = []
         for claim in prioritized_claims[:Config.MAX_CLAIMS_PER_TRANSCRIPT]:
             if isinstance(claim, dict):
@@ -312,21 +382,28 @@ def process_transcript(job_id, transcript, source):
                     'original': {'text': claim}
                 })
         
-        # Fact check claims
+        # Fact check claims with comprehensive checking
         job_storage.update(job_id, {'progress': 70})
         fact_check_results = []
         
         for i in range(0, len(claims_to_check), Config.FACT_CHECK_BATCH_SIZE):
             batch = claims_to_check[i:i + Config.FACT_CHECK_BATCH_SIZE]
             try:
-                # Extract just the text for fact checking
+                # Use comprehensive checking if available
                 batch_texts = [c['text'] for c in batch]
-                batch_results = fact_checker.batch_check(batch_texts)
+                if hasattr(fact_checker, 'check_claim_comprehensive'):
+                    # Use the enhanced comprehensive checking
+                    batch_results = []
+                    for text in batch_texts:
+                        result = fact_checker.check_claim_comprehensive(text)
+                        batch_results.append(result)
+                else:
+                    # Fall back to regular batch checking
+                    batch_results = fact_checker.batch_check(batch_texts)
                 
                 # Add full context back to results
                 for j, result in enumerate(batch_results):
                     result['full_context'] = batch[j]['full_context']
-                    # Add analysis of context if resolved
                     original = batch[j]['original']
                     if original.get('context_info', {}).get('resolved'):
                         result['context_note'] = f"Context resolved: {original['context_info'].get('resolved_claim', '')}"
@@ -338,7 +415,6 @@ def process_transcript(job_id, transcript, source):
                 job_storage.update(job_id, {'progress': progress})
             except Exception as e:
                 logger.error(f"Error checking batch starting at {i}: {str(e)}")
-                # Add unverified results for failed batch
                 for claim_data in batch:
                     fact_check_results.append({
                         'claim': claim_data['text'],
@@ -346,8 +422,6 @@ def process_transcript(job_id, transcript, source):
                         'verdict': 'unverified',
                         'confidence': 0,
                         'explanation': 'Error during fact-checking',
-                        'publisher': 'Error',
-                        'url': '',
                         'sources': []
                     })
         
@@ -355,47 +429,27 @@ def process_transcript(job_id, transcript, source):
         job_storage.update(job_id, {'progress': 90})
         credibility_score = fact_checker.calculate_credibility(fact_check_results)
         
-        # Generate enhanced conversational summary
+        # Generate enhanced conversational summary with speaker context
         summary = generate_summary(fact_check_results, credibility_score)
-        conversational_summary = None
+        conversational_summary = generate_conversational_summary(
+            fact_check_results, 
+            credibility_score, 
+            main_speaker, 
+            speaker_context,
+            speaker_tracker.get_speaker_summary(main_speaker) if main_speaker else None
+        )
         
         # Get speaker history if available
         speaker_history = None
         if main_speaker:
             speaker_history = speaker_tracker.get_speaker_summary(main_speaker)
-            
-            # Create conversational summary with history
-            if speaker_history:
-                avg_cred = speaker_history['average_credibility']
-                total_analyses = speaker_history['total_analyses']
-                
-                conversational_summary = f"We analyzed {len(fact_check_results)} claims from {main_speaker}. "
-                
-                if total_analyses > 1:
-                    conversational_summary += f"Based on {total_analyses} previous analyses, {main_speaker} has an average credibility of {avg_cred:.0f}%. "
-                    
-                    if speaker_history['patterns']:
-                        conversational_summary += f"Historical patterns show: {', '.join(speaker_history['patterns'])}. "
-                
-                conversational_summary += f"In this transcript, the credibility score is {credibility_score}%. "
-                
-                # Compare to their average
-                if total_analyses > 1:
-                    if credibility_score > avg_cred + 10:
-                        conversational_summary += "This is notably better than their typical performance. "
-                    elif credibility_score < avg_cred - 10:
-                        conversational_summary += "This is worse than their usual credibility. "
-                
-                # Highlight patterns in this analysis
-                deceptive_count = sum(1 for fc in fact_check_results if fc.get('verdict') in ['misleading', 'deceptive'])
-                if deceptive_count >= 3:
-                    conversational_summary += f"WARNING: Found {deceptive_count} deliberately deceptive statements, showing a pattern of misrepresentation. "
         
-        # Compile results
+        # Compile results with speaker context
         results = {
             'source': source,
             'speaker': main_speaker,
-            'speaker_history': speaker_history,
+            'speaker_context': speaker_context,  # Criminal record, fraud history, etc.
+            'speaker_history': speaker_history,   # Our tracking history
             'transcript_length': len(transcript),
             'word_count': len(transcript.split()),
             'speakers': speakers[:10] if speakers else [],
@@ -407,21 +461,13 @@ def process_transcript(job_id, transcript, source):
             'credibility_label': get_credibility_label(credibility_score),
             'fact_checks': fact_check_results,
             'summary': summary,
-            'conversational_summary': conversational_summary or summary,
+            'conversational_summary': conversational_summary,
             'analyzed_at': datetime.now().isoformat()
         }
         
         # Track this analysis for the speaker
         if main_speaker:
             speaker_tracker.add_analysis(main_speaker, results)
-        
-        # Add analysis notes if no API keys
-        if not Config.GOOGLE_FACTCHECK_API_KEY:
-            results['analysis_notes'] = [
-                "Running in demo mode - no fact-checking APIs configured",
-                "Results shown are simulated for demonstration purposes",
-                "Configure API keys in .env file for real fact-checking"
-            ]
         
         # Complete job
         job_storage.update(job_id, {
@@ -538,6 +584,22 @@ def generate_text_report(results):
     
     if results.get('speaker'):
         report.append(f"Speaker: {results['speaker']}")
+    
+    # Add speaker context if available
+    if results.get('speaker_context'):
+        context = results['speaker_context']
+        report.append("")
+        report.append("SPEAKER BACKGROUND")
+        report.append("-" * 50)
+        if context.get('criminal_record'):
+            report.append(f"Criminal Record: {context['criminal_record']}")
+        if context.get('fraud_history'):
+            report.append(f"Fraud History: {context['fraud_history']}")
+        if context.get('fact_check_history'):
+            report.append(f"Fact Check History: {context['fact_check_history']}")
+        if context.get('credibility_notes'):
+            report.append(f"Notes: {context['credibility_notes']}")
+        report.append("")
     
     report.append(f"Credibility Score: {results.get('credibility_score', 0)}% ({results.get('credibility_label', 'Unknown')})")
     report.append("")
