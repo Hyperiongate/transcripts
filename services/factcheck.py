@@ -1,5 +1,6 @@
 """
-Enhanced Fact Checking Service with Speaker Context and Comprehensive Analysis
+Enhanced Fact Checking Service - Complete Working Implementation
+Coordinates fact-checking using multiple sources with all features
 """
 import os
 import re
@@ -35,7 +36,7 @@ class FactChecker:
         self.speaker_backgrounds = {
             'Donald Trump': {
                 'criminal_record': 'Convicted felon - 34 counts of falsifying business records (May 2024)',
-                'fraud_history': 'Found liable for civil fraud - inflating wealth to obtain favorable loans and insurance rates',
+                'fraud_history': 'Found liable for civil fraud - inflating wealth to obtain favorable loans and insurance rates ($355 million penalty)',
                 'fact_check_history': 'Made over 30,000 false or misleading claims during presidency (Washington Post)',
                 'credibility_notes': 'Documented pattern of making false statements about wealth, achievements, and political opponents',
                 'legal_issues': [
@@ -48,7 +49,6 @@ class FactChecker:
                 'credibility_notes': 'Generally factual but prone to exaggeration and misremembering details',
                 'fact_check_history': 'Mixed record - some false claims but far fewer than predecessor'
             }
-            # Add more speakers as needed
         }
         
         self._validate_configuration()
@@ -77,26 +77,60 @@ class FactChecker:
         if not speaker_name:
             return {}
         
-        # Check our database
+        logger.info(f"Looking up speaker context for: {speaker_name}")
+        
+        # Check for Trump in various forms
+        trump_variants = ['trump', 'donald trump', 'president trump']
+        if any(variant in speaker_name.lower() for variant in trump_variants):
+            logger.info("Identified as Donald Trump - returning full context")
+            return {
+                'speaker': 'Donald Trump',
+                'has_criminal_record': True,
+                'criminal_record': 'Convicted felon - 34 counts of falsifying business records (May 2024)',
+                'fraud_history': 'Found liable for civil fraud - inflating wealth to obtain favorable loans and insurance rates ($355 million penalty)',
+                'fact_check_history': 'Made over 30,000 false or misleading claims during presidency (Washington Post)',
+                'credibility_notes': 'Documented pattern of making false statements about wealth, achievements, and political opponents',
+                'legal_issues': [
+                    'Criminal conviction for business fraud (2024)',
+                    'Civil fraud judgment - $355 million penalty',
+                    'Multiple ongoing criminal cases'
+                ]
+            }
+        
+        # Check for Biden
+        biden_variants = ['biden', 'joe biden', 'president biden']
+        if any(variant in speaker_name.lower() for variant in biden_variants):
+            return {
+                'speaker': 'Joe Biden',
+                'credibility_notes': 'Generally factual but prone to exaggeration and misremembering details',
+                'fact_check_history': 'Mixed record - some false claims but far fewer than predecessor'
+            }
+        
+        # Check if just "President" - need more context
+        if speaker_name.lower() == 'president':
+            # Could check date or source to determine which president
+            # For now, return generic
+            return {
+                'speaker': speaker_name,
+                'credibility_notes': 'Unable to determine specific president from context'
+            }
+        
+        # Check exact matches
         for known_speaker, info in self.speaker_backgrounds.items():
             if known_speaker.lower() in speaker_name.lower():
                 return {
                     'speaker': known_speaker,
                     'has_criminal_record': 'criminal_record' in info,
-                    'criminal_record': info.get('criminal_record'),
-                    'fraud_history': info.get('fraud_history'),
-                    'fact_check_history': info.get('fact_check_history'),
-                    'credibility_notes': info.get('credibility_notes'),
-                    'legal_issues': info.get('legal_issues', [])
+                    **info
                 }
         
         return {'speaker': speaker_name, 'credibility_notes': 'No prior fact-checking history available'}
     
     def batch_check(self, claims: List[str]) -> List[Dict]:
-        """Check claims using ALL available APIs comprehensively"""
+        """Check multiple claims using ALL available APIs comprehensively"""
         results = []
         
-        # Check all claims in parallel for efficiency
+        # Check all claims with comprehensive checking
         with ThreadPoolExecutor(max_workers=5) as executor:
             future_to_claim = {
                 executor.submit(self.check_claim_comprehensive, claim): claim 
@@ -115,32 +149,32 @@ class FactChecker:
         return results
     
     def check_claim_comprehensive(self, claim: str) -> Dict:
-        """Check claim using ALL available resources"""
+        """Check claim using ALL available resources comprehensively"""
         logger.info(f"Comprehensive check for: {claim[:80]}...")
         
         all_results = []
         
         # 1. Google Fact Check - Primary source
         if self.google_api_key:
-            result = self._check_google_factcheck_enhanced(claim)
+            result = self._check_google_factcheck(claim)
             if result['found']:
                 all_results.append(result)
         
         # 2. FRED for economic data
         if self.fred_api_key and self._is_economic_claim(claim):
-            result = self._check_fred_enhanced(claim)
+            result = self._check_fred_data(claim)
             if result['found']:
                 all_results.append(result)
         
         # 3. News API for current events
         if self.news_api_key:
-            result = self._check_news_api_enhanced(claim)
+            result = self._check_news_api(claim)
             if result['found']:
                 all_results.append(result)
         
         # 4. MediaStack for additional news
         if self.mediastack_api_key:
-            result = self._check_mediastack_enhanced(claim)
+            result = self._check_mediastack(claim)
             if result['found']:
                 all_results.append(result)
         
@@ -155,16 +189,20 @@ class FactChecker:
         if result['found']:
             all_results.append(result)
         
-        # 7. OpenAI for complex analysis
+        # 7. OpenAI for complex analysis (especially if no other results)
         if self.openai_api_key:
-            result = self._analyze_with_ai_enhanced(claim, all_results)
+            result = self._analyze_with_ai(claim, all_results)
             if result['found']:
                 all_results.append(result)
         
         # Synthesize comprehensive result
         return self._synthesize_comprehensive_result(claim, all_results)
     
-    def _check_google_factcheck_enhanced(self, claim: str) -> Dict:
+    def check_claim(self, claim: str) -> Dict:
+        """Standard claim checking for backward compatibility"""
+        return self.check_claim_comprehensive(claim)
+    
+    def _check_google_factcheck(self, claim: str) -> Dict:
         """Enhanced Google Fact Check with better parsing"""
         try:
             url = "https://factchecktools.googleapis.com/v1alpha1/claims:search"
@@ -211,7 +249,7 @@ class FactChecker:
             logger.error(f"Google Fact Check error: {str(e)}")
             return {'found': False}
     
-    def _check_fred_enhanced(self, claim: str) -> Dict:
+    def _check_fred_data(self, claim: str) -> Dict:
         """Enhanced FRED check with better explanations"""
         try:
             numbers = re.findall(r'\d+\.?\d*', claim)
@@ -302,7 +340,7 @@ class FactChecker:
             logger.error(f"FRED error: {str(e)}")
             return {'found': False}
     
-    def _check_news_api_enhanced(self, claim: str) -> Dict:
+    def _check_news_api(self, claim: str) -> Dict:
         """Enhanced news checking with sentiment analysis"""
         try:
             key_terms = self._extract_key_terms(claim)
@@ -373,6 +411,64 @@ class FactChecker:
             
         except Exception as e:
             logger.error(f"News API error: {str(e)}")
+            return {'found': False}
+    
+    def _check_mediastack(self, claim: str) -> Dict:
+        """Check MediaStack news API with better analysis"""
+        try:
+            key_terms = self._extract_key_terms(claim)
+            search_query = ' '.join(key_terms[:4])
+            
+            url = "http://api.mediastack.com/v1/news"
+            params = {
+                'access_key': self.mediastack_api_key,
+                'keywords': search_query,
+                'languages': 'en',
+                'limit': 10,
+                'sort': 'published_desc'
+            }
+            
+            response = requests.get(url, params=params, timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                if data.get('data'):
+                    articles = data['data']
+                    sources = set(art.get('source', 'Unknown') for art in articles)
+                    
+                    # Analyze content
+                    relevant_count = 0
+                    for article in articles:
+                        title = article.get('title', '').lower()
+                        if any(term.lower() in title for term in key_terms[:3]):
+                            relevant_count += 1
+                    
+                    if relevant_count >= 3:
+                        explanation = (
+                            f"Found {len(articles)} recent news articles from {len(sources)} sources "
+                            f"including: {', '.join(list(sources)[:3])}. "
+                            f"{relevant_count} articles directly address this topic."
+                        )
+                        verdict = 'unverified'  # News presence doesn't confirm truth
+                        confidence = 65
+                    else:
+                        explanation = f"Limited news coverage found from: {', '.join(list(sources)[:3])}"
+                        verdict = 'unverified'
+                        confidence = 50
+                    
+                    return {
+                        'found': True,
+                        'verdict': verdict,
+                        'confidence': confidence,
+                        'explanation': explanation,
+                        'source': 'MediaStack News',
+                        'weight': 0.6
+                    }
+            
+            return {'found': False}
+            
+        except Exception as e:
+            logger.error(f"MediaStack error: {str(e)}")
             return {'found': False}
     
     def _check_factchecker_sites(self, claim: str) -> Dict:
@@ -482,7 +578,7 @@ class FactChecker:
             logger.error(f"Wikipedia error: {str(e)}")
             return {'found': False}
     
-    def _analyze_with_ai_enhanced(self, claim: str, other_results: List[Dict]) -> Dict:
+    def _analyze_with_ai(self, claim: str, other_results: List[Dict]) -> Dict:
         """Use AI to analyze claim with context from other checks"""
         if not self.openai_api_key:
             return {'found': False}
@@ -532,20 +628,24 @@ Respond in JSON format:
             if response.status_code == 200:
                 result = response.json()
                 content = result['choices'][0]['message']['content']
-                analysis = json.loads(content)
                 
-                # Replace 'mixed' with more specific verdict
-                if analysis.get('verdict') == 'mixed':
-                    analysis['verdict'] = 'lacks_context' if not analysis.get('is_deceptive') else 'deceptive'
-                
-                return {
-                    'found': True,
-                    'verdict': analysis['verdict'],
-                    'confidence': analysis['confidence'],
-                    'explanation': analysis['explanation'],
-                    'source': 'AI Deep Analysis',
-                    'weight': 0.8
-                }
+                try:
+                    analysis = json.loads(content)
+                    
+                    # Never use 'mixed' - convert to more specific verdict
+                    if analysis.get('verdict') == 'mixed':
+                        analysis['verdict'] = 'lacks_context' if not analysis.get('is_deceptive') else 'deceptive'
+                    
+                    return {
+                        'found': True,
+                        'verdict': analysis['verdict'],
+                        'confidence': analysis['confidence'],
+                        'explanation': analysis['explanation'],
+                        'source': 'AI Deep Analysis',
+                        'weight': 0.8
+                    }
+                except:
+                    return {'found': False}
             
             return {'found': False}
             
