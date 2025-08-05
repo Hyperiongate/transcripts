@@ -4,7 +4,7 @@ Handles various transcript formats and sources
 """
 import re
 import logging
-from typing import Dict, Optional
+from typing import Dict, Optional, List
 from youtube_transcript_api import YouTubeTranscriptApi
 from youtube_transcript_api._errors import TranscriptsDisabled, NoTranscriptFound, VideoUnavailable
 
@@ -15,9 +15,18 @@ class TranscriptProcessor:
     
     def __init__(self):
         self.youtube_url_patterns = [
-            r'(?:https?://)?(?:www\.)?youtube\.com/watch\?v=([a-zA-Z0-9_-]+)',
-            r'(?:https?://)?(?:www\.)?youtu\.be/([a-zA-Z0-9_-]+)',
-            r'(?:https?://)?(?:www\.)?youtube\.com/embed/([a-zA-Z0-9_-]+)'
+            # Standard watch URLs
+            r'(?:https?://)?(?:www\.)?youtube\.com/watch\?v=([a-zA-Z0-9_-]{11})',
+            # Short URLs
+            r'(?:https?://)?(?:www\.)?youtu\.be/([a-zA-Z0-9_-]{11})',
+            # Embed URLs
+            r'(?:https?://)?(?:www\.)?youtube\.com/embed/([a-zA-Z0-9_-]{11})',
+            # Mobile URLs
+            r'(?:https?://)?m\.youtube\.com/watch\?v=([a-zA-Z0-9_-]{11})',
+            # URLs with additional parameters
+            r'(?:https?://)?(?:www\.)?youtube\.com/watch\?.*v=([a-zA-Z0-9_-]{11})',
+            # YouTube Music URLs
+            r'(?:https?://)?music\.youtube\.com/watch\?v=([a-zA-Z0-9_-]{11})'
         ]
     
     def parse_text(self, text: str) -> Dict:
@@ -40,51 +49,107 @@ class TranscriptProcessor:
     def parse_youtube(self, url: str) -> Dict:
         """Extract transcript from YouTube video"""
         try:
+            logger.info(f"Attempting to parse YouTube URL: {url}")
+            
             # Extract video ID
             video_id = self._extract_youtube_id(url)
             if not video_id:
+                logger.error(f"Could not extract video ID from URL: {url}")
                 return {
                     'success': False,
-                    'error': 'Invalid YouTube URL'
+                    'error': 'Invalid YouTube URL. Could not extract video ID.'
                 }
             
-            # Get transcript
+            logger.info(f"Extracted video ID: {video_id}")
+            
+            # Get available transcript languages
             try:
-                transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
+                transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
+                
+                # Try to get English transcript first
+                transcript = None
+                languages_available = []
+                
+                # First, try manually created English transcripts
+                try:
+                    transcript = transcript_list.find_manually_created_transcript(['en', 'en-US', 'en-GB'])
+                    logger.info("Found manually created English transcript")
+                except:
+                    # If no manual English transcript, try auto-generated
+                    try:
+                        transcript = transcript_list.find_generated_transcript(['en', 'en-US', 'en-GB'])
+                        logger.info("Found auto-generated English transcript")
+                    except:
+                        # If no English transcript, get the first available one
+                        for t in transcript_list:
+                            languages_available.append(t.language_code)
+                            if transcript is None:
+                                transcript = t
+                                logger.info(f"Using transcript in language: {t.language}")
+                
+                if transcript is None:
+                    return {
+                        'success': False,
+                        'error': f'No transcript available. Languages found: {", ".join(languages_available) if languages_available else "none"}'
+                    }
+                
+                # Fetch the transcript
+                transcript_data = transcript.fetch()
                 
                 # Combine transcript segments
-                full_transcript = ' '.join([segment['text'] for segment in transcript_list])
+                full_transcript = ' '.join([segment['text'] for segment in transcript_data])
                 
-                # Get video title (would need additional API for full metadata)
+                # Calculate duration from last segment
+                duration = 0
+                if transcript_data:
+                    last_segment = transcript_data[-1]
+                    duration = last_segment['start'] + last_segment.get('duration', 0)
+                
+                # Get video title (construct from video ID if API doesn't provide)
                 title = f"YouTube Video {video_id}"
+                
+                # Clean the transcript
+                cleaned_transcript = self.clean_transcript(full_transcript)
                 
                 return {
                     'success': True,
-                    'transcript': self.clean_transcript(full_transcript),
+                    'transcript': cleaned_transcript,
                     'title': title,
                     'video_id': video_id,
-                    'duration': transcript_list[-1]['start'] + transcript_list[-1]['duration'] if transcript_list else 0,
-                    'format': 'youtube'
+                    'duration': duration,
+                    'format': 'youtube',
+                    'language': transcript.language if hasattr(transcript, 'language') else 'unknown',
+                    'is_generated': transcript.is_generated if hasattr(transcript, 'is_generated') else False,
+                    'word_count': len(cleaned_transcript.split())
                 }
                 
             except TranscriptsDisabled:
+                logger.error(f"Transcripts disabled for video: {video_id}")
                 return {
                     'success': False,
-                    'error': 'Transcripts are disabled for this video'
+                    'error': 'Transcripts are disabled for this video. The video owner has disabled captions.'
                 }
             except NoTranscriptFound:
+                logger.error(f"No transcript found for video: {video_id}")
                 return {
                     'success': False,
-                    'error': 'No transcript available for this video'
+                    'error': 'No transcript available for this video. This video does not have captions.'
                 }
             except VideoUnavailable:
+                logger.error(f"Video unavailable: {video_id}")
                 return {
                     'success': False,
-                    'error': 'Video is unavailable or private'
+                    'error': 'Video is unavailable or private. Please check if the video is accessible.'
+                }
+            except Exception as e:
+                logger.error(f"Error listing transcripts: {str(e)}")
+                return {
+                    'success': False,
+                    'error': f'Failed to access video transcripts: {str(e)}'
                 }
                 
         except Exception as e:
-            logger.error(f"YouTube parsing error: {str(e)}")
+            logger.error(f"YouTube parsing error: {str(e)}", exc_info=True)
             return {
                 'success': False,
                 'error': f'Failed to extract transcript: {str(e)}'
@@ -99,13 +164,20 @@ class TranscriptProcessor:
             
             i = 0
             while i < len(lines):
-                # Skip index line
-                if lines[i].strip().isdigit():
+                line = lines[i].strip()
+                
+                # Skip empty lines
+                if not line:
+                    i += 1
+                    continue
+                
+                # Skip index line (numbers only)
+                if line.isdigit():
                     i += 1
                     # Skip timestamp line
                     if i < len(lines) and '-->' in lines[i]:
                         i += 1
-                    # Collect text lines
+                    # Collect text lines until next index or empty line
                     while i < len(lines) and lines[i].strip() and not lines[i].strip().isdigit():
                         transcript_lines.append(lines[i].strip())
                         i += 1
@@ -113,10 +185,13 @@ class TranscriptProcessor:
                     i += 1
             
             transcript = ' '.join(transcript_lines)
+            cleaned = self.clean_transcript(transcript)
+            
             return {
                 'success': True,
-                'transcript': self.clean_transcript(transcript),
-                'format': 'srt'
+                'transcript': cleaned,
+                'format': 'srt',
+                'word_count': len(cleaned.split())
             }
             
         except Exception as e:
@@ -133,33 +208,52 @@ class TranscriptProcessor:
             lines = content.strip().split('\n')
             transcript_lines = []
             
-            # Skip WEBVTT header
-            start_index = 0
-            if lines[0].startswith('WEBVTT'):
-                start_index = 1
+            # Skip WEBVTT header and any metadata
+            i = 0
+            while i < len(lines) and (lines[i].startswith('WEBVTT') or lines[i].strip() == '' or lines[i].startswith('NOTE')):
+                i += 1
             
-            i = start_index
+            # Process the rest
             while i < len(lines):
                 line = lines[i].strip()
-                # Skip timestamp lines
-                if '-->' in line or line == '':
+                
+                # Skip empty lines
+                if not line:
                     i += 1
                     continue
-                # Skip note/style blocks
-                if line.startswith('NOTE') or line.startswith('STYLE'):
+                
+                # Skip timestamp lines
+                if '-->' in line:
+                    i += 1
+                    continue
+                
+                # Skip cue identifiers (lines before timestamps)
+                if i + 1 < len(lines) and '-->' in lines[i + 1]:
+                    i += 1
+                    continue
+                
+                # Skip style blocks
+                if line.startswith('STYLE') or line.startswith('::cue'):
                     # Skip until empty line
                     while i < len(lines) and lines[i].strip() != '':
                         i += 1
-                else:
-                    # Add text line
-                    transcript_lines.append(line)
-                    i += 1
+                    continue
+                
+                # Add text line
+                # Remove VTT tags like <c>, </c>, <v>, etc.
+                clean_line = re.sub(r'<[^>]+>', '', line)
+                if clean_line.strip():
+                    transcript_lines.append(clean_line.strip())
+                i += 1
             
             transcript = ' '.join(transcript_lines)
+            cleaned = self.clean_transcript(transcript)
+            
             return {
                 'success': True,
-                'transcript': self.clean_transcript(transcript),
-                'format': 'vtt'
+                'transcript': cleaned,
+                'format': 'vtt',
+                'word_count': len(cleaned.split())
             }
             
         except Exception as e:
@@ -171,41 +265,76 @@ class TranscriptProcessor:
     
     def clean_transcript(self, text: str) -> str:
         """Clean and normalize transcript text"""
+        if not text:
+            return ""
+        
         # Remove extra whitespace
         text = ' '.join(text.split())
         
         # Remove speaker labels (common patterns)
         text = re.sub(r'^\[.*?\]:', '', text, flags=re.MULTILINE)
-        text = re.sub(r'^.*?:', '', text, flags=re.MULTILINE)
+        text = re.sub(r'^[A-Z\s]+:', '', text, flags=re.MULTILINE)
+        text = re.sub(r'^\w+\s*>>', '', text, flags=re.MULTILINE)
         
         # Remove timestamp patterns
         text = re.sub(r'\[\d{1,2}:\d{2}(?::\d{2})?\]', '', text)
         text = re.sub(r'\d{1,2}:\d{2}(?::\d{2})?', '', text)
         
-        # Remove common artifacts
-        text = re.sub(r'\[.*?\]', '', text)  # Remove bracketed content
-        text = re.sub(r'\(.*?\)', '', text)  # Remove parenthetical content
+        # Remove common YouTube auto-caption artifacts
+        text = re.sub(r'\[Music\]', '', text, flags=re.IGNORECASE)
+        text = re.sub(r'\[Applause\]', '', text, flags=re.IGNORECASE)
+        text = re.sub(r'\[Laughter\]', '', text, flags=re.IGNORECASE)
+        text = re.sub(r'\[.*?\]', '', text)  # Remove all bracketed content
         
-        # Clean up punctuation
-        text = re.sub(r'\.{2,}', '.', text)  # Multiple periods to single
+        # Remove parenthetical stage directions
+        text = re.sub(r'\([^)]*\)', '', text)
+        
+        # Fix spacing issues
+        text = re.sub(r'\s+', ' ', text)  # Multiple spaces to single
         text = re.sub(r'\s+([,.!?])', r'\1', text)  # Remove space before punctuation
+        text = re.sub(r'([,.!?])([A-Za-z])', r'\1 \2', text)  # Add space after punctuation if missing
         
-        # Ensure sentences end with proper punctuation
-        sentences = text.split('.')
-        cleaned_sentences = []
-        for sentence in sentences:
-            sentence = sentence.strip()
-            if sentence and not sentence[-1] in '.!?':
-                sentence += '.'
-            if sentence:
-                cleaned_sentences.append(sentence)
+        # Fix common caption errors
+        text = re.sub(r'\.{2,}', '.', text)  # Multiple periods to single
+        text = re.sub(r',{2,}', ',', text)  # Multiple commas to single
+        text = re.sub(r'\s*-\s*-\s*', ' - ', text)  # Fix dashes
         
-        return ' '.join(cleaned_sentences)
+        # Ensure sentences are properly spaced
+        text = re.sub(r'([.!?])([A-Z])', r'\1 \2', text)
+        
+        # Trim and return
+        return text.strip()
     
     def _extract_youtube_id(self, url: str) -> Optional[str]:
         """Extract YouTube video ID from URL"""
+        if not url:
+            return None
+        
+        # Clean the URL
+        url = url.strip()
+        
+        # Try each pattern
         for pattern in self.youtube_url_patterns:
             match = re.search(pattern, url)
             if match:
-                return match.group(1)
+                video_id = match.group(1)
+                # Validate video ID format (11 characters, alphanumeric + dash/underscore)
+                if re.match(r'^[a-zA-Z0-9_-]{11}$', video_id):
+                    return video_id
+        
+        # If no pattern matches, check if it's just a video ID
+        if re.match(r'^[a-zA-Z0-9_-]{11}$', url):
+            return url
+        
         return None
+    
+    def validate_youtube_url(self, url: str) -> tuple[bool, str]:
+        """Validate YouTube URL and return (is_valid, error_message)"""
+        if not url or not url.strip():
+            return False, "URL is empty"
+        
+        video_id = self._extract_youtube_id(url)
+        if not video_id:
+            return False, "Invalid YouTube URL format"
+        
+        return True, ""
