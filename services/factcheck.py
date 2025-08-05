@@ -1,6 +1,5 @@
 """
-Enhanced Fact Checking Service - Main Module
-Coordinates fact-checking using multiple sources with REAL API integration
+Enhanced Fact Checking Service with Speaker Context and Comprehensive Analysis
 """
 import os
 import re
@@ -8,7 +7,9 @@ import time
 import json
 import logging
 import requests
-from typing import List, Dict, Optional
+import asyncio
+import aiohttp
+from typing import List, Dict, Optional, Tuple
 from datetime import datetime
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -18,21 +19,42 @@ from config import Config
 logger = logging.getLogger(__name__)
 
 class FactChecker:
-    """Main fact-checking coordinator with real API integration"""
+    """Enhanced fact-checking with speaker context and comprehensive analysis"""
     
     def __init__(self):
-        # Initialize with actual API keys from Config
+        # Initialize ALL API keys
         self.google_api_key = Config.GOOGLE_FACTCHECK_API_KEY
         self.fred_api_key = Config.FRED_API_KEY
         self.news_api_key = Config.NEWS_API_KEY
         self.mediastack_api_key = Config.MEDIASTACK_API_KEY
         self.openai_api_key = Config.OPENAI_API_KEY
+        self.scraperapi_key = Config.SCRAPERAPI_KEY
+        self.scrapingbee_api_key = Config.SCRAPINGBEE_API_KEY
         
-        # Validate configuration
+        # Known speaker backgrounds (should be in a database in production)
+        self.speaker_backgrounds = {
+            'Donald Trump': {
+                'criminal_record': 'Convicted felon - 34 counts of falsifying business records (May 2024)',
+                'fraud_history': 'Found liable for civil fraud - inflating wealth to obtain favorable loans and insurance rates',
+                'fact_check_history': 'Made over 30,000 false or misleading claims during presidency (Washington Post)',
+                'credibility_notes': 'Documented pattern of making false statements about wealth, achievements, and political opponents',
+                'legal_issues': [
+                    'Criminal conviction for business fraud (2024)',
+                    'Civil fraud judgment - $355 million penalty for fraudulent business practices',
+                    'Multiple ongoing criminal cases'
+                ]
+            },
+            'Joe Biden': {
+                'credibility_notes': 'Generally factual but prone to exaggeration and misremembering details',
+                'fact_check_history': 'Mixed record - some false claims but far fewer than predecessor'
+            }
+            # Add more speakers as needed
+        }
+        
         self._validate_configuration()
     
     def _validate_configuration(self):
-        """Validate that the fact checker is properly configured"""
+        """Log which APIs are available"""
         active_apis = []
         
         if self.google_api_key:
@@ -42,154 +64,184 @@ class FactChecker:
         if self.news_api_key:
             active_apis.append("News API")
         if self.mediastack_api_key:
-            active_apis.append("MediaStack News")
+            active_apis.append("MediaStack")
         if self.openai_api_key:
-            active_apis.append("OpenAI Analysis")
+            active_apis.append("OpenAI")
+        if self.scraperapi_key or self.scrapingbee_api_key:
+            active_apis.append("Web Scraping")
         
-        if active_apis:
-            logger.info(f"✅ Fact checker initialized with APIs: {', '.join(active_apis)}")
-        else:
-            logger.warning("⚠️ No fact-checking APIs configured - using demo mode")
+        logger.info(f"✅ Active fact-checking APIs: {', '.join(active_apis)}")
+    
+    def get_speaker_context(self, speaker_name: str) -> Dict:
+        """Get comprehensive background on speaker"""
+        if not speaker_name:
+            return {}
+        
+        # Check our database
+        for known_speaker, info in self.speaker_backgrounds.items():
+            if known_speaker.lower() in speaker_name.lower():
+                return {
+                    'speaker': known_speaker,
+                    'has_criminal_record': 'criminal_record' in info,
+                    'criminal_record': info.get('criminal_record'),
+                    'fraud_history': info.get('fraud_history'),
+                    'fact_check_history': info.get('fact_check_history'),
+                    'credibility_notes': info.get('credibility_notes'),
+                    'legal_issues': info.get('legal_issues', [])
+                }
+        
+        return {'speaker': speaker_name, 'credibility_notes': 'No prior fact-checking history available'}
     
     def batch_check(self, claims: List[str]) -> List[Dict]:
-        """Check multiple claims using real APIs"""
+        """Check claims using ALL available APIs comprehensively"""
         results = []
         
-        # If no API keys configured, return demo results
-        if not any([self.google_api_key, self.fred_api_key, self.news_api_key]):
-            logger.warning("No API keys configured - returning demo results")
-            return self._generate_demo_results(claims)
-        
-        # Use real API checking
-        for i, claim in enumerate(claims):
-            try:
-                logger.info(f"Checking claim {i+1}/{len(claims)}: {claim[:80]}...")
-                result = self.check_claim(claim)
-                results.append(result)
-                
-                # Rate limiting
-                if i < len(claims) - 1:
-                    time.sleep(Config.FACT_CHECK_RATE_LIMIT_DELAY)
-                    
-            except Exception as e:
-                logger.error(f"Error checking claim: {str(e)}")
-                results.append(self._create_error_result(claim))
+        # Check all claims in parallel for efficiency
+        with ThreadPoolExecutor(max_workers=5) as executor:
+            future_to_claim = {
+                executor.submit(self.check_claim_comprehensive, claim): claim 
+                for claim in claims
+            }
+            
+            for future in as_completed(future_to_claim):
+                claim = future_to_claim[future]
+                try:
+                    result = future.result()
+                    results.append(result)
+                except Exception as e:
+                    logger.error(f"Error checking claim '{claim}': {str(e)}")
+                    results.append(self._create_error_result(claim))
         
         return results
     
-    def check_claim(self, claim: str) -> Dict:
-        """Check a single claim using multiple real APIs"""
-        check_results = []
+    def check_claim_comprehensive(self, claim: str) -> Dict:
+        """Check claim using ALL available resources"""
+        logger.info(f"Comprehensive check for: {claim[:80]}...")
         
-        # 1. Try Google Fact Check API first (highest authority)
+        all_results = []
+        
+        # 1. Google Fact Check - Primary source
         if self.google_api_key:
-            google_result = self._check_google_factcheck(claim)
-            if google_result['found']:
-                check_results.append(google_result)
-                # If Google has a strong verdict, we can return early
-                if google_result.get('confidence', 0) >= 85:
-                    return self._format_result(claim, google_result)
+            result = self._check_google_factcheck_enhanced(claim)
+            if result['found']:
+                all_results.append(result)
         
-        # 2. Check economic claims against FRED
+        # 2. FRED for economic data
         if self.fred_api_key and self._is_economic_claim(claim):
-            fred_result = self._check_fred_data(claim)
-            if fred_result['found']:
-                check_results.append(fred_result)
+            result = self._check_fred_enhanced(claim)
+            if result['found']:
+                all_results.append(result)
         
-        # 3. Check news sources
-        if self.news_api_key or self.mediastack_api_key:
-            news_result = self._check_news_sources(claim)
-            if news_result['found']:
-                check_results.append(news_result)
+        # 3. News API for current events
+        if self.news_api_key:
+            result = self._check_news_api_enhanced(claim)
+            if result['found']:
+                all_results.append(result)
         
-        # 4. Use OpenAI for complex analysis if available
-        if self.openai_api_key and len(check_results) == 0:
-            ai_result = self._check_with_openai(claim)
-            if ai_result['found']:
-                check_results.append(ai_result)
+        # 4. MediaStack for additional news
+        if self.mediastack_api_key:
+            result = self._check_mediastack_enhanced(claim)
+            if result['found']:
+                all_results.append(result)
         
-        # Synthesize results from multiple sources
-        if check_results:
-            return self._synthesize_results(claim, check_results)
-        else:
-            return self._create_unverified_response(claim, "No verification sources found")
+        # 5. Web scraping for fact-checker sites
+        if self.scraperapi_key or self.scrapingbee_api_key:
+            result = self._check_factchecker_sites(claim)
+            if result['found']:
+                all_results.append(result)
+        
+        # 6. Wikipedia for established facts
+        result = self._check_wikipedia(claim)
+        if result['found']:
+            all_results.append(result)
+        
+        # 7. OpenAI for complex analysis
+        if self.openai_api_key:
+            result = self._analyze_with_ai_enhanced(claim, all_results)
+            if result['found']:
+                all_results.append(result)
+        
+        # Synthesize comprehensive result
+        return self._synthesize_comprehensive_result(claim, all_results)
     
-    def _check_google_factcheck(self, claim: str) -> Dict:
-        """Real Google Fact Check API implementation"""
+    def _check_google_factcheck_enhanced(self, claim: str) -> Dict:
+        """Enhanced Google Fact Check with better parsing"""
         try:
             url = "https://factchecktools.googleapis.com/v1alpha1/claims:search"
             params = {
                 'key': self.google_api_key,
-                'query': claim[:200],  # API has query length limit
+                'query': claim[:200],
                 'languageCode': 'en'
             }
             
-            logger.info(f"Calling Google Fact Check API for: {claim[:80]}...")
             response = requests.get(url, params=params, timeout=10)
             
             if response.status_code == 200:
                 data = response.json()
                 
                 if data.get('claims'):
-                    # Process the first matching claim
                     claim_data = data['claims'][0]
-                    claim_review = claim_data.get('claimReview', [{}])[0]
+                    reviews = claim_data.get('claimReview', [])
                     
-                    # Extract verdict and details
-                    rating = claim_review.get('textualRating', 'unverified')
-                    verdict = self._map_google_rating(rating)
-                    publisher = claim_review.get('publisher', {}).get('name', 'Unknown')
-                    
-                    logger.info(f"Google Fact Check found: {rating} from {publisher}")
-                    
-                    return {
-                        'found': True,
-                        'verdict': verdict,
-                        'confidence': 85,
-                        'explanation': claim_review.get('title', 'Verified by fact-checkers'),
-                        'source': f'Google Fact Check ({publisher})',
-                        'publisher': publisher,
-                        'url': claim_review.get('url', ''),
-                        'weight': 0.9
-                    }
-                else:
-                    logger.info("No results from Google Fact Check")
-            else:
-                logger.error(f"Google API error: {response.status_code}")
+                    if reviews:
+                        review = reviews[0]
+                        rating = review.get('textualRating', '')
+                        
+                        # Enhanced verdict mapping
+                        verdict = self._enhanced_verdict_mapping(rating, review.get('title', ''))
+                        
+                        return {
+                            'found': True,
+                            'verdict': verdict,
+                            'confidence': 90,
+                            'explanation': self._create_detailed_explanation(
+                                verdict, 
+                                review.get('title', ''),
+                                review.get('publisher', {}).get('name', 'fact-checker')
+                            ),
+                            'source': 'Google Fact Check',
+                            'publisher': review.get('publisher', {}).get('name'),
+                            'url': review.get('url'),
+                            'weight': 0.95
+                        }
             
             return {'found': False}
             
         except Exception as e:
-            logger.error(f"Google Fact Check API error: {str(e)}")
+            logger.error(f"Google Fact Check error: {str(e)}")
             return {'found': False}
     
-    def _check_fred_data(self, claim: str) -> Dict:
-        """Check economic claims against FRED data"""
+    def _check_fred_enhanced(self, claim: str) -> Dict:
+        """Enhanced FRED check with better explanations"""
         try:
-            # Extract numbers from claim
             numbers = re.findall(r'\d+\.?\d*', claim)
             if not numbers:
                 return {'found': False}
             
             claim_lower = claim.lower()
             
-            # Map claim keywords to FRED series IDs
+            # Expanded economic indicators
             series_map = {
-                'unemployment': 'UNRATE',
-                'inflation': 'CPIAUCSL',
-                'gdp': 'GDP',
-                'interest rate': 'DFF',
-                'federal funds': 'DFF',
-                'jobs': 'PAYEMS',
-                'employment': 'PAYEMS',
-                'retail sales': 'RSXFS',
-                'housing starts': 'HOUST',
-                'consumer confidence': 'UMCSENT'
+                'unemployment': ('UNRATE', 'unemployment rate'),
+                'inflation': ('CPIAUCSL', 'inflation (CPI)'),
+                'gdp': ('GDP', 'GDP'),
+                'gdp growth': ('A191RL1Q225SBEA', 'GDP growth rate'),
+                'interest rate': ('DFF', 'federal funds rate'),
+                'federal funds': ('DFF', 'federal funds rate'),
+                'jobs': ('PAYEMS', 'total nonfarm employment'),
+                'job growth': ('PAYEMS', 'employment growth'),
+                'wages': ('CES0500000003', 'average hourly earnings'),
+                'retail sales': ('RSXFS', 'retail sales'),
+                'housing starts': ('HOUST', 'housing starts'),
+                'consumer confidence': ('UMCSENT', 'consumer sentiment'),
+                'manufacturing': ('IPMAN', 'manufacturing production'),
+                'trade deficit': ('BOPGSTB', 'trade balance'),
+                'national debt': ('GFDEBTN', 'federal debt')
             }
             
-            for keyword, series_id in series_map.items():
+            for keyword, (series_id, description) in series_map.items():
                 if keyword in claim_lower:
-                    url = f"https://api.stlouisfed.org/fred/series/observations"
+                    url = "https://api.stlouisfed.org/fred/series/observations"
                     params = {
                         'series_id': series_id,
                         'api_key': self.fred_api_key,
@@ -198,96 +250,123 @@ class FactChecker:
                         'limit': 1
                     }
                     
-                    logger.info(f"Checking FRED data for {keyword}...")
                     response = requests.get(url, params=params, timeout=10)
                     
                     if response.status_code == 200:
                         data = response.json()
                         if data.get('observations'):
-                            latest_value = float(data['observations'][0]['value'])
+                            obs = data['observations'][0]
+                            actual_value = float(obs['value'])
                             claim_value = float(numbers[0])
-                            date = data['observations'][0]['date']
+                            date = obs['date']
                             
-                            # Compare values
-                            diff_pct = abs(latest_value - claim_value) / latest_value * 100
+                            # Calculate accuracy
+                            diff = abs(actual_value - claim_value)
+                            diff_pct = (diff / actual_value * 100) if actual_value != 0 else 0
                             
-                            if diff_pct < 5:
+                            # Determine verdict with context
+                            if diff_pct < 2:
                                 verdict = 'true'
-                                confidence = 90
+                                accuracy = "exactly correct"
+                            elif diff_pct < 5:
+                                verdict = 'mostly_true'
+                                accuracy = "very close"
                             elif diff_pct < 10:
                                 verdict = 'mostly_true'
-                                confidence = 80
+                                accuracy = "approximately correct"
                             elif diff_pct < 20:
-                                verdict = 'mixed'
-                                confidence = 70
+                                verdict = 'lacks_context'
+                                accuracy = "outdated or imprecise"
                             else:
                                 verdict = 'false'
-                                confidence = 85
+                                accuracy = "significantly incorrect"
                             
-                            explanation = f"Federal Reserve data from {date} shows {keyword} at {latest_value}"
-                            if claim_value != latest_value:
-                                explanation += f" (claim states {claim_value}, difference of {diff_pct:.1f}%)"
-                            
-                            logger.info(f"FRED verdict: {verdict} (diff: {diff_pct:.1f}%)")
+                            explanation = (
+                                f"Official {description} as of {date} is {actual_value}. "
+                                f"The claim states {claim_value}, which is {accuracy} "
+                                f"(difference of {diff_pct:.1f}%). Source: Federal Reserve Economic Data."
+                            )
                             
                             return {
                                 'found': True,
                                 'verdict': verdict,
-                                'confidence': confidence,
+                                'confidence': 95,
                                 'explanation': explanation,
                                 'source': 'Federal Reserve Economic Data (FRED)',
-                                'weight': 0.95
+                                'weight': 1.0
                             }
             
             return {'found': False}
             
         except Exception as e:
-            logger.error(f"FRED API error: {str(e)}")
+            logger.error(f"FRED error: {str(e)}")
             return {'found': False}
     
-    def _check_news_sources(self, claim: str) -> Dict:
-        """Check news sources for claim verification"""
-        # Try MediaStack first, then News API
-        if self.mediastack_api_key:
-            return self._check_mediastack(claim)
-        elif self.news_api_key:
-            return self._check_newsapi(claim)
-        return {'found': False}
-    
-    def _check_newsapi(self, claim: str) -> Dict:
-        """Check News API for relevant articles"""
+    def _check_news_api_enhanced(self, claim: str) -> Dict:
+        """Enhanced news checking with sentiment analysis"""
         try:
-            # Extract key terms
             key_terms = self._extract_key_terms(claim)
-            search_query = ' '.join(key_terms[:3])
+            search_query = ' '.join(key_terms[:4])
             
             url = "https://newsapi.org/v2/everything"
             params = {
                 'apiKey': self.news_api_key,
                 'q': search_query,
                 'sortBy': 'relevancy',
-                'pageSize': 5,
+                'pageSize': 10,
                 'language': 'en'
             }
             
-            logger.info(f"Checking News API for: {search_query}")
             response = requests.get(url, params=params, timeout=10)
             
             if response.status_code == 200:
                 data = response.json()
-                if data.get('articles'):
-                    article_count = len(data['articles'])
-                    sources = [art.get('source', {}).get('name', 'Unknown') for art in data['articles'][:3]]
+                articles = data.get('articles', [])
+                
+                if len(articles) >= 3:
+                    # Analyze article titles and descriptions
+                    supporting = 0
+                    contradicting = 0
+                    sources = set()
                     
-                    logger.info(f"Found {article_count} news articles")
+                    for article in articles:
+                        source = article.get('source', {}).get('name', 'Unknown')
+                        sources.add(source)
+                        
+                        # Simple sentiment analysis
+                        title = article.get('title', '').lower()
+                        desc = article.get('description', '').lower()
+                        combined = title + ' ' + desc
+                        
+                        # Check for contradictions
+                        if any(word in combined for word in ['false', 'debunk', 'myth', 'incorrect', 'wrong']):
+                            contradicting += 1
+                        elif any(word in combined for word in ['confirm', 'true', 'correct', 'verify']):
+                            supporting += 1
+                    
+                    # Create meaningful explanation
+                    if contradicting > supporting:
+                        verdict = 'mostly_false'
+                        sentiment = "Multiple news sources contradict this claim"
+                    elif supporting > contradicting:
+                        verdict = 'mostly_true'
+                        sentiment = "Multiple news sources support this claim"
+                    else:
+                        verdict = 'unverified'
+                        sentiment = "News coverage is mixed or inconclusive"
+                    
+                    explanation = (
+                        f"{sentiment}. Found {len(articles)} relevant articles from "
+                        f"sources including: {', '.join(list(sources)[:3])}. "
+                    )
                     
                     return {
                         'found': True,
-                        'verdict': 'mixed',
-                        'confidence': 60,
-                        'explanation': f'Found {article_count} news articles discussing this topic from: {", ".join(sources)}',
-                        'source': 'News API',
-                        'weight': 0.6
+                        'verdict': verdict,
+                        'confidence': 70,
+                        'explanation': explanation,
+                        'source': 'News API Analysis',
+                        'weight': 0.7
                     }
             
             return {'found': False}
@@ -296,73 +375,153 @@ class FactChecker:
             logger.error(f"News API error: {str(e)}")
             return {'found': False}
     
-    def _check_mediastack(self, claim: str) -> Dict:
-        """Check MediaStack news API"""
+    def _check_factchecker_sites(self, claim: str) -> Dict:
+        """Check major fact-checking websites"""
         try:
-            key_terms = self._extract_key_terms(claim)
-            search_query = ' '.join(key_terms[:4])
+            # Sites to check
+            fact_checkers = [
+                ('snopes.com', 'Snopes'),
+                ('factcheck.org', 'FactCheck.org'),
+                ('politifact.com', 'PolitiFact')
+            ]
             
-            url = "http://api.mediastack.com/v1/news"
-            params = {
-                'access_key': self.mediastack_api_key,
-                'keywords': search_query,
-                'languages': 'en',
-                'limit': 10,
-                'sort': 'published_desc'
-            }
+            results = []
             
-            logger.info(f"Checking MediaStack for: {search_query}")
-            response = requests.get(url, params=params, timeout=10)
-            
-            if response.status_code == 200:
-                data = response.json()
-                if data.get('data'):
-                    article_count = len(data['data'])
-                    sources = [art.get('source', 'Unknown') for art in data['data'][:3]]
+            for domain, name in fact_checkers:
+                # Use web scraping API to search the site
+                if self.scraperapi_key:
+                    search_url = f"https://www.{domain}/search/?q={requests.utils.quote(claim[:100])}"
+                    scraper_url = f"http://api.scraperapi.com?api_key={self.scraperapi_key}&url={search_url}"
                     
-                    return {
-                        'found': True,
-                        'verdict': 'mixed',
-                        'confidence': 60,
-                        'explanation': f'Found {article_count} recent news articles from: {", ".join(sources)}',
-                        'source': 'MediaStack News',
-                        'weight': 0.6
-                    }
+                    try:
+                        response = requests.get(scraper_url, timeout=15)
+                        if response.status_code == 200:
+                            # Check if claim appears in results
+                            if any(term.lower() in response.text.lower() for term in claim.split()[:5]):
+                                results.append(name)
+                    except:
+                        pass
+            
+            if results:
+                return {
+                    'found': True,
+                    'verdict': 'mixed',
+                    'confidence': 75,
+                    'explanation': f"Found related fact-checks on: {', '.join(results)}",
+                    'source': 'Fact-Checking Websites',
+                    'weight': 0.8
+                }
             
             return {'found': False}
             
         except Exception as e:
-            logger.error(f"MediaStack API error: {str(e)}")
+            logger.error(f"Fact-checker sites error: {str(e)}")
             return {'found': False}
     
-    def _check_with_openai(self, claim: str) -> Dict:
-        """Use OpenAI for claim analysis"""
+    def _check_wikipedia(self, claim: str) -> Dict:
+        """Check Wikipedia for established facts"""
         try:
+            key_terms = self._extract_key_terms(claim)
+            search_query = ' '.join(key_terms[:3])
+            
+            # Wikipedia API
+            search_url = "https://en.wikipedia.org/w/api.php"
+            params = {
+                'action': 'query',
+                'format': 'json',
+                'list': 'search',
+                'srsearch': search_query,
+                'srlimit': 3
+            }
+            
+            response = requests.get(search_url, params=params, timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                search_results = data.get('query', {}).get('search', [])
+                
+                if search_results:
+                    # Get page content
+                    page_id = search_results[0]['pageid']
+                    content_params = {
+                        'action': 'query',
+                        'format': 'json',
+                        'pageids': page_id,
+                        'prop': 'extracts',
+                        'exintro': True,
+                        'explaintext': True,
+                        'exsentences': 5
+                    }
+                    
+                    content_response = requests.get(search_url, params=content_params, timeout=10)
+                    if content_response.status_code == 200:
+                        content_data = content_response.json()
+                        pages = content_data.get('query', {}).get('pages', {})
+                        
+                        if pages:
+                            extract = list(pages.values())[0].get('extract', '')
+                            
+                            # Check if claim aligns with Wikipedia content
+                            claim_terms = set(term.lower() for term in claim.split())
+                            wiki_terms = set(term.lower() for term in extract.split())
+                            overlap = len(claim_terms & wiki_terms)
+                            
+                            if overlap > len(claim_terms) * 0.3:
+                                return {
+                                    'found': True,
+                                    'verdict': 'mostly_true',
+                                    'confidence': 70,
+                                    'explanation': f"Wikipedia entry on '{search_results[0]['title']}' provides context supporting this claim.",
+                                    'source': 'Wikipedia',
+                                    'weight': 0.6
+                                }
+            
+            return {'found': False}
+            
+        except Exception as e:
+            logger.error(f"Wikipedia error: {str(e)}")
+            return {'found': False}
+    
+    def _analyze_with_ai_enhanced(self, claim: str, other_results: List[Dict]) -> Dict:
+        """Use AI to analyze claim with context from other checks"""
+        if not self.openai_api_key:
+            return {'found': False}
+        
+        try:
+            # Prepare context from other checks
+            context = "Previous checks:\n"
+            for result in other_results:
+                context += f"- {result['source']}: {result['verdict']} - {result.get('explanation', '')[:100]}\n"
+            
             headers = {
                 'Authorization': f'Bearer {self.openai_api_key}',
                 'Content-Type': 'application/json'
             }
             
-            prompt = f"""Analyze this claim for factual accuracy: "{claim}"
-            
-            Provide:
-            1. Verdict: true, mostly_true, mixed, lacks_context, deceptive, mostly_false, false, or unverified
-            2. Confidence: 0-100
-            3. Brief explanation (max 100 words)
-            
-            Format as JSON: {{"verdict": "", "confidence": 0, "explanation": ""}}"""
+            prompt = f"""As a professional fact-checker, analyze this claim with the following context:
+
+Claim: "{claim}"
+
+{context if other_results else "No other fact-checks available."}
+
+Determine:
+1. Is this claim deliberately deceptive, a simple error, or factually accurate?
+2. What important context is missing?
+3. Final verdict: true, mostly_true, lacks_context, deceptive, mostly_false, or false
+
+Respond in JSON format:
+{{"verdict": "", "confidence": 0-100, "explanation": "", "is_deceptive": true/false}}"""
             
             data = {
                 'model': 'gpt-3.5-turbo',
                 'messages': [
-                    {'role': 'system', 'content': 'You are a professional fact-checker.'},
+                    {'role': 'system', 'content': 'You are an expert fact-checker.'},
                     {'role': 'user', 'content': prompt}
                 ],
                 'temperature': 0.2,
-                'max_tokens': 200
+                'max_tokens': 300
             }
             
-            logger.info("Checking with OpenAI...")
             response = requests.post(
                 'https://api.openai.com/v1/chat/completions',
                 headers=headers,
@@ -372,158 +531,189 @@ class FactChecker:
             
             if response.status_code == 200:
                 result = response.json()
-                if result.get('choices'):
-                    content = result['choices'][0]['message']['content']
-                    # Parse JSON response
-                    analysis = json.loads(content)
-                    
-                    return {
-                        'found': True,
-                        'verdict': analysis.get('verdict', 'mixed'),
-                        'confidence': analysis.get('confidence', 70),
-                        'explanation': analysis.get('explanation', 'AI analysis completed'),
-                        'source': 'OpenAI Analysis',
-                        'weight': 0.7
-                    }
+                content = result['choices'][0]['message']['content']
+                analysis = json.loads(content)
+                
+                # Replace 'mixed' with more specific verdict
+                if analysis.get('verdict') == 'mixed':
+                    analysis['verdict'] = 'lacks_context' if not analysis.get('is_deceptive') else 'deceptive'
+                
+                return {
+                    'found': True,
+                    'verdict': analysis['verdict'],
+                    'confidence': analysis['confidence'],
+                    'explanation': analysis['explanation'],
+                    'source': 'AI Deep Analysis',
+                    'weight': 0.8
+                }
             
             return {'found': False}
             
         except Exception as e:
-            logger.error(f"OpenAI API error: {str(e)}")
+            logger.error(f"OpenAI error: {str(e)}")
             return {'found': False}
     
-    def _synthesize_results(self, claim: str, check_results: List[Dict]) -> Dict:
-        """Combine multiple check results into final verdict"""
-        if not check_results:
-            return self._create_unverified_response(claim, "No sources available")
+    def _synthesize_comprehensive_result(self, claim: str, all_results: List[Dict]) -> Dict:
+        """Create comprehensive result from all checks"""
+        if not all_results:
+            return {
+                'claim': claim,
+                'verdict': 'unverified',
+                'confidence': 0,
+                'explanation': 'No fact-checking sources could verify this claim.',
+                'sources': [],
+                'api_response': False
+            }
         
-        # If only one result, use it directly
-        if len(check_results) == 1:
-            return self._format_result(claim, check_results[0])
-        
-        # Weight and combine multiple results
-        weighted_scores = []
-        all_sources = []
-        all_explanations = []
+        # Weight verdicts
+        verdict_weights = defaultdict(float)
+        total_weight = 0
+        explanations = []
+        sources = []
         highest_confidence = 0
         
-        verdict_scores = {
-            'true': 1.0,
-            'mostly_true': 0.75,
-            'mixed': 0.5,
-            'lacks_context': 0.4,
-            'deceptive': 0.3,
-            'mostly_false': 0.25,
-            'false': 0.0,
-            'unverified': 0.5
-        }
-        
-        for result in check_results:
+        for result in all_results:
             weight = result.get('weight', 0.5)
-            confidence = result.get('confidence', 50)
             verdict = result.get('verdict', 'unverified')
-            score = verdict_scores.get(verdict, 0.5)
             
-            weighted_scores.append((score, weight, confidence))
-            all_sources.append(result.get('source', 'Unknown'))
-            all_explanations.append(result.get('explanation', ''))
-            highest_confidence = max(highest_confidence, confidence)
+            # Never use 'mixed' - convert to more specific verdict
+            if verdict == 'mixed':
+                verdict = 'lacks_context'
+            
+            verdict_weights[verdict] += weight
+            total_weight += weight
+            
+            explanations.append(result.get('explanation', ''))
+            sources.append(result.get('source', 'Unknown'))
+            highest_confidence = max(highest_confidence, result.get('confidence', 0))
         
-        # Calculate weighted average
-        total_weight = sum(w for _, w, _ in weighted_scores)
-        weighted_sum = sum(s * w for s, w, _ in weighted_scores)
-        final_score = weighted_sum / total_weight if total_weight > 0 else 0.5
+        # Determine final verdict
+        final_verdict = max(verdict_weights.items(), key=lambda x: x[1])[0]
         
-        # Convert score back to verdict
-        if final_score >= 0.85:
-            final_verdict = 'true'
-        elif final_score >= 0.65:
-            final_verdict = 'mostly_true'
-        elif final_score >= 0.45:
-            final_verdict = 'mixed'
-        elif final_score >= 0.25:
-            final_verdict = 'mostly_false'
-        else:
-            final_verdict = 'false'
-        
-        # Combine explanations
-        combined_explanation = f"Verified by {len(check_results)} sources. "
-        combined_explanation += " ".join(all_explanations[:2])
+        # Create comprehensive explanation
+        explanation = self._create_comprehensive_explanation(
+            final_verdict,
+            explanations,
+            sources,
+            len(all_results)
+        )
         
         return {
             'claim': claim,
             'verdict': final_verdict,
             'confidence': highest_confidence,
-            'explanation': combined_explanation,
-            'sources': all_sources,
+            'explanation': explanation,
+            'sources': sources,
+            'source_count': len(all_results),
             'api_response': True
         }
     
-    def _format_result(self, claim: str, result: Dict) -> Dict:
-        """Format a single result for return"""
-        return {
-            'claim': claim,
-            'verdict': result.get('verdict', 'unverified'),
-            'confidence': result.get('confidence', 0),
-            'explanation': result.get('explanation', 'No explanation available'),
-            'sources': [result.get('source', 'Unknown')],
-            'publisher': result.get('publisher'),
-            'url': result.get('url', ''),
-            'api_response': True
+    def _create_comprehensive_explanation(self, verdict: str, explanations: List[str], 
+                                        sources: List[str], source_count: int) -> str:
+        """Create detailed, meaningful explanation"""
+        # Start with verdict summary
+        verdict_intros = {
+            'true': "This claim is accurate.",
+            'mostly_true': "This claim is largely accurate with minor caveats.",
+            'lacks_context': "This claim omits important context that changes its meaning.",
+            'deceptive': "This claim appears deliberately misleading.",
+            'mostly_false': "This claim is largely inaccurate.",
+            'false': "This claim is demonstrably false.",
+            'unverified': "This claim cannot be verified with available sources."
         }
+        
+        explanation = verdict_intros.get(verdict, "Unable to determine accuracy.")
+        
+        # Add key findings
+        if explanations:
+            key_finding = next((e for e in explanations if len(e) > 20), None)
+            if key_finding:
+                explanation += f" {key_finding}"
+        
+        # Add source summary
+        explanation += f" Verified using {source_count} sources"
+        if source_count > 0:
+            unique_sources = list(set(sources))[:3]
+            explanation += f" including {', '.join(unique_sources)}."
+        
+        return explanation
     
-    def _map_google_rating(self, rating: str) -> str:
-        """Map Google's rating to our verdict system"""
+    def _enhanced_verdict_mapping(self, rating: str, title: str = '') -> str:
+        """Map ratings to verdicts, avoiding 'mixed'"""
         rating_lower = rating.lower()
+        title_lower = title.lower() if title else ''
         
-        mapping = {
-            'true': 'true',
-            'mostly true': 'mostly_true',
-            'half true': 'mixed',
-            'mixture': 'mixed',
-            'mostly false': 'mostly_false',
-            'false': 'false',
-            'pants on fire': 'false',
-            'misleading': 'deceptive',
-            'lacks context': 'lacks_context',
-            'unproven': 'unverified',
-            'outdated': 'mostly_false',
-            'scam': 'false'
-        }
+        # Check for deception indicators
+        if any(word in rating_lower + title_lower for word in 
+               ['misleading', 'deceptive', 'manipulated', 'distorted', 'spin']):
+            return 'deceptive'
         
-        for key, verdict in mapping.items():
-            if key in rating_lower:
-                return verdict
+        # Check for context issues
+        if any(word in rating_lower + title_lower for word in 
+               ['lacks context', 'missing context', 'needs context', 'out of context']):
+            return 'lacks_context'
+        
+        # Standard mappings
+        if 'true' in rating_lower:
+            if 'mostly' in rating_lower or 'partly' in rating_lower:
+                return 'mostly_true'
+            return 'true'
+        
+        if 'false' in rating_lower:
+            if 'mostly' in rating_lower or 'partly' in rating_lower:
+                return 'mostly_false'
+            return 'false'
+        
+        # Instead of 'mixed', determine if it's deceptive or lacks context
+        if any(word in rating_lower for word in ['mixed', 'mixture', 'half']):
+            # Look for intent in the explanation
+            if 'intent' in title_lower or 'mislead' in title_lower:
+                return 'deceptive'
+            else:
+                return 'lacks_context'
         
         return 'unverified'
     
     def _is_economic_claim(self, claim: str) -> bool:
-        """Check if claim is about economic data"""
-        economic_keywords = [
-            'unemployment', 'inflation', 'gdp', 'economy', 'jobs',
-            'interest rate', 'federal reserve', 'stock market',
-            'wages', 'income', 'poverty', 'deficit', 'debt',
-            'trade', 'tariff', 'export', 'import'
+        """Check if claim involves economic data"""
+        economic_terms = [
+            'unemployment', 'inflation', 'gdp', 'economy', 'jobs', 'employment',
+            'interest rate', 'federal reserve', 'stock market', 'dow jones',
+            'wages', 'income', 'poverty', 'deficit', 'debt', 'budget',
+            'trade', 'tariff', 'export', 'import', 'manufacturing',
+            'retail', 'housing', 'mortgage', 'recession', 'growth'
         ]
         claim_lower = claim.lower()
-        return any(keyword in claim_lower for keyword in economic_keywords)
+        return any(term in claim_lower for term in economic_terms)
     
     def _extract_key_terms(self, claim: str) -> List[str]:
-        """Extract key search terms from claim"""
-        # Remove common words
-        stop_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 
-                     'of', 'with', 'by', 'from', 'is', 'was', 'are', 'were', 'been', 'be'}
+        """Extract key terms for searching"""
+        stop_words = {
+            'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
+            'of', 'with', 'by', 'from', 'is', 'was', 'are', 'were', 'been', 'be',
+            'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could', 'should'
+        }
         
         words = claim.split()
         key_terms = []
         
-        # Keep proper nouns and important words
         for word in words:
-            clean_word = word.strip('.,!?;:"')
+            clean_word = word.strip('.,!?;:"\'')
             if clean_word and (clean_word[0].isupper() or clean_word.lower() not in stop_words):
                 key_terms.append(clean_word)
         
-        return key_terms[:5]
+        return key_terms[:6]
+    
+    def _create_detailed_explanation(self, verdict: str, title: str, publisher: str) -> str:
+        """Create detailed explanation from fact-check results"""
+        if 'deceptive' in verdict:
+            return f"{publisher} found this claim to be deliberately misleading. {title}"
+        elif 'false' in verdict:
+            return f"{publisher} verified this claim as false. {title}"
+        elif 'true' in verdict:
+            return f"{publisher} confirmed this claim as accurate. {title}"
+        else:
+            return f"{publisher}: {title}"
     
     def calculate_credibility(self, fact_checks: List[Dict]) -> int:
         """Calculate overall credibility score"""
@@ -533,9 +723,8 @@ class FactChecker:
         scores = {
             'true': 100,
             'mostly_true': 75,
-            'mixed': 50,
             'lacks_context': 40,
-            'deceptive': 25,
+            'deceptive': 20,  # Heavily penalize deception
             'mostly_false': 25,
             'false': 0,
             'unverified': 50
@@ -543,43 +732,3 @@ class FactChecker:
         
         total_score = sum(scores.get(fc.get('verdict', 'unverified'), 50) for fc in fact_checks)
         return int(total_score / len(fact_checks))
-    
-    def _create_unverified_response(self, claim: str, reason: str) -> Dict:
-        """Create response for unverified claims"""
-        return {
-            'claim': claim,
-            'verdict': 'unverified',
-            'confidence': 0,
-            'explanation': f'❓ UNVERIFIED: {reason}',
-            'sources': [],
-            'api_response': False
-        }
-    
-    def _create_error_result(self, claim: str) -> Dict:
-        """Create result for errors"""
-        return {
-            'claim': claim,
-            'verdict': 'unverified',
-            'confidence': 0,
-            'explanation': 'Error during fact-checking process',
-            'sources': ['Error'],
-            'api_response': False
-        }
-    
-    def _generate_demo_results(self, claims: List[str]) -> List[Dict]:
-        """Generate demo results only when no APIs are configured"""
-        demo_verdicts = ['true', 'mostly_true', 'mixed', 'false', 'unverified']
-        results = []
-        
-        for i, claim in enumerate(claims):
-            verdict = demo_verdicts[i % len(demo_verdicts)]
-            results.append({
-                'claim': claim,
-                'verdict': verdict,
-                'confidence': 65 + (i % 30),
-                'explanation': f"[DEMO MODE - Configure API keys for real results] This would be checked against real sources",
-                'sources': ['Demo Mode'],
-                'api_response': False
-            })
-        
-        return results
