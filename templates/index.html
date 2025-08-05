@@ -332,21 +332,6 @@
             background: #fee2e2;
         }
 
-        /* YouTube Input */
-        .youtube-input input {
-            width: 100%;
-            padding: 16px;
-            border: 2px solid #e5e7eb;
-            border-radius: 12px;
-            font-size: 16px;
-            transition: border-color 0.2s;
-        }
-
-        .youtube-input input:focus {
-            outline: none;
-            border-color: #3b82f6;
-        }
-
         /* Analyze Button */
         .analyze-button {
             width: 100%;
@@ -1022,10 +1007,6 @@
                     <i class="fas fa-file-upload"></i>
                     Upload File
                 </button>
-                <button class="tab-button" data-tab="youtube">
-                    <i class="fab fa-youtube"></i>
-                    YouTube Video
-                </button>
             </div>
 
             <!-- Text Input Panel -->
@@ -1057,20 +1038,6 @@
                     <button class="remove-file" onclick="removeFile()">
                         <i class="fas fa-times"></i>
                     </button>
-                </div>
-            </div>
-
-            <!-- YouTube Input Panel -->
-            <div class="input-panel" id="youtube-panel">
-                <div class="youtube-input">
-                    <input 
-                        type="text" 
-                        id="youtube-url" 
-                        placeholder="https://www.youtube.com/watch?v=..."
-                    >
-                    <div class="input-info">
-                        <span>Enter a YouTube video URL to extract and analyze its transcript</span>
-                    </div>
                 </div>
             </div>
 
