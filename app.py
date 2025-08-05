@@ -68,34 +68,106 @@ def index():
 
 @app.route('/api/analyze', methods=['POST'])
 def analyze():
-    """Start transcript analysis"""
+    """Start transcript analysis - handles text, file, and YouTube inputs"""
     try:
         job_id = str(uuid.uuid4())
+        logger.info(f"Starting analysis job: {job_id}")
         
-        # Get input type
-        input_type = request.form.get('type') or request.json.get('type')
+        # Handle different input types based on content type
+        if request.content_type and 'multipart/form-data' in request.content_type:
+            # File upload
+            input_type = request.form.get('type', 'file')
+        else:
+            # JSON input (text or YouTube)
+            data = request.get_json()
+            input_type = data.get('type') if data else None
+        
+        logger.info(f"Input type: {input_type}")
         
         if input_type == 'text':
             # Text input
             data = request.get_json()
+            if not data or not data.get('content'):
+                return jsonify({
+                    'success': False,
+                    'error': 'No text content provided'
+                }), 400
+                
             transcript = data.get('content', '')
-            source = 'Direct Input'
+            source = 'Direct Text Input'
+            logger.info(f"Processing text input, length: {len(transcript)}")
             
         elif input_type == 'youtube':
             # YouTube URL
             data = request.get_json()
-            url = data.get('url', '')
-            
-            # Extract transcript from YouTube
-            result = transcript_processor.parse_youtube(url)
-            if not result['success']:
+            if not data or not data.get('url'):
                 return jsonify({
                     'success': False,
-                    'error': result.get('error', 'Failed to extract YouTube transcript')
+                    'error': 'No YouTube URL provided'
+                }), 400
+                
+            url = data.get('url', '').strip()
+            logger.info(f"Processing YouTube URL: {url}")
+            
+            # Validate YouTube URL format
+            if not url:
+                return jsonify({
+                    'success': False,
+                    'error': 'Empty YouTube URL'
                 }), 400
             
-            transcript = result['transcript']
-            source = f"YouTube: {result.get('title', 'Unknown')}"
+            if 'youtube.com' not in url and 'youtu.be' not in url:
+                return jsonify({
+                    'success': False,
+                    'error': 'Invalid YouTube URL. Please provide a valid YouTube video URL.'
+                }), 400
+            
+            # Extract transcript from YouTube
+            try:
+                result = transcript_processor.parse_youtube(url)
+                logger.info(f"YouTube extraction result: {result}")
+                
+                if not result['success']:
+                    error_msg = result.get('error', 'Failed to extract YouTube transcript')
+                    logger.error(f"YouTube extraction failed: {error_msg}")
+                    
+                    # Provide more helpful error messages
+                    if 'Transcripts are disabled' in error_msg:
+                        error_msg = 'This video has transcripts/captions disabled. Please try a different video.'
+                    elif 'No transcript available' in error_msg:
+                        error_msg = 'No transcript/captions found for this video. Please try a video with captions enabled.'
+                    elif 'Video is unavailable' in error_msg:
+                        error_msg = 'This video is unavailable or private. Please try a public video.'
+                    elif 'Invalid YouTube URL' in error_msg:
+                        error_msg = 'Could not extract video ID from URL. Please check the URL format.'
+                    
+                    return jsonify({
+                        'success': False,
+                        'error': error_msg
+                    }), 400
+                
+                transcript = result.get('transcript', '')
+                video_title = result.get('title', 'Unknown Video')
+                video_id = result.get('video_id', '')
+                duration = result.get('duration', 0)
+                
+                # Check duration limit
+                if duration > Config.YOUTUBE_MAX_DURATION:
+                    return jsonify({
+                        'success': False,
+                        'error': f'Video is too long. Maximum duration is {Config.YOUTUBE_MAX_DURATION // 60} minutes.'
+                    }), 400
+                
+                source = f"YouTube: {video_title} (ID: {video_id})"
+                logger.info(f"Successfully extracted YouTube transcript: {len(transcript)} characters")
+                
+            except Exception as e:
+                logger.error(f"YouTube extraction exception: {str(e)}")
+                logger.error(traceback.format_exc())
+                return jsonify({
+                    'success': False,
+                    'error': f'Failed to extract YouTube transcript: {str(e)}'
+                }), 500
             
         elif input_type == 'file':
             # File upload
@@ -107,44 +179,64 @@ def analyze():
                 return jsonify({'success': False, 'error': 'No file selected'}), 400
             
             if not allowed_file(file.filename):
-                return jsonify({'success': False, 'error': 'Invalid file type'}), 400
+                return jsonify({'success': False, 'error': 'Invalid file type. Allowed types: TXT, SRT, VTT'}), 400
+            
+            # Check file size
+            file.seek(0, 2)  # Seek to end
+            file_size = file.tell()
+            file.seek(0)  # Reset to beginning
+            
+            if file_size > Config.MAX_FILE_SIZE:
+                return jsonify({'success': False, 'error': f'File too large. Maximum size is {Config.MAX_FILE_SIZE // (1024*1024)}MB'}), 400
             
             # Save file
             filename = secure_filename(file.filename)
-            filepath = os.path.join(UPLOAD_FOLDER, filename)
+            filepath = os.path.join(UPLOAD_FOLDER, f"{job_id}_{filename}")
             file.save(filepath)
             
-            # Process file
-            content = open(filepath, 'r', encoding='utf-8').read()
-            
-            if filename.endswith('.srt'):
-                result = transcript_processor.parse_srt(content)
-            elif filename.endswith('.vtt'):
-                result = transcript_processor.parse_vtt(content)
-            else:
-                result = transcript_processor.parse_text(content)
-            
-            if not result['success']:
-                return jsonify({
-                    'success': False,
-                    'error': result.get('error', 'Failed to parse file')
-                }), 400
-            
-            transcript = result['transcript']
-            source = f"File: {filename}"
-            
-            # Clean up
-            os.remove(filepath)
+            try:
+                # Process file
+                with open(filepath, 'r', encoding='utf-8', errors='ignore') as f:
+                    content = f.read()
+                
+                logger.info(f"Processing file: {filename}, size: {len(content)} chars")
+                
+                if filename.endswith('.srt'):
+                    result = transcript_processor.parse_srt(content)
+                elif filename.endswith('.vtt'):
+                    result = transcript_processor.parse_vtt(content)
+                else:
+                    result = transcript_processor.parse_text(content)
+                
+                if not result['success']:
+                    return jsonify({
+                        'success': False,
+                        'error': result.get('error', 'Failed to parse file')
+                    }), 400
+                
+                transcript = result['transcript']
+                source = f"File: {filename}"
+                
+            finally:
+                # Always clean up the file
+                if os.path.exists(filepath):
+                    os.remove(filepath)
             
         else:
-            return jsonify({'success': False, 'error': 'Invalid input type'}), 400
+            return jsonify({'success': False, 'error': 'Invalid input type. Must be text, youtube, or file.'}), 400
         
-        # Validate transcript
+        # Validate transcript content
         if not transcript or len(transcript.strip()) < 50:
-            return jsonify({'success': False, 'error': 'Transcript too short'}), 400
+            return jsonify({
+                'success': False,
+                'error': 'Content too short. Please provide at least 50 characters of text.'
+            }), 400
         
         if len(transcript) > Config.MAX_TRANSCRIPT_LENGTH:
-            return jsonify({'success': False, 'error': 'Transcript too long'}), 400
+            return jsonify({
+                'success': False,
+                'error': f'Content too long. Maximum length is {Config.MAX_TRANSCRIPT_LENGTH:,} characters.'
+            }), 400
         
         # Create job
         job_data = {
@@ -152,24 +244,36 @@ def analyze():
             'status': 'processing',
             'progress': 0,
             'source': source,
+            'input_type': input_type,
             'created_at': datetime.now().isoformat()
         }
         job_storage.set(job_id, job_data)
         
+        logger.info(f"Created job {job_id} for {input_type} input: {source}")
+        
         # Start processing in background
-        thread = Thread(target=process_transcript, args=(job_id, transcript, source))
+        thread = Thread(
+            target=process_transcript, 
+            args=(job_id, transcript, source),
+            name=f"process_{job_id}"
+        )
+        thread.daemon = True
         thread.start()
         
         return jsonify({
             'success': True,
             'job_id': job_id,
-            'message': 'Analysis started'
+            'message': 'Analysis started',
+            'source': source
         })
         
     except Exception as e:
         logger.error(f"Analysis error: {str(e)}")
         logger.error(traceback.format_exc())
-        return jsonify({'success': False, 'error': str(e)}), 500
+        return jsonify({
+            'success': False,
+            'error': f'Server error: {str(e)}'
+        }), 500
 
 def generate_conversational_summary(fact_check_results, credibility_score, speaker, speaker_context, speaker_history):
     """Generate conversational summary with full speaker context"""
@@ -323,18 +427,22 @@ def get_credibility_label(score):
 def process_transcript(job_id, transcript, source):
     """Process transcript through the fact-checking pipeline with speaker context"""
     try:
+        logger.info(f"Starting transcript processing for job {job_id}")
+        
         # Ensure job exists
         if not job_storage.exists(job_id):
             logger.error(f"Job {job_id} not found in job storage")
             return
         
         # Clean transcript
-        job_storage.update(job_id, {'progress': 20})
+        job_storage.update(job_id, {'progress': 20, 'status': 'processing'})
         cleaned_transcript = transcript_processor.clean_transcript(transcript)
+        logger.info(f"Cleaned transcript: {len(cleaned_transcript)} chars")
         
         # Identify speakers and topics
-        job_storage.update(job_id, {'progress': 30})
+        job_storage.update(job_id, {'progress': 30, 'status': 'processing'})
         speakers, topics = claim_extractor.identify_speakers(transcript)
+        logger.info(f"Identified {len(speakers)} speakers and {len(topics)} topics")
         
         # Extract main speaker for history tracking
         main_speaker = None
@@ -344,16 +452,16 @@ def process_transcript(job_id, transcript, source):
             # Use speaker_tracker to extract speaker, fallback to first identified speaker
             extracted_speaker = speaker_tracker.extract_speaker(source, transcript)
             main_speaker = extracted_speaker if extracted_speaker else speakers[0]
-            logger.info(f"Job {job_id}: Main speaker identified as {main_speaker}")
+            logger.info(f"Main speaker identified as {main_speaker}")
             
             # Get speaker background and context
             speaker_context = fact_checker.get_speaker_context(main_speaker)
             logger.info(f"Speaker context retrieved: {speaker_context.get('credibility_notes', 'None')}")
         
         # Extract claims with full context
-        job_storage.update(job_id, {'progress': 40})
+        job_storage.update(job_id, {'progress': 40, 'status': 'processing'})
         claims = claim_extractor.extract_claims(cleaned_transcript)
-        logger.info(f"Job {job_id}: Extracted {len(claims)} claims")
+        logger.info(f"Extracted {len(claims)} claims")
         
         # Add context resolution
         for claim in claims:
@@ -364,10 +472,10 @@ def process_transcript(job_id, transcript, source):
             context_resolver.add_claim_to_context(claim['text'])
         
         # Prioritize and filter claims
-        job_storage.update(job_id, {'progress': 50})
+        job_storage.update(job_id, {'progress': 50, 'status': 'processing'})
         verified_claims = claim_extractor.filter_verifiable(claims)
         prioritized_claims = claim_extractor.prioritize_claims(verified_claims)
-        logger.info(f"Job {job_id}: Checking {len(prioritized_claims)} prioritized claims")
+        logger.info(f"Checking {len(prioritized_claims)} prioritized claims")
         
         # Prepare claims for checking
         claims_to_check = []
@@ -386,7 +494,7 @@ def process_transcript(job_id, transcript, source):
                 })
         
         # Fact check claims with comprehensive checking
-        job_storage.update(job_id, {'progress': 70})
+        job_storage.update(job_id, {'progress': 70, 'status': 'fact_checking'})
         fact_check_results = []
         
         # Set a maximum time for fact-checking (60 seconds total)
@@ -423,6 +531,7 @@ def process_transcript(job_id, transcript, source):
                 # Update progress
                 progress = 70 + int((len(fact_check_results) / len(claims_to_check)) * 20)
                 job_storage.update(job_id, {'progress': progress})
+                
             except Exception as e:
                 logger.error(f"Error checking batch starting at {i}: {str(e)}")
                 for claim_data in batch:
@@ -431,7 +540,7 @@ def process_transcript(job_id, transcript, source):
                     fact_check_results.append(demo_result)
         
         # Calculate overall credibility
-        job_storage.update(job_id, {'progress': 90})
+        job_storage.update(job_id, {'progress': 90, 'status': 'generating_report'})
         credibility_score = fact_checker.calculate_credibility(fact_check_results)
         
         # Generate enhanced conversational summary with speaker context
@@ -448,6 +557,11 @@ def process_transcript(job_id, transcript, source):
         speaker_history = None
         if main_speaker:
             speaker_history = speaker_tracker.get_speaker_summary(main_speaker)
+        
+        # Add note about API availability if in demo mode
+        analysis_notes = []
+        if not Config.get_active_apis():
+            analysis_notes.append("Running in demo mode - results are simulated. Configure API keys for real fact-checking.")
         
         # Compile results with speaker context
         results = {
@@ -467,6 +581,7 @@ def process_transcript(job_id, transcript, source):
             'fact_checks': fact_check_results,
             'summary': summary,
             'conversational_summary': conversational_summary,
+            'analysis_notes': analysis_notes,
             'analyzed_at': datetime.now().isoformat()
         }
         
@@ -503,7 +618,8 @@ def get_status(job_id):
         'job_id': job_id,
         'status': job_data.get('status'),
         'progress': job_data.get('progress', 0),
-        'error': job_data.get('error')
+        'error': job_data.get('error'),
+        'source': job_data.get('source')
     })
 
 @app.route('/api/results/<job_id>')
@@ -515,7 +631,10 @@ def get_results(job_id):
         return jsonify({'success': False, 'error': 'Job not found'}), 404
     
     if job_data.get('status') != 'complete':
-        return jsonify({'success': False, 'error': 'Job not complete'}), 400
+        return jsonify({
+            'success': False,
+            'error': f'Job not complete. Current status: {job_data.get("status", "unknown")}'
+        }), 400
     
     return jsonify({
         'success': True,
@@ -665,6 +784,25 @@ def generate_text_report(results):
     
     return "\n".join(report)
 
+@app.route('/api/test/youtube', methods=['GET'])
+def test_youtube():
+    """Test endpoint to verify YouTube functionality"""
+    try:
+        # Test with a known public video
+        test_url = "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+        result = transcript_processor.parse_youtube(test_url)
+        
+        return jsonify({
+            'success': True,
+            'test_url': test_url,
+            'result': result
+        })
+    except Exception as e:
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
 @app.errorhandler(404)
 def not_found(error):
     """Handle 404 errors"""
@@ -678,4 +816,5 @@ def internal_error(error):
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
+    logger.info(f"Starting app on port {port}")
     app.run(host='0.0.0.0', port=port, debug=Config.DEBUG)
