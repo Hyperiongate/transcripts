@@ -501,7 +501,7 @@ function formatVerdict(verdict) {
     return verdict.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
 }
 
-// Export results
+// Export results as PDF only
 async function exportResults(format) {
     try {
         const response = await fetch(`/api/export/${currentJobId}`, {
@@ -509,15 +509,22 @@ async function exportResults(format) {
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({ format: format })
+            body: JSON.stringify({ format: 'pdf' })  // Always PDF
         });
         
-        const result = await response.json();
-        
-        if (result.success) {
-            // Download the file
-            window.location.href = result.download_url;
+        if (response.ok) {
+            // Create a blob from the response
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `fact-check-report-${new Date().toISOString().split('T')[0]}.pdf`;
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            document.body.removeChild(a);
         } else {
+            const result = await response.json();
             alert('Export failed: ' + (result.error || 'Unknown error'));
         }
     } catch (error) {
