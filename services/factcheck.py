@@ -31,8 +31,36 @@ class FactChecker:
         self.scraperapi_key = Config.SCRAPERAPI_KEY
         self.scrapingbee_api_key = Config.SCRAPINGBEE_API_KEY
         
-        # Expandable speaker backgrounds - not just Trump
-        self.speaker_backgrounds = {
+        # Expandable speaker backgrounds - dynamically loaded
+        self.speaker_backgrounds = self._load_speaker_backgrounds()
+        
+        # Economic series mapping
+        self.fred_series = {
+            'unemployment': ('UNRATE', 'unemployment rate'),
+            'inflation': ('CPIAUCSL', 'inflation (CPI)'),
+            'gdp': ('GDP', 'GDP'),
+            'gdp growth': ('A191RL1Q225SBEA', 'GDP growth rate'),
+            'interest rate': ('DFF', 'federal funds rate'),
+            'federal funds': ('DFF', 'federal funds rate'),
+            'jobs': ('PAYEMS', 'total nonfarm employment'),
+            'job growth': ('PAYEMS', 'employment growth'),
+            'wages': ('CES0500000003', 'average hourly earnings'),
+            'retail sales': ('RSXFS', 'retail sales'),
+            'housing starts': ('HOUST', 'housing starts'),
+            'consumer confidence': ('UMCSENT', 'consumer sentiment'),
+            'manufacturing': ('IPMAN', 'manufacturing production'),
+            'trade deficit': ('BOPGSTB', 'trade balance'),
+            'national debt': ('GFDEBTN', 'federal debt')
+        }
+        
+        self._validate_configuration()
+    
+    def _load_speaker_backgrounds(self) -> Dict:
+        """Load speaker backgrounds - expandable system for any speaker"""
+        # This could be loaded from a database or external file in production
+        # For now, return a comprehensive dictionary with various examples
+        return {
+            # Political figures with various backgrounds
             'Donald Trump': {
                 'criminal_record': 'Convicted felon - 34 counts of falsifying business records (May 2024)',
                 'fraud_history': 'Found liable for civil fraud - inflating wealth to obtain favorable loans and insurance rates ($355 million penalty)',
@@ -59,29 +87,61 @@ class FactChecker:
             'Bernie Sanders': {
                 'credibility_notes': 'Generally accurate on policy positions, sometimes overstates statistics',
                 'fact_check_history': 'Tends to round up numbers for rhetorical effect'
+            },
+            
+            # Positive examples
+            'Mother Teresa': {
+                'credibility_notes': 'Devoted humanitarian with impeccable reputation for honesty and service',
+                'fact_check_history': 'No known instances of false public statements',
+                'humanitarian_record': 'Nobel Peace Prize winner, founded Missionaries of Charity, served the poor for decades'
+            },
+            'Jimmy Carter': {
+                'credibility_notes': 'Known for exceptional honesty and integrity throughout political career',
+                'fact_check_history': 'Consistently rated as one of the most truthful political figures',
+                'humanitarian_record': 'Extensive post-presidency humanitarian work, Habitat for Humanity'
+            },
+            'Nelson Mandela': {
+                'credibility_notes': 'Internationally respected for integrity and moral leadership',
+                'fact_check_history': 'Known for honest discourse even on difficult topics',
+                'humanitarian_record': 'Led peaceful transition from apartheid, promoted reconciliation'
+            },
+            
+            # Business figures
+            'Elon Musk': {
+                'credibility_notes': 'Mixed record on predictions and timeline claims',
+                'fact_check_history': 'Often overly optimistic about product timelines and capabilities'
+            },
+            'Elizabeth Holmes': {
+                'criminal_record': 'Convicted of wire fraud and conspiracy - Theranos scandal',
+                'fraud_history': 'Deceived investors about blood testing technology capabilities',
+                'credibility_notes': 'Systematically misled investors, patients, and media about company technology'
+            },
+            'Sam Bankman-Fried': {
+                'criminal_record': 'Convicted of fraud and conspiracy - FTX collapse',
+                'fraud_history': 'Misused billions in customer funds',
+                'credibility_notes': 'Made false statements about FTX financial position and customer fund safety'
+            },
+            
+            # Media figures
+            'Tucker Carlson': {
+                'credibility_notes': 'Court documents revealed "not stating actual facts" defense in lawsuit',
+                'fact_check_history': 'Numerous false and misleading claims documented by fact-checkers'
+            },
+            'Rachel Maddow': {
+                'credibility_notes': 'Generally factual reporting with occasional corrections issued',
+                'fact_check_history': 'Mixed record - mostly accurate with some misleading segments'
+            },
+            
+            # Historical figures
+            'Richard Nixon': {
+                'credibility_notes': 'Resigned from presidency due to Watergate scandal and cover-up',
+                'fact_check_history': 'Famous for "I am not a crook" false statement'
+            },
+            'George Washington': {
+                'credibility_notes': 'Historical reputation for honesty - "cannot tell a lie" legend',
+                'fact_check_history': 'No documented pattern of deception'
             }
         }
-        
-        # Economic series mapping
-        self.fred_series = {
-            'unemployment': ('UNRATE', 'unemployment rate'),
-            'inflation': ('CPIAUCSL', 'inflation (CPI)'),
-            'gdp': ('GDP', 'GDP'),
-            'gdp growth': ('A191RL1Q225SBEA', 'GDP growth rate'),
-            'interest rate': ('DFF', 'federal funds rate'),
-            'federal funds': ('DFF', 'federal funds rate'),
-            'jobs': ('PAYEMS', 'total nonfarm employment'),
-            'job growth': ('PAYEMS', 'employment growth'),
-            'wages': ('CES0500000003', 'average hourly earnings'),
-            'retail sales': ('RSXFS', 'retail sales'),
-            'housing starts': ('HOUST', 'housing starts'),
-            'consumer confidence': ('UMCSENT', 'consumer sentiment'),
-            'manufacturing': ('IPMAN', 'manufacturing production'),
-            'trade deficit': ('BOPGSTB', 'trade balance'),
-            'national debt': ('GFDEBTN', 'federal debt')
-        }
-        
-        self._validate_configuration()
     
     def _validate_configuration(self):
         """Log which APIs are available"""
@@ -112,29 +172,74 @@ class FactChecker:
         # Normalize speaker name
         speaker_lower = speaker_name.lower()
         
-        # Check all known speakers
+        # Check all known speakers with fuzzy matching
         for known_speaker, info in self.speaker_backgrounds.items():
-            if known_speaker.lower() in speaker_lower or speaker_lower in known_speaker.lower():
+            known_lower = known_speaker.lower()
+            
+            # Check various matching patterns
+            if (known_lower in speaker_lower or 
+                speaker_lower in known_lower or
+                self._fuzzy_match_speaker(speaker_lower, known_lower)):
+                
                 logger.info(f"Found speaker info for: {known_speaker}")
                 return {
                     'speaker': known_speaker,
                     'has_criminal_record': 'criminal_record' in info,
+                    'has_fraud_history': 'fraud_history' in info,
+                    'has_humanitarian_record': 'humanitarian_record' in info,
                     **info
                 }
         
-        # Handle generic "President" mentions
-        if 'president' in speaker_lower and len(speaker_lower.split()) == 1:
-            # Without more context, we can't determine which president
+        # Handle generic titles
+        if any(title in speaker_lower for title in ['president', 'senator', 'governor', 'mayor']):
+            # Try to extract more context
+            words = speaker_lower.split()
+            if len(words) > 1:
+                # Try to find a match with the name after the title
+                for i, word in enumerate(words):
+                    if word in ['president', 'senator', 'governor', 'mayor'] and i + 1 < len(words):
+                        potential_name = ' '.join(words[i+1:])
+                        # Recursive call with just the name
+                        return self.get_speaker_context(potential_name)
+            
+            # If we can't determine which specific person
             return {
                 'speaker': speaker_name,
-                'credibility_notes': 'Unable to determine which president is being referenced'
+                'credibility_notes': f'Unable to determine which specific {speaker_name} is being referenced'
             }
         
-        # For unknown speakers, return neutral info
-        return {
-            'speaker': speaker_name,
-            'credibility_notes': 'No prior fact-checking history available'
-        }
+        # For unknown speakers, check if we can infer anything from the name
+        context = {'speaker': speaker_name}
+        
+        # Check for professional titles that might indicate credibility
+        if any(title in speaker_lower for title in ['dr.', 'doctor', 'professor', 'judge']):
+            context['credibility_notes'] = 'Professional title suggests subject matter expertise'
+        elif any(word in speaker_lower for word in ['journalist', 'reporter', 'anchor']):
+            context['credibility_notes'] = 'Media professional - credibility varies by outlet and individual track record'
+        else:
+            context['credibility_notes'] = 'No prior fact-checking history available for this speaker'
+        
+        return context
+    
+    def _fuzzy_match_speaker(self, search_name: str, known_name: str) -> bool:
+        """Fuzzy matching for speaker names"""
+        # Split into words
+        search_words = search_name.split()
+        known_words = known_name.split()
+        
+        # Check if last names match (often most distinctive)
+        if len(search_words) > 0 and len(known_words) > 0:
+            if search_words[-1] == known_words[-1]:
+                return True
+        
+        # Check if search contains significant parts of known name
+        significant_matches = 0
+        for word in search_words:
+            if len(word) > 3 and word in known_words:
+                significant_matches += 1
+        
+        # If we match at least half the words, consider it a match
+        return significant_matches >= len(known_words) / 2
     
     def batch_check(self, claims: List[str]) -> List[Dict]:
         """Check multiple claims efficiently with meaningful results"""
