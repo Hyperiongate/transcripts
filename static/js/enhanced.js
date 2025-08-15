@@ -14,6 +14,88 @@ const VERDICT_MAPPINGS = {
     'unverified': { class: 'unverified', icon: 'fa-question-circle', label: 'Unverified' }
 };
 
+// Function to determine alert type based on speaker context
+function getSpeakerAlertType(context) {
+    if (context.criminal_record) {
+        return 'danger';
+    } else if (context.fraud_history) {
+        return 'warning';
+    } else if (context.fact_check_history && context.fact_check_history.toLowerCase().includes('false')) {
+        return 'warning';
+    } else if (context.credibility_notes && context.credibility_notes.toLowerCase().includes('accurate')) {
+        return 'success';
+    } else {
+        return 'info';
+    }
+}
+
+// Function to generate speaker context HTML dynamically
+function generateSpeakerContextHTML(context) {
+    if (!context || !context.speaker) {
+        return '';
+    }
+    
+    let html = '<div class="speaker-context-section">';
+    html += `<h4>About ${context.speaker}:</h4>`;
+    
+    // Determine the overall context type
+    const alertType = getSpeakerAlertType(context);
+    
+    // Criminal record
+    if (context.criminal_record) {
+        html += `<div class="alert alert-danger">
+            <strong>⚖️ Criminal Record:</strong> ${context.criminal_record}
+        </div>`;
+    }
+    
+    // Fraud history
+    if (context.fraud_history) {
+        html += `<div class="alert alert-warning">
+            <strong>💰 Fraud History:</strong> ${context.fraud_history}
+        </div>`;
+    }
+    
+    // Fact-checking history
+    if (context.fact_check_history) {
+        const alertClass = context.fact_check_history.toLowerCase().includes('false') ? 'alert-warning' : 'alert-info';
+        html += `<div class="alert ${alertClass}">
+            <strong>📊 Fact-Check History:</strong> ${context.fact_check_history}
+        </div>`;
+    }
+    
+    // Credibility notes
+    if (context.credibility_notes) {
+        let alertClass = 'alert-info';
+        if (context.credibility_notes.toLowerCase().includes('pattern') || 
+            context.credibility_notes.toLowerCase().includes('false')) {
+            alertClass = 'alert-warning';
+        } else if (context.credibility_notes.toLowerCase().includes('accurate') || 
+                   context.credibility_notes.toLowerCase().includes('factual')) {
+            alertClass = 'alert-success';
+        }
+        
+        html += `<div class="alert ${alertClass}">
+            <strong>📝 Credibility Assessment:</strong> ${context.credibility_notes}
+        </div>`;
+    }
+    
+    // Legal issues
+    if (context.legal_issues && context.legal_issues.length > 0) {
+        html += '<div class="alert alert-warning">';
+        html += '<strong>⚡ Legal Issues:</strong>';
+        html += '<ul style="margin: 10px 0 0 20px; padding: 0;">';
+        context.legal_issues.forEach(issue => {
+            html += `<li>${issue}</li>`;
+        });
+        html += '</ul></div>';
+    }
+    
+    html += '</div>';
+    html += '<hr>';
+    
+    return html;
+}
+
 // Override the displayResults function to show ALL information including speaker context
 window.displayResults = function(results) {
     // Hide progress, show results
@@ -32,43 +114,9 @@ window.displayResults = function(results) {
     // Build comprehensive summary HTML
     let summaryHtml = '';
     
-    // SPEAKER CONTEXT SECTION - Criminal record, fraud history, etc.
+    // DYNAMIC SPEAKER CONTEXT SECTION
     if (results.speaker_context && results.speaker_context.speaker) {
-        const context = results.speaker_context;
-        
-        summaryHtml += '<div class="speaker-context-section">';
-        summaryHtml += `<h4>About ${context.speaker}:</h4>`;
-        
-        // Criminal record
-        if (context.criminal_record) {
-            summaryHtml += `<div class="alert alert-danger">
-                <strong>⚖️ Criminal Record:</strong> ${context.criminal_record}
-            </div>`;
-        }
-        
-        // Fraud history
-        if (context.fraud_history) {
-            summaryHtml += `<div class="alert alert-warning">
-                <strong>💰 Fraud History:</strong> ${context.fraud_history}
-            </div>`;
-        }
-        
-        // Fact-checking history
-        if (context.fact_check_history) {
-            summaryHtml += `<p><strong>📊 Fact-Check History:</strong> ${context.fact_check_history}</p>`;
-        }
-        
-        // Legal issues
-        if (context.legal_issues && context.legal_issues.length > 0) {
-            summaryHtml += '<p><strong>⚡ Legal Issues:</strong></p><ul>';
-            context.legal_issues.forEach(issue => {
-                summaryHtml += `<li>${issue}</li>`;
-            });
-            summaryHtml += '</ul>';
-        }
-        
-        summaryHtml += '</div>';
-        summaryHtml += '<hr>';
+        summaryHtml += generateSpeakerContextHTML(results.speaker_context);
     }
     
     // CONVERSATIONAL SUMMARY
@@ -329,6 +377,18 @@ style.textContent = `
     background-color: #fff3cd;
     border: 1px solid #ffeeba;
     color: #856404;
+}
+
+.alert-info {
+    background-color: #d1ecf1;
+    border: 1px solid #bee5eb;
+    color: #0c5460;
+}
+
+.alert-success {
+    background-color: #d4edda;
+    border: 1px solid #c3e6cb;
+    color: #155724;
 }
 
 .conversational-summary {
