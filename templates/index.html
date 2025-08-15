@@ -66,29 +66,101 @@
             font-size: 28px;
         }
 
-        .nav-pills {
+        /* Dropdown Styles */
+        .nav-dropdowns {
             display: flex;
-            gap: 10px;
+            gap: 20px;
         }
 
-        .nav-pill {
+        .dropdown {
+            position: relative;
+        }
+
+        .dropdown-toggle {
+            display: flex;
+            align-items: center;
+            gap: 8px;
             padding: 8px 16px;
-            border-radius: 20px;
-            text-decoration: none;
-            color: #6b7280;
+            background: #f3f4f6;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
             font-size: 14px;
             font-weight: 500;
+            color: #4b5563;
             transition: all 0.2s;
         }
 
-        .nav-pill:hover {
+        .dropdown-toggle:hover {
+            background: #e5e7eb;
+            color: #1f2937;
+        }
+
+        .dropdown-toggle i {
+            font-size: 12px;
+        }
+
+        .dropdown-menu {
+            position: absolute;
+            top: 100%;
+            right: 0;
+            margin-top: 8px;
+            min-width: 280px;
+            background: white;
+            border-radius: 12px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+            opacity: 0;
+            visibility: hidden;
+            transform: translateY(-10px);
+            transition: all 0.3s ease;
+            z-index: 1000;
+        }
+
+        .dropdown.active .dropdown-menu {
+            opacity: 1;
+            visibility: visible;
+            transform: translateY(0);
+        }
+
+        .dropdown-header {
+            padding: 16px 20px 12px;
+            border-bottom: 1px solid #e5e7eb;
+            font-weight: 600;
+            color: #1f2937;
+        }
+
+        .dropdown-item {
+            display: block;
+            padding: 12px 20px;
+            text-decoration: none;
+            color: #4b5563;
+            font-size: 14px;
+            transition: all 0.2s;
+            cursor: pointer;
+        }
+
+        .dropdown-item:hover {
             background: #f3f4f6;
             color: #1f2937;
         }
 
-        .nav-pill.active {
-            background: #3b82f6;
-            color: white;
+        .dropdown-item i {
+            margin-right: 8px;
+            width: 16px;
+            color: #9ca3af;
+        }
+
+        .dropdown-divider {
+            height: 1px;
+            background: #e5e7eb;
+            margin: 8px 0;
+        }
+
+        .dropdown-description {
+            padding: 12px 20px;
+            font-size: 13px;
+            color: #6b7280;
+            line-height: 1.5;
         }
 
         /* Container */
@@ -120,50 +192,10 @@
             margin: 0 auto;
         }
 
-        /* Features Grid */
-        .features-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-            gap: 20px;
-            max-width: 1000px;
-            margin: 40px auto;
-        }
-
-        .feature-card {
-            background: white;
-            padding: 24px;
-            border-radius: 12px;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
-            text-align: center;
-            transition: transform 0.2s, box-shadow 0.2s;
-        }
-
-        .feature-card:hover {
-            transform: translateY(-4px);
-            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
-        }
-
-        .feature-icon {
-            font-size: 36px;
-            margin-bottom: 12px;
-        }
-
-        .feature-title {
-            font-size: 18px;
-            font-weight: 600;
-            color: #1f2937;
-            margin-bottom: 8px;
-        }
-
-        .feature-desc {
-            font-size: 14px;
-            color: #6b7280;
-        }
-
         /* Input Section */
         .input-section {
             max-width: 800px;
-            margin: 0 auto 40px;
+            margin: 40px auto;
             background: white;
             padding: 30px;
             border-radius: 16px;
@@ -330,6 +362,21 @@
 
         .remove-file:hover {
             background: #fee2e2;
+        }
+
+        /* YouTube Input */
+        .youtube-input input {
+            width: 100%;
+            padding: 16px;
+            border: 2px solid #e5e7eb;
+            border-radius: 12px;
+            font-size: 16px;
+            transition: border-color 0.2s;
+        }
+
+        .youtube-input input:focus {
+            outline: none;
+            border-color: #3b82f6;
         }
 
         /* Analyze Button */
@@ -621,34 +668,21 @@
             border-radius: 12px;
             margin-bottom: 16px;
             transition: all 0.3s ease;
-        }
-
-        .fact-check-item:hover {
-            border-color: #d1d5db;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
-        }
-
-        .fact-check-item.true {
-            border-color: #10b981;
-            background: #f0fdf4;
-        }
-
-        .fact-check-item.false {
-            border-color: #ef4444;
-            background: #fef2f2;
-        }
-
-        .fact-check-item.unverified {
-            border-color: #f59e0b;
-            background: #fffbeb;
+            overflow: hidden;
         }
 
         .fact-check-header {
+            padding: 20px;
+            cursor: pointer;
             display: flex;
             justify-content: space-between;
             align-items: start;
             gap: 20px;
-            margin-bottom: 12px;
+            transition: background-color 0.2s ease;
+        }
+
+        .fact-check-header:hover {
+            background-color: rgba(0, 0, 0, 0.02);
         }
 
         .fact-check-claim {
@@ -656,6 +690,17 @@
             font-weight: 600;
             color: #1f2937;
             line-height: 1.5;
+            display: flex;
+            align-items: start;
+            gap: 10px;
+        }
+
+        .toggle-icon {
+            color: #6b7280;
+            font-size: 14px;
+            min-width: 14px;
+            margin-top: 3px;
+            transition: transform 0.2s ease;
         }
 
         .fact-check-verdict {
@@ -682,34 +727,6 @@
         .fact-check-verdict.unverified {
             background: #f59e0b;
             color: white;
-        }
-
-        .fact-check-details {
-            color: #6b7280;
-            font-size: 15px;
-            line-height: 1.6;
-        }
-
-        .fact-check-details p {
-            margin-bottom: 8px;
-        }
-
-        .fact-check-source {
-            margin-top: 12px;
-            padding-top: 12px;
-            border-top: 1px solid #e5e7eb;
-            font-size: 14px;
-            color: #6b7280;
-        }
-
-        .fact-check-source a {
-            color: #3b82f6;
-            text-decoration: none;
-            font-weight: 500;
-        }
-
-        .fact-check-source a:hover {
-            text-decoration: underline;
         }
 
         /* Export Options */
@@ -848,33 +865,49 @@
             margin-bottom: 4px;
         }
 
-        /* Fix for fact check items in demo mode */
-        .fact-check-item .demo-badge {
-            display: inline-block;
-            padding: 2px 8px;
-            background-color: #f59e0b;
-            color: white;
-            font-size: 11px;
-            font-weight: 600;
+        /* Speaker Context Section */
+        .speaker-context-section {
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 20px;
+        }
+
+        .speaker-context-section h4 {
+            color: #495057;
+            margin-bottom: 15px;
+            font-size: 20px;
+        }
+
+        .alert {
+            padding: 12px 20px;
+            margin-bottom: 10px;
             border-radius: 4px;
-            margin-left: 8px;
-            text-transform: uppercase;
         }
 
-        /* Animation for dropdown */
-        @keyframes slideDown {
-            from {
-                opacity: 0;
-                transform: translateY(-10px);
-            }
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
+        .alert-danger {
+            background-color: #f8d7da;
+            border: 1px solid #f5c6cb;
+            color: #721c24;
         }
 
-        .fact-check-details-wrapper[style*="block"] {
-            animation: slideDown 0.3s ease;
+        .alert-warning {
+            background-color: #fff3cd;
+            border: 1px solid #ffeeba;
+            color: #856404;
+        }
+
+        .alert-info {
+            background-color: #d1ecf1;
+            border: 1px solid #bee5eb;
+            color: #0c5460;
+        }
+
+        .alert-success {
+            background-color: #d4edda;
+            border: 1px solid #c3e6cb;
+            color: #155724;
         }
 
         /* Responsive Design */
@@ -891,12 +924,8 @@
                 font-size: 18px;
             }
             
-            .nav-pills {
+            .nav-dropdowns {
                 display: none;
-            }
-            
-            .features-grid {
-                grid-template-columns: 1fr;
             }
             
             .input-tabs {
@@ -951,11 +980,105 @@
                     <i class="fas fa-check-circle logo-icon"></i>
                     <span>Transcript Fact Checker</span>
                 </a>
-                <div class="nav-pills">
-                    <a href="#" class="nav-pill active">Transcript Checker</a>
-                    <a href="#" class="nav-pill">Live Streams</a>
-                    <a href="#" class="nav-pill">API Access</a>
-                    <a href="#" class="nav-pill">About</a>
+            </div>
+            
+            <!-- Dropdowns -->
+            <div class="nav-dropdowns">
+                <!-- Services Dropdown -->
+                <div class="dropdown" id="services-dropdown">
+                    <button class="dropdown-toggle" onclick="toggleDropdown('services-dropdown')">
+                        <span>Our Services</span>
+                        <i class="fas fa-chevron-down"></i>
+                    </button>
+                    <div class="dropdown-menu">
+                        <div class="dropdown-header">Fact-Checking Services We Use</div>
+                        <div class="dropdown-item">
+                            <i class="fab fa-google"></i>
+                            <strong>Google Fact Check API</strong>
+                            <div class="dropdown-description">Primary source for verified fact-checks from established fact-checking organizations worldwide.</div>
+                        </div>
+                        <div class="dropdown-item">
+                            <i class="fas fa-chart-line"></i>
+                            <strong>Federal Reserve Economic Data (FRED)</strong>
+                            <div class="dropdown-description">Official economic statistics for unemployment, inflation, GDP, and other financial indicators.</div>
+                        </div>
+                        <div class="dropdown-item">
+                            <i class="fas fa-newspaper"></i>
+                            <strong>News APIs</strong>
+                            <div class="dropdown-description">MediaStack and News API for cross-referencing claims with recent news coverage.</div>
+                        </div>
+                        <div class="dropdown-item">
+                            <i class="fas fa-brain"></i>
+                            <strong>AI Analysis</strong>
+                            <div class="dropdown-description">OpenAI for nuanced claim analysis when traditional fact-checking sources aren't available.</div>
+                        </div>
+                        <div class="dropdown-item">
+                            <i class="fas fa-globe"></i>
+                            <strong>Web Scraping</strong>
+                            <div class="dropdown-description">ScraperAPI and ScrapingBee for accessing fact-checker websites directly.</div>
+                        </div>
+                        <div class="dropdown-divider"></div>
+                        <div class="dropdown-item">
+                            <i class="fas fa-info-circle"></i>
+                            <strong>Pattern Analysis</strong>
+                            <div class="dropdown-description">Built-in detection of common false claim patterns and misleading rhetoric.</div>
+                        </div>
+                    </div>
+                </div>
+                
+                <!-- Transcript Sources Dropdown -->
+                <div class="dropdown" id="sources-dropdown">
+                    <button class="dropdown-toggle" onclick="toggleDropdown('sources-dropdown')">
+                        <span>Get Transcripts</span>
+                        <i class="fas fa-chevron-down"></i>
+                    </button>
+                    <div class="dropdown-menu">
+                        <div class="dropdown-header">Free Transcript Sources</div>
+                        <a href="https://www.rev.com/blog/transcripts" target="_blank" class="dropdown-item">
+                            <i class="fas fa-external-link-alt"></i>
+                            Rev.com Transcripts - Political speeches, interviews, debates
+                        </a>
+                        <a href="https://www.whitehouse.gov/briefing-room/speeches-remarks/" target="_blank" class="dropdown-item">
+                            <i class="fas fa-external-link-alt"></i>
+                            White House - Official presidential speeches & remarks
+                        </a>
+                        <a href="https://www.c-span.org/search/?searchtype=Videos" target="_blank" class="dropdown-item">
+                            <i class="fas fa-external-link-alt"></i>
+                            C-SPAN - Congressional hearings & political events
+                        </a>
+                        <a href="https://transcripts.cnn.com/" target="_blank" class="dropdown-item">
+                            <i class="fas fa-external-link-alt"></i>
+                            CNN Transcripts - News shows & interviews
+                        </a>
+                        <a href="https://www.foxnews.com/transcript" target="_blank" class="dropdown-item">
+                            <i class="fas fa-external-link-alt"></i>
+                            Fox News Transcripts - Shows & interviews
+                        </a>
+                        <a href="https://www.msnbc.com/transcripts" target="_blank" class="dropdown-item">
+                            <i class="fas fa-external-link-alt"></i>
+                            MSNBC Transcripts - News programs
+                        </a>
+                        <a href="https://www.npr.org/transcripts" target="_blank" class="dropdown-item">
+                            <i class="fas fa-external-link-alt"></i>
+                            NPR Transcripts - Radio shows & podcasts
+                        </a>
+                        <a href="https://www.ted.com/talks" target="_blank" class="dropdown-item">
+                            <i class="fas fa-external-link-alt"></i>
+                            TED Talks - Educational & inspirational speeches
+                        </a>
+                        <a href="https://www.bbc.com/news/av/10462520" target="_blank" class="dropdown-item">
+                            <i class="fas fa-external-link-alt"></i>
+                            BBC News - International news transcripts
+                        </a>
+                        <a href="https://www.youtube.com" target="_blank" class="dropdown-item">
+                            <i class="fas fa-external-link-alt"></i>
+                            YouTube - Auto-generated captions for any video
+                        </a>
+                        <div class="dropdown-divider"></div>
+                        <div class="dropdown-description">
+                            💡 Tip: Many YouTube videos have auto-generated or manual captions that can be extracted using our YouTube input option.
+                        </div>
+                    </div>
                 </div>
             </div>
         </nav>
@@ -967,30 +1090,6 @@
         <div class="hero-section">
             <h1>Transcript Fact Checker</h1>
             <p>AI-powered fact-checking for speeches, interviews, and transcripts. Verify claims in real-time with advanced NLP and trusted fact-check APIs.</p>
-        </div>
-
-        <!-- Features Grid -->
-        <div class="features-grid">
-            <div class="feature-card">
-                <div class="feature-icon">🤖</div>
-                <div class="feature-title">AI Claim Extraction</div>
-                <div class="feature-desc">Advanced NLP identifies factual claims</div>
-            </div>
-            <div class="feature-card">
-                <div class="feature-icon">✓</div>
-                <div class="feature-title">Google Fact Check</div>
-                <div class="feature-desc">Verified fact-checking from trusted sources</div>
-            </div>
-            <div class="feature-card">
-                <div class="feature-icon">📊</div>
-                <div class="feature-title">Credibility Score</div>
-                <div class="feature-desc">Overall trustworthiness assessment</div>
-            </div>
-            <div class="feature-card">
-                <div class="feature-icon">📥</div>
-                <div class="feature-title">Export Reports</div>
-                <div class="feature-desc">Download results in multiple formats</div>
-            </div>
         </div>
 
         <!-- Input Section -->
@@ -1006,6 +1105,10 @@
                 <button class="tab-button" data-tab="file">
                     <i class="fas fa-file-upload"></i>
                     Upload File
+                </button>
+                <button class="tab-button" data-tab="youtube">
+                    <i class="fab fa-youtube"></i>
+                    YouTube Video
                 </button>
             </div>
 
@@ -1038,6 +1141,20 @@
                     <button class="remove-file" onclick="removeFile()">
                         <i class="fas fa-times"></i>
                     </button>
+                </div>
+            </div>
+
+            <!-- YouTube Input Panel -->
+            <div class="input-panel" id="youtube-panel">
+                <div class="youtube-input">
+                    <input 
+                        type="text" 
+                        id="youtube-url" 
+                        placeholder="https://www.youtube.com/watch?v=..."
+                    >
+                    <div class="input-info">
+                        <span>Enter a YouTube video URL to extract and analyze its transcript</span>
+                    </div>
                 </div>
             </div>
 
@@ -1158,5 +1275,31 @@
     <!-- JavaScript -->
     <script src="/static/js/app.js"></script>
     <script src="/static/js/enhanced.js"></script>
+    <script>
+        // Dropdown functionality
+        function toggleDropdown(dropdownId) {
+            const dropdown = document.getElementById(dropdownId);
+            const wasActive = dropdown.classList.contains('active');
+            
+            // Close all dropdowns
+            document.querySelectorAll('.dropdown').forEach(d => {
+                d.classList.remove('active');
+            });
+            
+            // Toggle the clicked dropdown
+            if (!wasActive) {
+                dropdown.classList.add('active');
+            }
+        }
+        
+        // Close dropdowns when clicking outside
+        document.addEventListener('click', function(event) {
+            if (!event.target.closest('.dropdown')) {
+                document.querySelectorAll('.dropdown').forEach(d => {
+                    d.classList.remove('active');
+                });
+            }
+        });
+    </script>
 </body>
 </html>
