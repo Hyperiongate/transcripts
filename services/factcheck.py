@@ -31,36 +31,17 @@ class FactChecker:
         self.scraperapi_key = Config.SCRAPERAPI_KEY
         self.scrapingbee_api_key = Config.SCRAPINGBEE_API_KEY
         
-        # Expandable speaker backgrounds - dynamically loaded
-        self.speaker_backgrounds = self._load_speaker_backgrounds()
+        # Check if we have ANY real APIs configured
+        self.has_apis = any([
+            self.google_api_key,
+            self.fred_api_key,
+            self.news_api_key,
+            self.mediastack_api_key,
+            self.openai_api_key
+        ])
         
-        # Economic series mapping
-        self.fred_series = {
-            'unemployment': ('UNRATE', 'unemployment rate'),
-            'inflation': ('CPIAUCSL', 'inflation (CPI)'),
-            'gdp': ('GDP', 'GDP'),
-            'gdp growth': ('A191RL1Q225SBEA', 'GDP growth rate'),
-            'interest rate': ('DFF', 'federal funds rate'),
-            'federal funds': ('DFF', 'federal funds rate'),
-            'jobs': ('PAYEMS', 'total nonfarm employment'),
-            'job growth': ('PAYEMS', 'employment growth'),
-            'wages': ('CES0500000003', 'average hourly earnings'),
-            'retail sales': ('RSXFS', 'retail sales'),
-            'housing starts': ('HOUST', 'housing starts'),
-            'consumer confidence': ('UMCSENT', 'consumer sentiment'),
-            'manufacturing': ('IPMAN', 'manufacturing production'),
-            'trade deficit': ('BOPGSTB', 'trade balance'),
-            'national debt': ('GFDEBTN', 'federal debt')
-        }
-        
-        self._validate_configuration()
-    
-    def _load_speaker_backgrounds(self) -> Dict:
-        """Load speaker backgrounds - expandable system for any speaker"""
-        # This could be loaded from a database or external file in production
-        # For now, return a comprehensive dictionary with various examples
-        return {
-            # Political figures with various backgrounds
+        # Expandable speaker backgrounds
+        self.speaker_backgrounds = {
             'Donald Trump': {
                 'criminal_record': 'Convicted felon - 34 counts of falsifying business records (May 2024)',
                 'fraud_history': 'Found liable for civil fraud - inflating wealth to obtain favorable loans and insurance rates ($355 million penalty)',
@@ -88,60 +69,36 @@ class FactChecker:
                 'credibility_notes': 'Generally accurate on policy positions, sometimes overstates statistics',
                 'fact_check_history': 'Tends to round up numbers for rhetorical effect'
             },
-            
-            # Positive examples
-            'Mother Teresa': {
-                'credibility_notes': 'Devoted humanitarian with impeccable reputation for honesty and service',
-                'fact_check_history': 'No known instances of false public statements',
-                'humanitarian_record': 'Nobel Peace Prize winner, founded Missionaries of Charity, served the poor for decades'
+            'Ron DeSantis': {
+                'credibility_notes': 'Mixed record on COVID-19 claims and education policies',
+                'fact_check_history': 'Often makes misleading claims about Florida statistics'
             },
-            'Jimmy Carter': {
-                'credibility_notes': 'Known for exceptional honesty and integrity throughout political career',
-                'fact_check_history': 'Consistently rated as one of the most truthful political figures',
-                'humanitarian_record': 'Extensive post-presidency humanitarian work, Habitat for Humanity'
-            },
-            'Nelson Mandela': {
-                'credibility_notes': 'Internationally respected for integrity and moral leadership',
-                'fact_check_history': 'Known for honest discourse even on difficult topics',
-                'humanitarian_record': 'Led peaceful transition from apartheid, promoted reconciliation'
-            },
-            
-            # Business figures
-            'Elon Musk': {
-                'credibility_notes': 'Mixed record on predictions and timeline claims',
-                'fact_check_history': 'Often overly optimistic about product timelines and capabilities'
-            },
-            'Elizabeth Holmes': {
-                'criminal_record': 'Convicted of wire fraud and conspiracy - Theranos scandal',
-                'fraud_history': 'Deceived investors about blood testing technology capabilities',
-                'credibility_notes': 'Systematically misled investors, patients, and media about company technology'
-            },
-            'Sam Bankman-Fried': {
-                'criminal_record': 'Convicted of fraud and conspiracy - FTX collapse',
-                'fraud_history': 'Misused billions in customer funds',
-                'credibility_notes': 'Made false statements about FTX financial position and customer fund safety'
-            },
-            
-            # Media figures
-            'Tucker Carlson': {
-                'credibility_notes': 'Court documents revealed "not stating actual facts" defense in lawsuit',
-                'fact_check_history': 'Numerous false and misleading claims documented by fact-checkers'
-            },
-            'Rachel Maddow': {
-                'credibility_notes': 'Generally factual reporting with occasional corrections issued',
-                'fact_check_history': 'Mixed record - mostly accurate with some misleading segments'
-            },
-            
-            # Historical figures
-            'Richard Nixon': {
-                'credibility_notes': 'Resigned from presidency due to Watergate scandal and cover-up',
-                'fact_check_history': 'Famous for "I am not a crook" false statement'
-            },
-            'George Washington': {
-                'credibility_notes': 'Historical reputation for honesty - "cannot tell a lie" legend',
-                'fact_check_history': 'No documented pattern of deception'
+            'Kamala Harris': {
+                'credibility_notes': 'Generally accurate but has made some false claims about her record',
+                'fact_check_history': 'Mixed record as VP and during campaigns'
             }
         }
+        
+        # Economic series mapping
+        self.fred_series = {
+            'unemployment': ('UNRATE', 'unemployment rate'),
+            'inflation': ('CPIAUCSL', 'inflation (CPI)'),
+            'gdp': ('GDP', 'GDP'),
+            'gdp growth': ('A191RL1Q225SBEA', 'GDP growth rate'),
+            'interest rate': ('DFF', 'federal funds rate'),
+            'federal funds': ('DFF', 'federal funds rate'),
+            'jobs': ('PAYEMS', 'total nonfarm employment'),
+            'job growth': ('PAYEMS', 'employment growth'),
+            'wages': ('CES0500000003', 'average hourly earnings'),
+            'retail sales': ('RSXFS', 'retail sales'),
+            'housing starts': ('HOUST', 'housing starts'),
+            'consumer confidence': ('UMCSENT', 'consumer sentiment'),
+            'manufacturing': ('IPMAN', 'manufacturing production'),
+            'trade deficit': ('BOPGSTB', 'trade balance'),
+            'national debt': ('GFDEBTN', 'federal debt')
+        }
+        
+        self._validate_configuration()
     
     def _validate_configuration(self):
         """Log which APIs are available"""
@@ -160,7 +117,10 @@ class FactChecker:
         if self.scraperapi_key or self.scrapingbee_api_key:
             active_apis.append("Web Scraping")
         
-        logger.info(f"✅ Active fact-checking APIs: {', '.join(active_apis) if active_apis else 'NONE - Running in demo mode'}")
+        if active_apis:
+            logger.info(f"✅ Active fact-checking APIs: {', '.join(active_apis)}")
+        else:
+            logger.warning("⚠️ No fact-checking APIs configured - running in limited mode")
     
     def get_speaker_context(self, speaker_name: str) -> Dict:
         """Get comprehensive background on speaker - expandable system"""
@@ -172,74 +132,28 @@ class FactChecker:
         # Normalize speaker name
         speaker_lower = speaker_name.lower()
         
-        # Check all known speakers with fuzzy matching
+        # Check all known speakers
         for known_speaker, info in self.speaker_backgrounds.items():
-            known_lower = known_speaker.lower()
-            
-            # Check various matching patterns
-            if (known_lower in speaker_lower or 
-                speaker_lower in known_lower or
-                self._fuzzy_match_speaker(speaker_lower, known_lower)):
-                
+            if known_speaker.lower() in speaker_lower or speaker_lower in known_speaker.lower():
                 logger.info(f"Found speaker info for: {known_speaker}")
                 return {
                     'speaker': known_speaker,
                     'has_criminal_record': 'criminal_record' in info,
-                    'has_fraud_history': 'fraud_history' in info,
-                    'has_humanitarian_record': 'humanitarian_record' in info,
                     **info
                 }
         
-        # Handle generic titles
-        if any(title in speaker_lower for title in ['president', 'senator', 'governor', 'mayor']):
-            # Try to extract more context
-            words = speaker_lower.split()
-            if len(words) > 1:
-                # Try to find a match with the name after the title
-                for i, word in enumerate(words):
-                    if word in ['president', 'senator', 'governor', 'mayor'] and i + 1 < len(words):
-                        potential_name = ' '.join(words[i+1:])
-                        # Recursive call with just the name
-                        return self.get_speaker_context(potential_name)
-            
-            # If we can't determine which specific person
+        # Handle generic "President" mentions
+        if 'president' in speaker_lower and len(speaker_lower.split()) == 1:
             return {
                 'speaker': speaker_name,
-                'credibility_notes': f'Unable to determine which specific {speaker_name} is being referenced'
+                'credibility_notes': 'Unable to determine which president is being referenced'
             }
         
-        # For unknown speakers, check if we can infer anything from the name
-        context = {'speaker': speaker_name}
-        
-        # Check for professional titles that might indicate credibility
-        if any(title in speaker_lower for title in ['dr.', 'doctor', 'professor', 'judge']):
-            context['credibility_notes'] = 'Professional title suggests subject matter expertise'
-        elif any(word in speaker_lower for word in ['journalist', 'reporter', 'anchor']):
-            context['credibility_notes'] = 'Media professional - credibility varies by outlet and individual track record'
-        else:
-            context['credibility_notes'] = 'No prior fact-checking history available for this speaker'
-        
-        return context
-    
-    def _fuzzy_match_speaker(self, search_name: str, known_name: str) -> bool:
-        """Fuzzy matching for speaker names"""
-        # Split into words
-        search_words = search_name.split()
-        known_words = known_name.split()
-        
-        # Check if last names match (often most distinctive)
-        if len(search_words) > 0 and len(known_words) > 0:
-            if search_words[-1] == known_words[-1]:
-                return True
-        
-        # Check if search contains significant parts of known name
-        significant_matches = 0
-        for word in search_words:
-            if len(word) > 3 and word in known_words:
-                significant_matches += 1
-        
-        # If we match at least half the words, consider it a match
-        return significant_matches >= len(known_words) / 2
+        # For unknown speakers, return neutral info
+        return {
+            'speaker': speaker_name,
+            'credibility_notes': 'No prior fact-checking history available'
+        }
     
     def batch_check(self, claims: List[str]) -> List[Dict]:
         """Check multiple claims efficiently with meaningful results"""
@@ -263,14 +177,21 @@ class FactChecker:
                         processed_claims.add(claim)
                     except Exception as e:
                         logger.error(f"Error checking claim '{claim[:50]}...': {str(e)}")
-                        results.append(self._create_demo_result(claim))
+                        # Only use demo mode if NO APIs are configured
+                        if self.has_apis:
+                            results.append(self._create_error_result(claim))
+                        else:
+                            results.append(self._create_demo_result(claim))
                         processed_claims.add(claim)
             except TimeoutError:
-                logger.warning("Batch check timeout - adding demo results for remaining claims")
-                # Add demo results for any unprocessed claims
+                logger.warning("Batch check timeout - adding results for remaining claims")
+                # Add appropriate results for unprocessed claims
                 for claim in claims:
                     if claim not in processed_claims:
-                        results.append(self._create_demo_result(claim))
+                        if self.has_apis:
+                            results.append(self._create_error_result(claim))
+                        else:
+                            results.append(self._create_demo_result(claim))
         
         return results
     
@@ -280,7 +201,10 @@ class FactChecker:
             return self._check_claim_fast(claim)
         except Exception as e:
             logger.error(f"Comprehensive check failed: {str(e)}")
-            return self._create_demo_result(claim)
+            if self.has_apis:
+                return self._create_error_result(claim)
+            else:
+                return self._create_demo_result(claim)
     
     def check_claim(self, claim: str) -> Dict:
         """Standard claim checking"""
@@ -290,36 +214,72 @@ class FactChecker:
         """Fast checking that prioritizes quality over quantity"""
         logger.info(f"Fast check for: {claim[:80]}...")
         
-        # If no APIs configured, use intelligent demo mode
-        if not any([self.google_api_key, self.fred_api_key, self.news_api_key, 
-                   self.mediastack_api_key, self.openai_api_key]):
-            return self._create_demo_result(claim)
+        # Extract temporal context if present
+        temporal_context = self._extract_temporal_context(claim)
         
         # Priority 1: Google Fact Check (if available and fast)
         if self.google_api_key:
             result = self._check_google_factcheck(claim)
             if result['found'] and result.get('verdict') != 'unverified':
-                return self._enhance_result(claim, result)
+                return self._enhance_result(claim, result, temporal_context)
         
         # Priority 2: FRED for economic claims (very fast and authoritative)
         if self.fred_api_key and self._is_economic_claim(claim):
             result = self._check_fred_data(claim)
             if result['found']:
-                return self._enhance_result(claim, result)
+                return self._enhance_result(claim, result, temporal_context)
         
         # Priority 3: Pattern analysis for common claim types
         pattern_result = self._check_common_patterns(claim)
         if pattern_result['found']:
-            return self._enhance_result(claim, pattern_result)
+            return self._enhance_result(claim, pattern_result, temporal_context)
         
         # Priority 4: If we have AI, use it for analysis (but with timeout)
         if self.openai_api_key:
             result = self._analyze_with_ai_fast(claim)
             if result['found']:
-                return self._enhance_result(claim, result)
+                return self._enhance_result(claim, result, temporal_context)
         
-        # Fallback: Return intelligent demo result instead of "unverified"
-        return self._create_demo_result(claim)
+        # Priority 5: News APIs for recent events
+        if (self.news_api_key or self.mediastack_api_key) and self._is_recent_event_claim(claim):
+            result = self._check_news_sources(claim)
+            if result['found']:
+                return self._enhance_result(claim, result, temporal_context)
+        
+        # Final: Return appropriate result based on API availability
+        if self.has_apis:
+            # We have APIs but couldn't verify - return unverified
+            return {
+                'claim': claim,
+                'verdict': 'unverified',
+                'confidence': 0,
+                'explanation': 'Unable to verify this claim with available sources.',
+                'sources': ['Attempted: Google Fact Check, FRED, Pattern Analysis'],
+                'api_response': True,
+                'temporal_context': temporal_context
+            }
+        else:
+            # No APIs - return intelligent demo result
+            return self._create_demo_result(claim)
+    
+    def _extract_temporal_context(self, claim: str) -> Optional[str]:
+        """Extract temporal context from claim"""
+        temporal_patterns = [
+            r'this week',
+            r'last week',
+            r'yesterday',
+            r'today',
+            r'this month',
+            r'last month',
+            r'this year',
+            r'last year'
+        ]
+        
+        for pattern in temporal_patterns:
+            if re.search(pattern, claim, re.IGNORECASE):
+                return f"Note: Temporal reference '{pattern}' detected in claim"
+        
+        return None
     
     def _check_google_factcheck(self, claim: str) -> Dict:
         """Google Fact Check with timeout"""
@@ -525,7 +485,7 @@ Respond with: verdict (true/mostly_true/lacks_context/mostly_false/false/decepti
                             'verdict': verdict,
                             'confidence': 75,
                             'explanation': explanation.strip(),
-                            'source': 'AI Analysis',
+                            'source': 'AI Analysis (OpenAI)',
                             'weight': 0.7
                         }
             
@@ -535,63 +495,122 @@ Respond with: verdict (true/mostly_true/lacks_context/mostly_false/false/decepti
             logger.error(f"OpenAI error: {str(e)}")
             return {'found': False}
     
+    def _check_news_sources(self, claim: str) -> Dict:
+        """Check news sources for recent events"""
+        try:
+            # Extract key terms
+            key_terms = self._extract_key_terms(claim)
+            search_query = ' '.join(key_terms[:4])
+            
+            if self.mediastack_api_key:
+                url = "http://api.mediastack.com/v1/news"
+                params = {
+                    'access_key': self.mediastack_api_key,
+                    'keywords': search_query,
+                    'languages': 'en',
+                    'limit': 5,
+                    'sort': 'published_desc'
+                }
+            elif self.news_api_key:
+                url = "https://newsapi.org/v2/everything"
+                params = {
+                    'apiKey': self.news_api_key,
+                    'q': search_query,
+                    'sortBy': 'relevancy',
+                    'pageSize': 5,
+                    'language': 'en'
+                }
+            else:
+                return {'found': False}
+            
+            response = requests.get(url, params=params, timeout=5)
+            
+            if response.status_code == 200:
+                data = response.json()
+                articles = data.get('data', []) if self.mediastack_api_key else data.get('articles', [])
+                
+                if articles:
+                    return {
+                        'found': True,
+                        'verdict': 'mixed',
+                        'confidence': 60,
+                        'explanation': f'Found {len(articles)} recent news articles discussing this topic. Further verification recommended.',
+                        'source': 'News API' if self.news_api_key else 'MediaStack News',
+                        'weight': 0.65
+                    }
+            
+            return {'found': False}
+            
+        except Exception as e:
+            logger.error(f"News API error: {str(e)}")
+            return {'found': False}
+    
+    def _is_recent_event_claim(self, claim: str) -> bool:
+        """Check if claim is about recent events"""
+        recent_indicators = [
+            'yesterday', 'today', 'this week', 'last week',
+            'recently', 'just', 'breaking', 'latest',
+            '2024', '2025', 'current', 'ongoing'
+        ]
+        claim_lower = claim.lower()
+        return any(indicator in claim_lower for indicator in recent_indicators)
+    
+    def _create_error_result(self, claim: str) -> Dict:
+        """Create error result when APIs fail"""
+        return {
+            'claim': claim,
+            'verdict': 'unverified',
+            'confidence': 0,
+            'explanation': 'Unable to verify due to technical issues. Please try again.',
+            'sources': ['Error during fact-checking'],
+            'api_response': True
+        }
+    
     def _create_demo_result(self, claim: str) -> Dict:
-        """Create intelligent demo results instead of just 'unverified'"""
-        # Analyze claim to provide meaningful demo verdict
+        """Create intelligent demo results when no APIs available"""
         claim_lower = claim.lower()
         
-        # Check for numbers/statistics
+        # Analyze claim characteristics
         has_numbers = bool(re.search(r'\d+', claim))
         has_percentage = bool(re.search(r'\d+%', claim))
-        
-        # Check for absolute words
         has_absolute = any(word in claim_lower for word in ['all', 'none', 'every', 'never', 'always', 'nobody', 'everybody'])
-        
-        # Check for superlatives
         has_superlative = any(word in claim_lower for word in ['best', 'worst', 'biggest', 'smallest', 'first', 'last', 'only'])
-        
-        # Check for vague attribution
         has_vague = any(phrase in claim_lower for phrase in ['people say', 'studies show', 'experts', 'they say', 'sources'])
         
         # Determine verdict based on patterns
         if has_absolute or has_superlative:
             verdict = 'mostly_false'
             confidence = 65
-            explanation = "Claims using absolute language or superlatives are often exaggerations. Without access to fact-checking APIs, this appears likely to be an overstatement."
+            explanation = "Claims using absolute language or superlatives are often exaggerations."
         elif has_vague:
             verdict = 'lacks_context'
             confidence = 60
-            explanation = "This claim lacks specific attribution or context. Who are these people/experts/sources? When did they say this? More specificity needed."
+            explanation = "This claim lacks specific attribution. More context needed for verification."
         elif has_numbers or has_percentage:
             verdict = 'lacks_context'
             confidence = 55
-            explanation = "Statistical claims require verification against official sources. Without API access, we cannot confirm these specific numbers."
+            explanation = "Statistical claims require verification against official sources."
         else:
-            # For general claims, make an educated guess based on tone
-            if any(word in claim_lower for word in ['false', 'lie', 'fake', 'hoax', 'scam']):
-                verdict = 'mostly_false'
-                confidence = 50
-                explanation = "Claims about falsehoods often themselves contain inaccuracies. Requires fact-checking for verification."
-            else:
-                verdict = 'mostly_true'
-                confidence = 45
-                explanation = "This appears to be a general statement. Without fact-checking APIs, we assume reasonable accuracy but recommend verification."
-        
-        # Add demo mode note
-        explanation += " [DEMO MODE: Full fact-checking requires API access]"
+            verdict = 'unverified'
+            confidence = 45
+            explanation = "Unable to verify without access to fact-checking databases."
         
         return {
             'claim': claim,
             'verdict': verdict,
             'confidence': confidence,
             'explanation': explanation,
-            'sources': ['Demo Analysis'],
+            'sources': ['Pattern Analysis (Limited Mode)'],
             'api_response': False
         }
     
-    def _enhance_result(self, claim: str, result: Dict) -> Dict:
+    def _enhance_result(self, claim: str, result: Dict, temporal_context: Optional[str] = None) -> Dict:
         """Enhance result with claim text and ensure completeness"""
         result['claim'] = claim
+        
+        # Add temporal context if present
+        if temporal_context:
+            result['temporal_context'] = temporal_context
         
         # Ensure all required fields
         if 'confidence' not in result:
@@ -634,8 +653,8 @@ Respond with: verdict (true/mostly_true/lacks_context/mostly_false/false/decepti
         if any(word in rating_lower for word in ['incorrect', 'wrong', 'inaccurate']):
             return 'mostly_false'
         
-        # Instead of returning 'unverified', make an educated guess
-        return 'lacks_context'
+        # For unclear ratings, return mixed instead of unverified
+        return 'mixed'
     
     def _is_economic_claim(self, claim: str) -> bool:
         """Check if claim involves economic data"""
@@ -680,7 +699,8 @@ Respond with: verdict (true/mostly_true/lacks_context/mostly_false/false/decepti
             'unsubstantiated': 30,
             'mostly_false': 25,
             'false': 0,
-            'unverified': 50
+            'unverified': 50,
+            'mixed': 50
         }
         
         total_score = sum(scores.get(fc.get('verdict', 'unverified'), 50) for fc in fact_checks)
