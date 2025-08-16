@@ -396,20 +396,7 @@
             background: #fee2e2;
         }
 
-        /* YouTube Input */
-        .youtube-input input {
-            width: 100%;
-            padding: 16px;
-            border: 2px solid #e5e7eb;
-            border-radius: 12px;
-            font-size: 16px;
-            transition: border-color 0.2s;
-        }
 
-        .youtube-input input:focus {
-            outline: none;
-            border-color: #3b82f6;
-        }
 
         /* Analyze Button */
         .analyze-button {
@@ -1062,8 +1049,13 @@
                         <li><strong>OpenAI</strong> - AI-powered claim analysis</li>
                         <li><strong>News APIs</strong> - NewsAPI & MediaStack for current events</li>
                         <li><strong>Pattern Analysis</strong> - Identifies common false claim patterns</li>
-                        <li><strong>Wikipedia</strong> - General knowledge verification</li>
+                        <li><strong>Wikipedia API</strong> - General knowledge verification</li>
                         <li><strong>Semantic Scholar</strong> - Academic paper verification</li>
+                        <li><strong>CDC Data API</strong> - Health statistics and COVID data</li>
+                        <li><strong>US Census API</strong> - Demographic and population data</li>
+                        <li><strong>NOAA Climate Data</strong> - Weather and climate statistics</li>
+                        <li><strong>Context Resolution</strong> - Handles pronouns and temporal references</li>
+                        <li><strong>Speaker History Tracking</strong> - Maintains credibility records</li>
                     </ul>
                     <h4>How It Works</h4>
                     <p>We extract factual claims from transcripts using NLP, then verify each claim against multiple sources. Each claim receives a verdict (true, false, misleading, etc.) with confidence scores and explanations.</p>
@@ -1088,6 +1080,13 @@
                         <li><a href="https://www.whitehouse.gov/briefing-room/" target="_blank"><strong>WhiteHouse.gov</strong></a> - Official White House statements and briefings</li>
                         <li><a href="https://www.presidency.ucsb.edu/" target="_blank"><strong>American Presidency Project</strong></a> - Historical presidential documents</li>
                         <li><a href="https://www.govinfo.gov/" target="_blank"><strong>GovInfo.gov</strong></a> - Official government transcripts and documents</li>
+                        <li><a href="https://www.factcheck.org/scicheck/transcripts/" target="_blank"><strong>FactCheck.org Transcripts</strong></a> - Fact-checked speech transcripts</li>
+                        <li><a href="https://www.nbcnews.com/meet-the-press/meet-press-transcripts-n51976" target="_blank"><strong>Meet the Press Archives</strong></a> - NBC Meet the Press transcripts</li>
+                        <li><a href="https://abcnews.go.com/ThisWeek/transcripts" target="_blank"><strong>ABC This Week</strong></a> - ABC This Week transcripts</li>
+                        <li><a href="https://www.foxnews.com/transcript" target="_blank"><strong>Fox News Transcripts</strong></a> - Fox News show transcripts</li>
+                        <li><a href="https://transcripts.facethenation.com/" target="_blank"><strong>Face the Nation</strong></a> - CBS Face the Nation transcripts</li>
+                        <li><a href="https://www.pbs.org/newshour/show/" target="_blank"><strong>PBS NewsHour</strong></a> - PBS NewsHour transcripts</li>
+                        <li><a href="https://www.npr.org/transcripts" target="_blank"><strong>NPR Transcripts</strong></a> - NPR show and interview transcripts</li>
                     </ul>
                 </div>
             </div>
@@ -1106,10 +1105,6 @@
                 <button class="tab-button" data-tab="file">
                     <i class="fas fa-file-upload"></i>
                     Upload File
-                </button>
-                <button class="tab-button" data-tab="youtube">
-                    <i class="fab fa-youtube"></i>
-                    YouTube Video
                 </button>
             </div>
 
@@ -1145,19 +1140,7 @@
                 </div>
             </div>
 
-            <!-- YouTube Input Panel -->
-            <div class="input-panel" id="youtube-panel">
-                <div class="youtube-input">
-                    <input 
-                        type="text" 
-                        id="youtube-url" 
-                        placeholder="https://www.youtube.com/watch?v=..."
-                    >
-                    <div class="input-info">
-                        <span>Enter a YouTube video URL to extract and analyze its transcript</span>
-                    </div>
-                </div>
-            </div>
+
 
             <!-- Analyze Button -->
             <button class="analyze-button" id="analyze-button" onclick="startAnalysis()">
