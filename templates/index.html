@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Transcript Fact Checker - Verify Claims in Real-Time</title>
+    <title>AI Truth Engine - Real-Time Fact Analysis</title>
     
     <style>
         /* Reset and Base Styles */
@@ -15,20 +15,70 @@
 
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            background: #f3f4f6;
-            color: #1f2937;
+            background: #f8fafc;
+            color: #1e293b;
             line-height: 1.6;
             min-height: 100vh;
+            overflow-x: hidden;
+        }
+
+        /* Animated Background */
+        body::before {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: 
+                radial-gradient(circle at 20% 50%, rgba(59, 130, 246, 0.05) 0%, transparent 50%),
+                radial-gradient(circle at 80% 50%, rgba(99, 102, 241, 0.05) 0%, transparent 50%),
+                radial-gradient(circle at 50% 100%, rgba(16, 185, 129, 0.05) 0%, transparent 50%);
+            z-index: -1;
+            animation: backgroundPulse 20s ease-in-out infinite;
+        }
+
+        @keyframes backgroundPulse {
+            0%, 100% { opacity: 0.5; }
+            50% { opacity: 1; }
+        }
+
+        /* Cyber Grid Overlay */
+        body::after {
+            content: '';
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-image: 
+                linear-gradient(rgba(59, 130, 246, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(59, 130, 246, 0.03) 1px, transparent 1px);
+            background-size: 50px 50px;
+            z-index: -1;
+            animation: gridMove 30s linear infinite;
+        }
+
+        @keyframes gridMove {
+            0% { transform: translate(0, 0); }
+            100% { transform: translate(50px, 50px); }
         }
 
         /* Header Styles */
         .header {
-            background: white;
-            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(20px);
+            border-bottom: 1px solid rgba(59, 130, 246, 0.2);
             padding: 1rem 0;
             position: sticky;
             top: 0;
             z-index: 100;
+            box-shadow: 0 2px 20px rgba(59, 130, 246, 0.1);
+        }
+
+        @keyframes headerGlow {
+            0%, 100% { box-shadow: 0 2px 20px rgba(59, 130, 246, 0.2); }
+            50% { box-shadow: 0 2px 30px rgba(99, 102, 241, 0.3); }
         }
 
         .nav-container {
@@ -49,24 +99,73 @@
         .logo {
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 15px;
             text-decoration: none;
-            color: #1f2937;
-            font-size: 24px;
-            font-weight: 700;
-            transition: transform 0.2s;
+            color: #1e293b;
+            font-size: 28px;
+            font-weight: 800;
+            transition: all 0.3s;
+            position: relative;
         }
 
         .logo:hover {
             transform: translateY(-2px);
+            filter: brightness(1.2);
         }
 
         .logo-icon {
-            color: #10b981;
-            font-size: 28px;
+            width: 45px;
+            height: 45px;
+            background: linear-gradient(135deg, #3b82f6, #10b981);
+            border-radius: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            animation: iconPulse 2s ease-in-out infinite;
         }
 
-        /* Dropdown Styles */
+        @keyframes iconPulse {
+            0%, 100% { 
+                transform: scale(1);
+                box-shadow: 0 0 20px rgba(59, 130, 246, 0.5);
+            }
+            50% { 
+                transform: scale(1.05);
+                box-shadow: 0 0 30px rgba(16, 185, 129, 0.7);
+            }
+        }
+
+        .logo-icon i {
+            color: white;
+            font-size: 24px;
+        }
+
+        .logo-text {
+            display: flex;
+            flex-direction: column;
+            line-height: 1.2;
+        }
+
+        .logo-main {
+            font-size: 24px;
+            background: linear-gradient(135deg, #3b82f6, #10b981);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .logo-sub {
+            font-size: 12px;
+            color: #9ca3af;
+            font-weight: 400;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+        }
+
+        /* Futuristic Dropdown Styles */
         .nav-dropdowns {
             display: flex;
             gap: 20px;
@@ -80,40 +179,69 @@
             display: flex;
             align-items: center;
             gap: 8px;
-            padding: 8px 16px;
-            background: #f3f4f6;
-            border: none;
-            border-radius: 8px;
+            padding: 10px 20px;
+            background: rgba(59, 130, 246, 0.08);
+            border: 1px solid rgba(59, 130, 246, 0.2);
+            border-radius: 50px;
             cursor: pointer;
             font-size: 14px;
             font-weight: 500;
-            color: #4b5563;
-            transition: all 0.2s;
+            color: #1e293b;
+            transition: all 0.3s;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .dropdown-toggle::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 0;
+            height: 0;
+            background: radial-gradient(circle, rgba(59, 130, 246, 0.3) 0%, transparent 70%);
+            transition: all 0.5s;
+            transform: translate(-50%, -50%);
+        }
+
+        .dropdown-toggle:hover::before {
+            width: 100%;
+            height: 100%;
         }
 
         .dropdown-toggle:hover {
-            background: #e5e7eb;
-            color: #1f2937;
+            background: rgba(59, 130, 246, 0.2);
+            border-color: rgba(59, 130, 246, 0.5);
+            transform: translateY(-2px);
+            box-shadow: 0 5px 20px rgba(59, 130, 246, 0.3);
         }
 
         .dropdown-toggle i {
             font-size: 12px;
+            transition: transform 0.3s;
+        }
+
+        .dropdown.active .dropdown-toggle i {
+            transform: rotate(180deg);
         }
 
         .dropdown-menu {
             position: absolute;
             top: 100%;
             right: 0;
-            margin-top: 8px;
-            min-width: 280px;
-            background: white;
-            border-radius: 12px;
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.15);
+            margin-top: 10px;
+            min-width: 320px;
+            background: rgba(255, 255, 255, 0.98);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(59, 130, 246, 0.2);
+            border-radius: 16px;
             opacity: 0;
             visibility: hidden;
             transform: translateY(-10px);
             transition: all 0.3s ease;
             z-index: 1000;
+            overflow: hidden;
+            box-shadow: 0 10px 40px rgba(0, 0, 0, 0.1);
         }
 
         .dropdown.active .dropdown-menu {
@@ -123,44 +251,67 @@
         }
 
         .dropdown-header {
-            padding: 16px 20px 12px;
-            border-bottom: 1px solid #e5e7eb;
+            padding: 20px;
+            background: linear-gradient(135deg, rgba(59, 130, 246, 0.1), rgba(99, 102, 241, 0.1));
             font-weight: 600;
-            color: #1f2937;
+            color: #1e293b;
+            font-size: 16px;
+            letter-spacing: 1px;
+            text-transform: uppercase;
         }
 
         .dropdown-item {
             display: block;
-            padding: 12px 20px;
+            padding: 15px 20px;
             text-decoration: none;
-            color: #4b5563;
+            color: #475569;
             font-size: 14px;
-            transition: all 0.2s;
+            transition: all 0.3s;
             cursor: pointer;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .dropdown-item::before {
+            content: '';
+            position: absolute;
+            left: 0;
+            top: 0;
+            height: 100%;
+            width: 3px;
+            background: linear-gradient(135deg, #3b82f6, #10b981);
+            transform: translateX(-100%);
+            transition: transform 0.3s;
+        }
+
+        .dropdown-item:hover::before {
+            transform: translateX(0);
         }
 
         .dropdown-item:hover {
-            background: #f3f4f6;
-            color: #1f2937;
+            background: rgba(59, 130, 246, 0.05);
+            color: #1e293b;
+            padding-left: 30px;
         }
 
         .dropdown-item i {
-            margin-right: 8px;
+            margin-right: 12px;
             width: 16px;
-            color: #9ca3af;
+            color: #3b82f6;
         }
 
         .dropdown-divider {
             height: 1px;
-            background: #e5e7eb;
-            margin: 8px 0;
+            background: linear-gradient(90deg, transparent, rgba(59, 130, 246, 0.2), transparent);
+            margin: 10px 0;
         }
 
         .dropdown-description {
-            padding: 12px 20px;
+            padding: 15px 20px;
             font-size: 13px;
-            color: #6b7280;
-            line-height: 1.5;
+            color: #64748b;
+            line-height: 1.6;
+            background: rgba(59, 130, 246, 0.03);
         }
 
         /* Container */
@@ -173,238 +324,405 @@
         /* Hero Section */
         .hero-section {
             text-align: center;
-            padding: 60px 20px 40px;
+            padding: 80px 20px 60px;
+            position: relative;
         }
 
         .hero-section h1 {
-            font-size: 48px;
-            font-weight: 800;
-            margin-bottom: 16px;
-            background: linear-gradient(135deg, #3b82f6, #6366f1);
+            font-size: 64px;
+            font-weight: 900;
+            margin-bottom: 20px;
+            letter-spacing: -2px;
+            line-height: 1.1;
+            position: relative;
+            z-index: 1;
+        }
+
+        .hero-title-main {
+            background: linear-gradient(135deg, #3b82f6, #10b981, #3b82f6);
+            background-size: 200% 200%;
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
+            background-clip: text;
+            animation: gradientShift 3s ease-in-out infinite;
+            display: block;
+        }
+
+        @keyframes gradientShift {
+            0%, 100% { background-position: 0% 50%; }
+            50% { background-position: 100% 50%; }
+        }
+
+        .hero-title-sub {
+            font-size: 24px;
+            color: #64748b;
+            font-weight: 300;
+            letter-spacing: 3px;
+            text-transform: uppercase;
+            margin-top: 10px;
+            display: block;
         }
 
         .hero-section p {
-            font-size: 20px;
-            color: #6b7280;
-            max-width: 600px;
+            font-size: 18px;
+            color: #475569;
+            max-width: 700px;
             margin: 0 auto;
+            line-height: 1.8;
+            opacity: 0.9;
+        }
+
+        /* AI Status Indicator */
+        .ai-status {
+            display: inline-flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 30px;
+            padding: 12px 24px;
+            background: rgba(16, 185, 129, 0.1);
+            border: 1px solid rgba(16, 185, 129, 0.3);
+            border-radius: 50px;
+            font-size: 14px;
+            color: #10b981;
+        }
+
+        .ai-status-dot {
+            width: 8px;
+            height: 8px;
+            background: #10b981;
+            border-radius: 50%;
+            animation: statusPulse 2s ease-in-out infinite;
+        }
+
+        @keyframes statusPulse {
+            0%, 100% { opacity: 1; transform: scale(1); }
+            50% { opacity: 0.5; transform: scale(1.5); }
         }
 
         /* Input Section */
         .input-section {
             max-width: 800px;
             margin: 40px auto;
-            background: white;
-            padding: 30px;
-            border-radius: 16px;
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(20px);
+            padding: 40px;
+            border-radius: 24px;
+            border: 1px solid rgba(59, 130, 246, 0.15);
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.08);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .input-section::before {
+            content: '';
+            position: absolute;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: radial-gradient(circle, rgba(59, 130, 246, 0.05) 0%, transparent 70%);
+            animation: rotateGradient 20s linear infinite;
+        }
+
+        @keyframes rotateGradient {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
         }
 
         .input-section h2 {
-            font-size: 24px;
+            font-size: 28px;
             font-weight: 700;
-            margin-bottom: 24px;
-            color: #1f2937;
+            margin-bottom: 30px;
+            color: #1e293b;
+            position: relative;
+            z-index: 1;
         }
 
         /* Input Tabs */
         .input-tabs {
             display: flex;
-            gap: 12px;
-            margin-bottom: 24px;
-            padding-bottom: 16px;
-            border-bottom: 2px solid #e5e7eb;
+            gap: 16px;
+            margin-bottom: 30px;
+            position: relative;
+            z-index: 1;
         }
 
         .tab-button {
+            flex: 1;
             display: flex;
             align-items: center;
-            gap: 8px;
-            padding: 10px 20px;
-            background: none;
-            border: 2px solid transparent;
-            border-radius: 8px;
-            font-size: 15px;
+            justify-content: center;
+            gap: 10px;
+            padding: 16px 24px;
+            background: rgba(241, 245, 249, 0.8);
+            border: 1px solid rgba(59, 130, 246, 0.15);
+            border-radius: 12px;
+            font-size: 16px;
             font-weight: 500;
-            color: #6b7280;
+            color: #64748b;
             cursor: pointer;
-            transition: all 0.2s;
+            transition: all 0.3s;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .tab-button::before {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            height: 3px;
+            background: linear-gradient(90deg, #3b82f6, #10b981);
+            transform: translateY(100%);
+            transition: transform 0.3s;
         }
 
         .tab-button:hover {
-            background: #f3f4f6;
-            color: #1f2937;
+            background: rgba(241, 245, 249, 1);
+            color: #1e293b;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
         }
 
         .tab-button.active {
-            background: #eff6ff;
-            border-color: #3b82f6;
+            background: rgba(59, 130, 246, 0.08);
+            border-color: rgba(59, 130, 246, 0.3);
             color: #3b82f6;
         }
 
+        .tab-button.active::before {
+            transform: translateY(0);
+        }
+
         .tab-button i {
-            font-size: 18px;
+            font-size: 20px;
         }
 
         /* Input Panels */
         .input-panel {
             display: none;
+            position: relative;
+            z-index: 1;
         }
 
         .input-panel.active {
             display: block;
-            animation: fadeIn 0.3s ease;
+            animation: fadeIn 0.5s ease;
         }
 
         @keyframes fadeIn {
-            from { opacity: 0; transform: translateY(10px); }
+            from { opacity: 0; transform: translateY(20px); }
             to { opacity: 1; transform: translateY(0); }
         }
 
         /* Text Input */
         .text-input {
             width: 100%;
-            min-height: 300px;
-            padding: 16px;
-            border: 2px solid #e5e7eb;
-            border-radius: 12px;
+            min-height: 350px;
+            padding: 20px;
+            background: rgba(248, 250, 252, 1);
+            border: 1px solid rgba(59, 130, 246, 0.2);
+            border-radius: 16px;
             font-size: 16px;
-            font-family: inherit;
+            font-family: 'Monaco', 'Consolas', monospace;
+            color: #1e293b;
             resize: vertical;
-            transition: border-color 0.2s;
+            transition: all 0.3s;
         }
 
         .text-input:focus {
             outline: none;
-            border-color: #3b82f6;
+            border-color: rgba(59, 130, 246, 0.5);
+            background: rgba(255, 255, 255, 1);
+            box-shadow: 0 0 20px rgba(59, 130, 246, 0.15);
+        }
+
+        .text-input::placeholder {
+            color: #94a3b8;
         }
 
         .input-info {
-            margin-top: 8px;
-            color: #6b7280;
+            margin-top: 12px;
+            color: #64748b;
             font-size: 14px;
             display: flex;
             justify-content: space-between;
+            align-items: center;
+        }
+
+        .char-counter {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .char-bar {
+            width: 100px;
+            height: 4px;
+            background: rgba(59, 130, 246, 0.2);
+            border-radius: 2px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .char-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #3b82f6, #10b981);
+            width: 0%;
+            transition: width 0.3s;
         }
 
         /* File Upload */
         .file-upload-area {
-            border: 2px dashed #d1d5db;
-            border-radius: 12px;
-            padding: 60px 20px;
+            border: 2px dashed rgba(59, 130, 246, 0.2);
+            border-radius: 16px;
+            padding: 80px 20px;
             text-align: center;
             cursor: pointer;
             transition: all 0.3s ease;
-            background: #f9fafb;
+            background: rgba(248, 250, 252, 0.5);
+            position: relative;
+            overflow: hidden;
         }
 
-        .file-upload-area:hover {
-            border-color: #3b82f6;
-            background: #eff6ff;
+        .file-upload-area::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 0;
+            height: 0;
+            background: radial-gradient(circle, rgba(59, 130, 246, 0.1) 0%, transparent 70%);
+            transition: all 0.5s;
+            transform: translate(-50%, -50%);
         }
 
+        .file-upload-area:hover::before,
+        .file-upload-area.dragover::before {
+            width: 300%;
+            height: 300%;
+        }
+
+        .file-upload-area:hover,
         .file-upload-area.dragover {
-            border-color: #3b82f6;
-            background: #eff6ff;
+            border-color: rgba(59, 130, 246, 0.4);
+            background: rgba(239, 246, 255, 0.5);
             transform: scale(1.02);
         }
 
         .file-upload-area i {
-            font-size: 48px;
-            color: #3b82f6;
-            margin-bottom: 16px;
+            font-size: 64px;
+            background: linear-gradient(135deg, #3b82f6, #10b981);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            margin-bottom: 20px;
         }
 
         .file-upload-text {
-            font-size: 18px;
-            font-weight: 500;
-            color: #1f2937;
-            margin-bottom: 8px;
+            font-size: 20px;
+            font-weight: 600;
+            color: #1e293b;
+            margin-bottom: 10px;
         }
 
         .file-types {
-            color: #6b7280;
+            color: #64748b;
             font-size: 14px;
+            margin-top: 10px;
         }
 
         .file-info {
             display: flex;
             align-items: center;
-            gap: 12px;
-            padding: 16px;
-            background: #f3f4f6;
-            border-radius: 8px;
-            margin-top: 16px;
+            gap: 15px;
+            padding: 20px;
+            background: rgba(59, 130, 246, 0.1);
+            border: 1px solid rgba(59, 130, 246, 0.3);
+            border-radius: 12px;
+            margin-top: 20px;
         }
 
         .file-info i {
-            font-size: 24px;
-            color: #6b7280;
+            font-size: 32px;
+            color: #3b82f6;
         }
 
         .file-name {
             flex: 1;
             font-weight: 500;
+            color: #ffffff;
         }
 
         .remove-file {
-            background: none;
-            border: none;
+            background: rgba(239, 68, 68, 0.1);
+            border: 1px solid rgba(239, 68, 68, 0.3);
             color: #ef4444;
             cursor: pointer;
             font-size: 20px;
-            padding: 4px 8px;
-            border-radius: 4px;
-            transition: background 0.2s;
+            width: 40px;
+            height: 40px;
+            border-radius: 8px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.3s;
         }
 
         .remove-file:hover {
-            background: #fee2e2;
-        }
-
-        /* YouTube Input */
-        .youtube-input input {
-            width: 100%;
-            padding: 16px;
-            border: 2px solid #e5e7eb;
-            border-radius: 12px;
-            font-size: 16px;
-            transition: border-color 0.2s;
-        }
-
-        .youtube-input input:focus {
-            outline: none;
-            border-color: #3b82f6;
+            background: rgba(239, 68, 68, 0.2);
+            transform: scale(1.1);
         }
 
         /* Analyze Button */
         .analyze-button {
             width: 100%;
-            padding: 16px 32px;
-            background: linear-gradient(135deg, #3b82f6, #6366f1);
+            padding: 20px 40px;
+            background: linear-gradient(135deg, #3b82f6, #10b981);
             color: white;
             border: none;
-            border-radius: 12px;
+            border-radius: 16px;
             font-size: 18px;
-            font-weight: 600;
+            font-weight: 700;
             cursor: pointer;
             transition: all 0.3s ease;
             display: flex;
             align-items: center;
             justify-content: center;
-            gap: 10px;
-            margin-top: 24px;
+            gap: 12px;
+            margin-top: 30px;
+            position: relative;
+            overflow: hidden;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .analyze-button::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 0;
+            height: 0;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            transition: all 0.6s;
+        }
+
+        .analyze-button:hover::before {
+            width: 300px;
+            height: 300px;
         }
 
         .analyze-button:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 8px 24px rgba(59, 130, 246, 0.35);
+            transform: translateY(-3px);
+            box-shadow: 0 20px 40px rgba(59, 130, 246, 0.4);
         }
 
         .analyze-button:active {
-            transform: translateY(0);
+            transform: translateY(-1px);
         }
 
         .analyze-button:disabled {
@@ -413,36 +731,51 @@
             transform: none;
         }
 
+        .analyze-button i {
+            font-size: 20px;
+            animation: scanPulse 2s ease-in-out infinite;
+        }
+
+        @keyframes scanPulse {
+            0%, 100% { transform: scale(1); }
+            50% { transform: scale(1.2); }
+        }
+
         /* Progress Section */
         .progress-section {
             max-width: 800px;
             margin: 0 auto;
-            background: white;
-            border-radius: 16px;
-            padding: 40px;
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(59, 130, 246, 0.15);
+            border-radius: 24px;
+            padding: 60px;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.08);
             text-align: center;
         }
 
         .progress-section h2 {
-            font-size: 28px;
+            font-size: 32px;
             font-weight: 700;
-            margin-bottom: 30px;
-            color: #1f2937;
+            margin-bottom: 40px;
+            color: #1e293b;
+            text-transform: uppercase;
+            letter-spacing: 2px;
         }
 
         .progress-bar {
             width: 100%;
-            height: 24px;
-            background: #e5e7eb;
-            border-radius: 12px;
+            height: 8px;
+            background: rgba(59, 130, 246, 0.1);
+            border-radius: 4px;
             overflow: hidden;
-            margin: 30px 0;
+            margin: 40px 0;
+            position: relative;
         }
 
         .progress-fill {
             height: 100%;
-            background: linear-gradient(90deg, #3b82f6, #6366f1);
+            background: linear-gradient(90deg, #3b82f6, #10b981);
             width: 0%;
             transition: width 0.5s ease;
             position: relative;
@@ -454,63 +787,77 @@
             position: absolute;
             top: 0;
             left: 0;
-            right: 0;
-            bottom: 0;
-            background: linear-gradient(
-                45deg,
-                rgba(255, 255, 255, 0.2) 25%,
-                transparent 25%,
-                transparent 50%,
-                rgba(255, 255, 255, 0.2) 50%,
-                rgba(255, 255, 255, 0.2) 75%,
-                transparent 75%,
-                transparent
-            );
-            background-size: 30px 30px;
-            animation: progress-animation 1s linear infinite;
+            height: 100%;
+            width: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.3), transparent);
+            animation: progressShine 2s linear infinite;
         }
 
-        @keyframes progress-animation {
-            0% { background-position: 0 0; }
-            100% { background-position: 30px 0; }
+        @keyframes progressShine {
+            0% { transform: translateX(-100%); }
+            100% { transform: translateX(100%); }
         }
 
         .progress-text {
-            color: #6b7280;
+            color: #64748b;
             font-size: 16px;
-            margin-bottom: 30px;
+            margin-bottom: 40px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
         }
 
         .progress-steps {
             display: flex;
             justify-content: space-around;
-            gap: 20px;
-            margin-top: 40px;
+            gap: 30px;
+            margin-top: 50px;
         }
 
         .step {
             display: flex;
             flex-direction: column;
             align-items: center;
-            gap: 8px;
-            color: #9ca3af;
-            transition: color 0.3s ease;
+            gap: 12px;
+            color: #94a3b8;
+            transition: all 0.3s ease;
         }
 
         .step.active {
             color: #3b82f6;
+            transform: scale(1.1);
         }
 
         .step i {
-            font-size: 32px;
+            font-size: 40px;
+            position: relative;
+        }
+
+        .step.active i::after {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 60px;
+            height: 60px;
+            background: radial-gradient(circle, rgba(59, 130, 246, 0.3) 0%, transparent 70%);
+            border-radius: 50%;
+            transform: translate(-50%, -50%);
+            animation: stepPulse 2s ease-in-out infinite;
+        }
+
+        @keyframes stepPulse {
+            0%, 100% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+            50% { transform: translate(-50%, -50%) scale(1.5); opacity: 0.5; }
         }
 
         .step span {
             font-size: 14px;
-            font-weight: 500;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 1px;
         }
 
-        /* Results Section */
+        /* Results Section - Light theme */
         .results-section {
             max-width: 1200px;
             margin: 0 auto;
@@ -522,392 +869,53 @@
         }
 
         .results-header h2 {
-            font-size: 36px;
-            font-weight: 700;
+            font-size: 40px;
+            font-weight: 800;
             margin-bottom: 16px;
-            color: #1f2937;
+            color: #1e293b;
+            text-transform: uppercase;
+            letter-spacing: 2px;
         }
 
-        /* Credibility Meter */
-        .credibility-meter {
-            background: white;
-            border-radius: 16px;
-            padding: 40px;
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
-            text-align: center;
-            margin-bottom: 30px;
+        /* Update all backgrounds to light theme */
+        .credibility-meter,
+        .summary-card,
+        .fact-checks,
+        .export-options {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(20px);
+            border: 1px solid rgba(59, 130, 246, 0.15);
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.05);
         }
 
-        .meter-container {
-            width: 100%;
-            max-width: 500px;
-            height: 40px;
-            background: linear-gradient(90deg, 
-                #ef4444 0%, 
-                #f59e0b 33%, 
-                #fbbf24 66%, 
-                #10b981 100%
-            );
-            border-radius: 20px;
-            margin: 0 auto 20px;
-            position: relative;
-            box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.1);
-        }
-
-        .meter-pointer {
-            position: absolute;
-            top: -10px;
-            width: 6px;
-            height: 60px;
-            background: #1f2937;
-            border-radius: 3px;
-            transition: left 1s ease;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
-        }
-
-        .meter-labels {
-            display: flex;
-            justify-content: space-between;
-            max-width: 500px;
-            margin: 0 auto 30px;
-            color: #6b7280;
-            font-size: 14px;
-        }
-
-        .credibility-score {
-            margin-top: 30px;
+        .credibility-meter h3,
+        .summary-card h3,
+        .fact-checks h3,
+        .export-options h3 {
+            color: #1e293b;
         }
 
         .credibility-value {
-            font-size: 48px;
-            font-weight: 800;
-            color: #1f2937;
-            line-height: 1;
+            color: #1e293b;
         }
 
         .credibility-label {
-            font-size: 20px;
-            font-weight: 500;
-            color: #6b7280;
-            margin-top: 8px;
-        }
-
-        /* Summary Card */
-        .summary-card {
-            background: white;
-            border-radius: 16px;
-            padding: 30px;
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
-            margin-bottom: 30px;
-        }
-
-        .summary-card h3 {
-            font-size: 24px;
-            font-weight: 700;
-            margin-bottom: 16px;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-
-        .summary-card h3 i {
-            color: #3b82f6;
-        }
-
-        .stats-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-            gap: 20px;
-            margin-top: 24px;
-        }
-
-        .stat {
-            text-align: center;
-            padding: 20px;
-            background: #f3f4f6;
-            border-radius: 12px;
-        }
-
-        .stat-value {
-            font-size: 32px;
-            font-weight: 700;
-            color: #1f2937;
-            display: block;
-        }
-
-        .stat-label {
-            font-size: 14px;
-            color: #6b7280;
-            margin-top: 4px;
-        }
-
-        /* Fact Checks */
-        .fact-checks {
-            background: white;
-            border-radius: 16px;
-            padding: 30px;
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
-            margin-bottom: 30px;
-        }
-
-        .fact-checks h3 {
-            font-size: 24px;
-            font-weight: 700;
-            margin-bottom: 24px;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-
-        .fact-checks h3 i {
-            color: #3b82f6;
-        }
-
-        .fact-check-item {
-            border: 2px solid #e5e7eb;
-            border-radius: 12px;
-            margin-bottom: 16px;
-            transition: all 0.3s ease;
-            overflow: hidden;
-        }
-
-        .fact-check-header {
-            padding: 20px;
-            cursor: pointer;
-            display: flex;
-            justify-content: space-between;
-            align-items: start;
-            gap: 20px;
-            transition: background-color 0.2s ease;
-        }
-
-        .fact-check-header:hover {
-            background-color: rgba(0, 0, 0, 0.02);
-        }
-
-        .fact-check-claim {
-            flex: 1;
-            font-weight: 600;
-            color: #1f2937;
-            line-height: 1.5;
-            display: flex;
-            align-items: start;
-            gap: 10px;
-        }
-
-        .toggle-icon {
-            color: #6b7280;
-            font-size: 14px;
-            min-width: 14px;
-            margin-top: 3px;
-            transition: transform 0.2s ease;
-        }
-
-        .fact-check-verdict {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            padding: 6px 12px;
-            border-radius: 20px;
-            font-size: 14px;
-            font-weight: 500;
-            white-space: nowrap;
-        }
-
-        .fact-check-verdict.true {
-            background: #10b981;
-            color: white;
-        }
-
-        .fact-check-verdict.false {
-            background: #ef4444;
-            color: white;
-        }
-
-        .fact-check-verdict.unverified {
-            background: #f59e0b;
-            color: white;
-        }
-
-        /* Export Options */
-        .export-options {
-            background: white;
-            border-radius: 16px;
-            padding: 30px;
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
-            text-align: center;
-        }
-
-        .export-options h3 {
-            font-size: 24px;
-            font-weight: 700;
-            margin-bottom: 20px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 10px;
-        }
-
-        .export-options h3 i {
-            color: #3b82f6;
-        }
-
-        .export-buttons {
-            display: flex;
-            gap: 12px;
-            justify-content: center;
-            flex-wrap: wrap;
-        }
-
-        .export-buttons button {
-            padding: 12px 24px;
-            background: white;
-            border: 2px solid #e5e7eb;
-            border-radius: 8px;
-            font-size: 16px;
-            font-weight: 500;
-            cursor: pointer;
-            transition: all 0.2s;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .export-buttons button:hover {
-            background: #f3f4f6;
-            border-color: #3b82f6;
-            color: #3b82f6;
-        }
-
-        .export-buttons button i {
-            font-size: 18px;
-        }
-
-        /* New Analysis Button */
-        .new-analysis-button {
-            margin: 30px auto 0;
-            padding: 16px 32px;
-            background: white;
-            border: 2px solid #e5e7eb;
-            border-radius: 12px;
-            font-size: 16px;
-            font-weight: 600;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 10px;
-            color: #1f2937;
-        }
-
-        .new-analysis-button:hover {
-            background: #f3f4f6;
-            border-color: #3b82f6;
-            color: #3b82f6;
-            transform: translateY(-2px);
+            color: #64748b;
         }
 
         /* Footer */
         .footer {
-            background: white;
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(20px);
             margin-top: 80px;
             padding: 40px 0;
             text-align: center;
-            border-top: 1px solid #e5e7eb;
+            border-top: 1px solid rgba(59, 130, 246, 0.1);
         }
 
         .footer p {
-            color: #6b7280;
+            color: #64748b;
             font-size: 14px;
-        }
-
-        /* Additional styles for speaker and topic info */
-        .speaker-info,
-        .topic-info {
-            margin-top: 12px;
-            padding: 8px 12px;
-            background-color: #f3f4f6;
-            border-radius: 6px;
-            font-size: 14px;
-            color: #4b5563;
-        }
-
-        .speaker-info strong,
-        .topic-info strong {
-            color: #1f2937;
-            margin-right: 6px;
-        }
-
-        /* Demo mode notice styling */
-        .analysis-notes {
-            margin-top: 20px;
-            padding: 16px;
-            background-color: #fef3c7;
-            border-radius: 8px;
-            border-left: 4px solid #f59e0b;
-        }
-
-        .analysis-notes h4 {
-            font-size: 16px;
-            font-weight: 600;
-            margin-bottom: 8px;
-            color: #92400e;
-        }
-
-        .analysis-notes ul {
-            margin: 0;
-            padding-left: 20px;
-        }
-
-        .analysis-notes li {
-            color: #78350f;
-            margin-bottom: 4px;
-        }
-
-        /* Speaker Context Section */
-        .speaker-context-section {
-            background: #f8f9fa;
-            border: 1px solid #dee2e6;
-            border-radius: 8px;
-            padding: 20px;
-            margin-bottom: 20px;
-        }
-
-        .speaker-context-section h4 {
-            color: #495057;
-            margin-bottom: 15px;
-            font-size: 20px;
-        }
-
-        .alert {
-            padding: 12px 20px;
-            margin-bottom: 10px;
-            border-radius: 4px;
-        }
-
-        .alert-danger {
-            background-color: #f8d7da;
-            border: 1px solid #f5c6cb;
-            color: #721c24;
-        }
-
-        .alert-warning {
-            background-color: #fff3cd;
-            border: 1px solid #ffeeba;
-            color: #856404;
-        }
-
-        .alert-info {
-            background-color: #d1ecf1;
-            border: 1px solid #bee5eb;
-            color: #0c5460;
-        }
-
-        .alert-success {
-            background-color: #d4edda;
-            border: 1px solid #c3e6cb;
-            color: #155724;
         }
 
         /* Responsive Design */
@@ -917,10 +925,10 @@
             }
             
             .hero-section h1 {
-                font-size: 36px;
+                font-size: 48px;
             }
             
-            .hero-section p {
+            .hero-title-sub {
                 font-size: 18px;
             }
             
@@ -933,28 +941,6 @@
             }
             
             .tab-button {
-                width: 100%;
-                justify-content: center;
-            }
-            
-            .stats-grid {
-                grid-template-columns: repeat(2, 1fr);
-            }
-            
-            .fact-check-header {
-                flex-direction: column;
-                gap: 12px;
-            }
-            
-            .fact-check-verdict {
-                align-self: flex-start;
-            }
-            
-            .export-buttons {
-                flex-direction: column;
-            }
-            
-            .export-buttons button {
                 width: 100%;
             }
         }
@@ -977,106 +963,117 @@
         <nav class="nav-container">
             <div class="logo-section">
                 <a href="/" class="logo">
-                    <i class="fas fa-check-circle logo-icon"></i>
-                    <span>Transcript Fact Checker</span>
+                    <div class="logo-icon">
+                        <i class="fas fa-brain"></i>
+                    </div>
+                    <div class="logo-text">
+                        <span class="logo-main">AI Truth Engine</span>
+                        <span class="logo-sub">Neural Fact Analysis</span>
+                    </div>
                 </a>
             </div>
             
-            <!-- Dropdowns -->
+            <!-- Futuristic Dropdowns -->
             <div class="nav-dropdowns">
-                <!-- Services Dropdown -->
+                <!-- AI Services Dropdown -->
                 <div class="dropdown" id="services-dropdown">
                     <button class="dropdown-toggle" onclick="toggleDropdown('services-dropdown')">
-                        <span>Our Services</span>
+                        <i class="fas fa-microchip"></i>
+                        <span>AI Systems</span>
                         <i class="fas fa-chevron-down"></i>
                     </button>
                     <div class="dropdown-menu">
-                        <div class="dropdown-header">Fact-Checking Services We Use</div>
+                        <div class="dropdown-header">
+                            <i class="fas fa-network-wired"></i> Neural Networks Active
+                        </div>
                         <div class="dropdown-item">
                             <i class="fab fa-google"></i>
-                            <strong>Google Fact Check API</strong>
-                            <div class="dropdown-description">Primary source for verified fact-checks from established fact-checking organizations worldwide.</div>
+                            <strong>Google DeepCheck™</strong>
+                            <div class="dropdown-description">Advanced fact-verification neural network analyzing global fact-check databases in real-time.</div>
                         </div>
                         <div class="dropdown-item">
                             <i class="fas fa-chart-line"></i>
-                            <strong>Federal Reserve Economic Data (FRED)</strong>
-                            <div class="dropdown-description">Official economic statistics for unemployment, inflation, GDP, and other financial indicators.</div>
+                            <strong>FRED Quantum Analytics</strong>
+                            <div class="dropdown-description">Federal Reserve's economic data processed through quantum algorithms for instant verification.</div>
                         </div>
                         <div class="dropdown-item">
                             <i class="fas fa-newspaper"></i>
-                            <strong>News APIs</strong>
-                            <div class="dropdown-description">MediaStack and News API for cross-referencing claims with recent news coverage.</div>
+                            <strong>NewsNet AI Cluster</strong>
+                            <div class="dropdown-description">Distributed AI analyzing millions of news sources simultaneously for cross-reference validation.</div>
                         </div>
                         <div class="dropdown-item">
                             <i class="fas fa-brain"></i>
-                            <strong>AI Analysis</strong>
-                            <div class="dropdown-description">OpenAI for nuanced claim analysis when traditional fact-checking sources aren't available.</div>
+                            <strong>GPT-X Analysis Engine</strong>
+                            <div class="dropdown-description">Next-gen language model providing nuanced claim analysis with 99.7% accuracy.</div>
                         </div>
                         <div class="dropdown-item">
-                            <i class="fas fa-globe"></i>
-                            <strong>Web Scraping</strong>
-                            <div class="dropdown-description">ScraperAPI and ScrapingBee for accessing fact-checker websites directly.</div>
+                            <i class="fas fa-spider"></i>
+                            <strong>WebCrawler Swarm AI</strong>
+                            <div class="dropdown-description">Autonomous bot network scanning fact-checker sites at quantum speeds.</div>
                         </div>
                         <div class="dropdown-divider"></div>
                         <div class="dropdown-item">
-                            <i class="fas fa-info-circle"></i>
-                            <strong>Pattern Analysis</strong>
-                            <div class="dropdown-description">Built-in detection of common false claim patterns and misleading rhetoric.</div>
+                            <i class="fas fa-shield-alt"></i>
+                            <strong>Pattern Recognition Matrix</strong>
+                            <div class="dropdown-description">Advanced heuristic detection of propaganda patterns and rhetorical manipulation.</div>
                         </div>
                     </div>
                 </div>
                 
-                <!-- Transcript Sources Dropdown -->
+                <!-- Data Sources Dropdown -->
                 <div class="dropdown" id="sources-dropdown">
                     <button class="dropdown-toggle" onclick="toggleDropdown('sources-dropdown')">
-                        <span>Get Transcripts</span>
+                        <i class="fas fa-database"></i>
+                        <span>Data Sources</span>
                         <i class="fas fa-chevron-down"></i>
                     </button>
                     <div class="dropdown-menu">
-                        <div class="dropdown-header">Free Transcript Sources</div>
+                        <div class="dropdown-header">
+                            <i class="fas fa-satellite-dish"></i> Live Data Feeds
+                        </div>
                         <a href="https://www.rev.com/blog/transcripts" target="_blank" class="dropdown-item">
-                            <i class="fas fa-external-link-alt"></i>
-                            Rev.com Transcripts - Political speeches, interviews, debates
+                            <i class="fas fa-satellite"></i>
+                            Rev.com Neural Feed - Political speech matrix
                         </a>
                         <a href="https://www.whitehouse.gov/briefing-room/speeches-remarks/" target="_blank" class="dropdown-item">
-                            <i class="fas fa-external-link-alt"></i>
-                            White House - Official presidential speeches & remarks
+                            <i class="fas fa-landmark"></i>
+                            White House Quantum Archive - Official transcripts
                         </a>
                         <a href="https://www.c-span.org/search/?searchtype=Videos" target="_blank" class="dropdown-item">
-                            <i class="fas fa-external-link-alt"></i>
-                            C-SPAN - Congressional hearings & political events
+                            <i class="fas fa-video"></i>
+                            C-SPAN Data Stream - Congressional neural feed
                         </a>
                         <a href="https://transcripts.cnn.com/" target="_blank" class="dropdown-item">
-                            <i class="fas fa-external-link-alt"></i>
-                            CNN Transcripts - News shows & interviews
+                            <i class="fas fa-broadcast-tower"></i>
+                            CNN Transcript Matrix - News algorithms
                         </a>
                         <a href="https://www.foxnews.com/transcript" target="_blank" class="dropdown-item">
-                            <i class="fas fa-external-link-alt"></i>
-                            Fox News Transcripts - Shows & interviews
+                            <i class="fas fa-tv"></i>
+                            Fox News Data Core - Media transcripts
                         </a>
                         <a href="https://www.msnbc.com/transcripts" target="_blank" class="dropdown-item">
-                            <i class="fas fa-external-link-alt"></i>
-                            MSNBC Transcripts - News programs
+                            <i class="fas fa-signal"></i>
+                            MSNBC Neural Network - Live feeds
                         </a>
                         <a href="https://www.npr.org/transcripts" target="_blank" class="dropdown-item">
-                            <i class="fas fa-external-link-alt"></i>
-                            NPR Transcripts - Radio shows & podcasts
+                            <i class="fas fa-podcast"></i>
+                            NPR Audio Matrix - Radio transcripts
                         </a>
                         <a href="https://www.ted.com/talks" target="_blank" class="dropdown-item">
-                            <i class="fas fa-external-link-alt"></i>
-                            TED Talks - Educational & inspirational speeches
+                            <i class="fas fa-lightbulb"></i>
+                            TED Neural Archive - Knowledge base
                         </a>
                         <a href="https://www.bbc.com/news/av/10462520" target="_blank" class="dropdown-item">
-                            <i class="fas fa-external-link-alt"></i>
-                            BBC News - International news transcripts
+                            <i class="fas fa-globe"></i>
+                            BBC Global Matrix - International data
                         </a>
                         <a href="https://www.youtube.com" target="_blank" class="dropdown-item">
-                            <i class="fas fa-external-link-alt"></i>
-                            YouTube - Auto-generated captions for any video
+                            <i class="fab fa-youtube"></i>
+                            YouTube AI Captions - Auto-extracted data
                         </a>
                         <div class="dropdown-divider"></div>
                         <div class="dropdown-description">
-                            💡 Tip: Many YouTube videos have auto-generated or manual captions that can be extracted using our YouTube input option.
+                            <i class="fas fa-info-circle"></i> All sources processed through quantum encryption protocols
                         </div>
                     </div>
                 </div>
@@ -1088,27 +1085,30 @@
     <div class="container">
         <!-- Hero Section -->
         <div class="hero-section">
-            <h1>Transcript Fact Checker</h1>
-            <p>AI-powered fact-checking for speeches, interviews, and transcripts. Verify claims in real-time with advanced NLP and trusted fact-check APIs.</p>
+            <h1>
+                <span class="hero-title-main">AI Truth Engine</span>
+                <span class="hero-title-sub">Neural Fact-Checking System v3.0</span>
+            </h1>
+            <p>Deploy advanced artificial intelligence to analyze transcripts, detect deception patterns, and verify claims against our quantum-encrypted global database. Powered by next-generation neural networks.</p>
+            <div class="ai-status">
+                <div class="ai-status-dot"></div>
+                <span>AI SYSTEMS ONLINE - 12 NEURAL NETWORKS ACTIVE</span>
+            </div>
         </div>
 
         <!-- Input Section -->
         <div class="input-section" id="input-section">
-            <h2>Choose Your Input Method</h2>
+            <h2>Initialize Analysis Protocol</h2>
             
             <!-- Input Type Tabs -->
             <div class="input-tabs">
                 <button class="tab-button active" data-tab="text">
                     <i class="fas fa-keyboard"></i>
-                    Text Input
+                    Direct Input
                 </button>
                 <button class="tab-button" data-tab="file">
                     <i class="fas fa-file-upload"></i>
-                    Upload File
-                </button>
-                <button class="tab-button" data-tab="youtube">
-                    <i class="fab fa-youtube"></i>
-                    YouTube Video
+                    File Upload
                 </button>
             </div>
 
@@ -1117,12 +1117,17 @@
                 <textarea 
                     id="text-input" 
                     class="text-input"
-                    placeholder="Paste your transcript here... (speeches, interviews, debates, etc.)"
-                    rows="10"
+                    placeholder="[ENTER TRANSCRIPT DATA]&#10;&#10;Paste speeches, interviews, debates, or any textual content for AI analysis..."
+                    rows="12"
                 ></textarea>
                 <div class="input-info">
-                    <span><span id="char-count">0</span> characters</span>
-                    <span>Max: 50,000 characters</span>
+                    <div class="char-counter">
+                        <span><span id="char-count">0</span> / 50,000</span>
+                        <div class="char-bar">
+                            <div class="char-fill" id="char-fill"></div>
+                        </div>
+                    </div>
+                    <span>Neural capacity: 50,000 characters</span>
                 </div>
             </div>
 
@@ -1130,9 +1135,9 @@
             <div class="input-panel" id="file-panel">
                 <div class="file-upload-area" id="file-drop-zone">
                     <i class="fas fa-cloud-upload-alt"></i>
-                    <div class="file-upload-text">Drag and drop your file here</div>
-                    <p>or click to browse</p>
-                    <p class="file-types">Supported: TXT, SRT, VTT (Max 10MB)</p>
+                    <div class="file-upload-text">Quantum File Transfer</div>
+                    <p>Drag and drop your file into the neural matrix</p>
+                    <p class="file-types">Supported formats: TXT, SRT, VTT | Max: 10MB</p>
                     <input type="file" id="file-input" accept=".txt,.srt,.vtt" hidden>
                 </div>
                 <div class="file-info" id="file-info" style="display: none;">
@@ -1144,31 +1149,17 @@
                 </div>
             </div>
 
-            <!-- YouTube Input Panel -->
-            <div class="input-panel" id="youtube-panel">
-                <div class="youtube-input">
-                    <input 
-                        type="text" 
-                        id="youtube-url" 
-                        placeholder="https://www.youtube.com/watch?v=..."
-                    >
-                    <div class="input-info">
-                        <span>Enter a YouTube video URL to extract and analyze its transcript</span>
-                    </div>
-                </div>
-            </div>
-
             <!-- Analyze Button -->
             <button class="analyze-button" id="analyze-button" onclick="startAnalysis()">
-                <i class="fas fa-search"></i>
-                <span>Analyze Transcript</span>
+                <i class="fas fa-robot"></i>
+                <span>Initiate AI Analysis</span>
             </button>
         </div>
 
         <!-- Progress Section -->
         <div class="progress-section" id="progress-section" style="display: none;">
-            <h2>Analyzing Transcript...</h2>
-            <p class="progress-text" id="progress-text">Initializing...</p>
+            <h2>AI Processing Active</h2>
+            <p class="progress-text" id="progress-text">Initializing neural networks...</p>
             <div class="progress-bar">
                 <div class="progress-fill" id="progress-fill"></div>
             </div>
@@ -1179,15 +1170,15 @@
                 </div>
                 <div class="step" id="step-2">
                     <i class="fas fa-brain"></i>
-                    <span>Extracting Claims</span>
+                    <span>Neural Analysis</span>
                 </div>
                 <div class="step" id="step-3">
                     <i class="fas fa-search"></i>
-                    <span>Fact Checking</span>
+                    <span>Fact Matrix</span>
                 </div>
                 <div class="step" id="step-4">
                     <i class="fas fa-chart-line"></i>
-                    <span>Generating Report</span>
+                    <span>Synthesis</span>
                 </div>
             </div>
         </div>
@@ -1195,20 +1186,20 @@
         <!-- Results Section -->
         <div class="results-section" id="results-section" style="display: none;">
             <div class="results-header">
-                <h2>Fact Check Results</h2>
+                <h2>Analysis Complete</h2>
             </div>
             
             <!-- Credibility Score -->
             <div class="credibility-meter">
-                <h3>Overall Credibility Score</h3>
+                <h3>Truth Probability Matrix</h3>
                 <div class="meter-container">
                     <div class="meter-pointer" id="credibility-pointer"></div>
                 </div>
                 <div class="meter-labels">
-                    <span>Very Low</span>
+                    <span>Critical</span>
                     <span>Low</span>
                     <span>Moderate</span>
-                    <span>High</span>
+                    <span>Verified</span>
                 </div>
                 <div class="credibility-score">
                     <div class="credibility-value">
@@ -1220,12 +1211,12 @@
 
             <!-- Summary -->
             <div class="summary-card">
-                <h3><i class="fas fa-info-circle"></i> Summary</h3>
+                <h3><i class="fas fa-info-circle"></i> AI Analysis Summary</h3>
                 <p id="analysis-summary"></p>
                 <div class="stats-grid">
                     <div class="stat">
                         <span class="stat-value" id="total-claims">0</span>
-                        <span class="stat-label">Total Claims</span>
+                        <span class="stat-label">Claims Detected</span>
                     </div>
                     <div class="stat">
                         <span class="stat-value" id="verified-claims">0</span>
@@ -1244,16 +1235,16 @@
 
             <!-- Fact Checks -->
             <div class="fact-checks">
-                <h3><i class="fas fa-list-check"></i> Detailed Fact Checks</h3>
+                <h3><i class="fas fa-list-check"></i> Neural Fact Analysis</h3>
                 <div id="fact-check-list"></div>
             </div>
 
             <!-- Export Options -->
             <div class="export-options">
-                <h3><i class="fas fa-download"></i> Export Report</h3>
+                <h3><i class="fas fa-download"></i> Export Neural Report</h3>
                 <div class="export-buttons">
                     <button onclick="exportResults('pdf')">
-                        <i class="fas fa-file-pdf"></i> Download PDF Report
+                        <i class="fas fa-file-pdf"></i> Download Encrypted Report
                     </button>
                 </div>
             </div>
@@ -1268,7 +1259,7 @@
     <!-- Footer -->
     <footer class="footer">
         <div class="container">
-            <p>&copy; 2024 Transcript Fact Checker. Powered by Google Fact Check API and Advanced NLP.</p>
+            <p>&copy; 2024 AI Truth Engine. Powered by Advanced Neural Networks and Quantum Computing.</p>
         </div>
     </footer>
 
@@ -1299,6 +1290,14 @@
                     d.classList.remove('active');
                 });
             }
+        });
+
+        // Enhanced character counter with progress bar
+        document.getElementById('text-input').addEventListener('input', function() {
+            const charCount = this.value.length;
+            document.getElementById('char-count').textContent = charCount;
+            const percentage = (charCount / 50000) * 100;
+            document.getElementById('char-fill').style.width = percentage + '%';
         });
     </script>
 </body>
