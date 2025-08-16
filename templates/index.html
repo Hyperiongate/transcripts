@@ -43,7 +43,6 @@
         .logo-section {
             display: flex;
             align-items: center;
-            gap: 30px;
         }
 
         .logo {
@@ -66,30 +65,7 @@
             font-size: 28px;
         }
 
-        .nav-pills {
-            display: flex;
-            gap: 10px;
-        }
 
-        .nav-pill {
-            padding: 8px 16px;
-            border-radius: 20px;
-            text-decoration: none;
-            color: #6b7280;
-            font-size: 14px;
-            font-weight: 500;
-            transition: all 0.2s;
-        }
-
-        .nav-pill:hover {
-            background: #f3f4f6;
-            color: #1f2937;
-        }
-
-        .nav-pill.active {
-            background: #3b82f6;
-            color: white;
-        }
 
         /* Container */
         .container {
@@ -120,44 +96,132 @@
             margin: 0 auto;
         }
 
-        /* Features Grid */
-        .features-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        /* Info Dropdowns */
+        .info-dropdowns {
+            display: flex;
             gap: 20px;
-            max-width: 1200px;
+            max-width: 800px;
             margin: 40px auto;
+            flex-wrap: wrap;
         }
 
-        .feature-card {
+        .dropdown-container {
+            flex: 1;
+            min-width: 300px;
+        }
+
+        .dropdown-button {
+            width: 100%;
+            padding: 20px;
             background: white;
-            padding: 28px;
+            border: 2px solid #e5e7eb;
             border-radius: 12px;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
-            transition: transform 0.2s, box-shadow 0.2s;
-        }
-
-        .feature-card:hover {
-            transform: translateY(-4px);
-            box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
-        }
-
-        .feature-icon {
-            font-size: 40px;
-            margin-bottom: 16px;
-        }
-
-        .feature-title {
-            font-size: 20px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            font-size: 18px;
             font-weight: 600;
             color: #1f2937;
-            margin-bottom: 12px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
         }
 
-        .feature-desc {
-            font-size: 15px;
+        .dropdown-button:hover {
+            border-color: #3b82f6;
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+        }
+
+        .dropdown-button i:first-child {
+            font-size: 24px;
+            color: #3b82f6;
+        }
+
+        .dropdown-arrow {
+            margin-left: auto;
+            transition: transform 0.3s ease;
             color: #6b7280;
+        }
+
+        .dropdown-arrow.open {
+            transform: rotate(180deg);
+        }
+
+        .dropdown-content {
+            display: none;
+            background: white;
+            border: 2px solid #e5e7eb;
+            border-top: none;
+            border-radius: 0 0 12px 12px;
+            padding: 24px;
+            margin-top: -2px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .dropdown-content.show {
+            display: block;
+            animation: slideDown 0.3s ease;
+        }
+
+        .dropdown-content h4 {
+            color: #1f2937;
+            margin-bottom: 12px;
+            font-size: 18px;
+        }
+
+        .dropdown-content ul {
+            list-style: none;
+            padding: 0;
+            margin: 0 0 20px 0;
+        }
+
+        .dropdown-content li {
+            padding: 8px 0;
+            color: #4b5563;
             line-height: 1.6;
+        }
+
+        .dropdown-content li strong {
+            color: #1f2937;
+        }
+
+        .dropdown-content a {
+            color: #3b82f6;
+            text-decoration: none;
+            transition: color 0.2s;
+        }
+
+        .dropdown-content a:hover {
+            color: #2563eb;
+            text-decoration: underline;
+        }
+
+        .dropdown-content p {
+            color: #4b5563;
+            line-height: 1.6;
+            margin: 12px 0;
+        }
+
+        /* Custom scrollbar for dropdowns */
+        .dropdown-content::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .dropdown-content::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 3px;
+        }
+
+        .dropdown-content::-webkit-scrollbar-thumb {
+            background: #888;
+            border-radius: 3px;
+        }
+
+        .dropdown-content::-webkit-scrollbar-thumb:hover {
+            background: #555;
         }
 
         /* Input Section */
@@ -631,31 +695,7 @@
             color: #3b82f6;
         }
 
-        /* Fact check list container with scroll */
-        #fact-check-list {
-            max-height: 800px;
-            overflow-y: auto;
-            padding-right: 10px;
-        }
 
-        /* Custom scrollbar for fact check list */
-        #fact-check-list::-webkit-scrollbar {
-            width: 8px;
-        }
-
-        #fact-check-list::-webkit-scrollbar-track {
-            background: #f1f1f1;
-            border-radius: 4px;
-        }
-
-        #fact-check-list::-webkit-scrollbar-thumb {
-            background: #888;
-            border-radius: 4px;
-        }
-
-        #fact-check-list::-webkit-scrollbar-thumb:hover {
-            background: #555;
-        }
 
         .fact-check-item {
             border: 2px solid #e5e7eb;
@@ -982,6 +1022,7 @@
     
     <!-- Enhanced styles for expandable fact checks -->
     <link rel="stylesheet" href="/static/css/enhanced.css">
+    <link rel="stylesheet" href="/static/css/results-header.css">
 </head>
 <body>
     <!-- Header -->
@@ -992,12 +1033,6 @@
                     <i class="fas fa-check-circle logo-icon"></i>
                     <span>Transcript Fact Checker</span>
                 </a>
-                <div class="nav-pills">
-                    <a href="#" class="nav-pill active">Transcript Checker</a>
-                    <a href="#" class="nav-pill">Live Streams</a>
-                    <a href="#" class="nav-pill">API Access</a>
-                    <a href="#" class="nav-pill">About</a>
-                </div>
             </div>
         </nav>
     </header>
@@ -1010,27 +1045,51 @@
             <p>AI-powered fact-checking for speeches, interviews, and transcripts. Verify claims in real-time with advanced NLP and trusted fact-check APIs.</p>
         </div>
 
-        <!-- Features Grid -->
-        <div class="features-grid">
-            <div class="feature-card">
-                <div class="feature-icon">🔍</div>
-                <div class="feature-title">Services We Use</div>
-                <div class="feature-desc">Google Fact Check API, Federal Reserve Economic Data (FRED), OpenAI, News APIs (NewsAPI & MediaStack), Pattern Analysis, Wikipedia, Semantic Scholar</div>
+        <!-- Info Dropdowns -->
+        <div class="info-dropdowns">
+            <!-- Our Resources Dropdown -->
+            <div class="dropdown-container">
+                <button class="dropdown-button" onclick="toggleDropdown('resources-dropdown')">
+                    <i class="fas fa-tools"></i>
+                    <span>Our Resources</span>
+                    <i class="fas fa-chevron-down dropdown-arrow" id="resources-arrow"></i>
+                </button>
+                <div class="dropdown-content" id="resources-dropdown">
+                    <h4>Services We Use for Fact-Checking</h4>
+                    <ul>
+                        <li><strong>Google Fact Check API</strong> - Primary fact-checking database</li>
+                        <li><strong>Federal Reserve Economic Data (FRED)</strong> - Official economic statistics</li>
+                        <li><strong>OpenAI</strong> - AI-powered claim analysis</li>
+                        <li><strong>News APIs</strong> - NewsAPI & MediaStack for current events</li>
+                        <li><strong>Pattern Analysis</strong> - Identifies common false claim patterns</li>
+                        <li><strong>Wikipedia</strong> - General knowledge verification</li>
+                        <li><strong>Semantic Scholar</strong> - Academic paper verification</li>
+                    </ul>
+                    <h4>How It Works</h4>
+                    <p>We extract factual claims from transcripts using NLP, then verify each claim against multiple sources. Each claim receives a verdict (true, false, misleading, etc.) with confidence scores and explanations.</p>
+                </div>
             </div>
-            <div class="feature-card">
-                <div class="feature-icon">📊</div>
-                <div class="feature-title">Comprehensive Analysis</div>
-                <div class="feature-desc">Multi-source verification with credibility scoring and speaker history tracking</div>
-            </div>
-            <div class="feature-card">
-                <div class="feature-icon">📝</div>
-                <div class="feature-title">Find Transcripts</div>
-                <div class="feature-desc">Need a specific transcript? Check out these free services: C-SPAN.org, Rev.com/blog, CNN Transcripts, Politico Transcripts, WhiteHouse.gov</div>
-            </div>
-            <div class="feature-card">
-                <div class="feature-icon">📥</div>
-                <div class="feature-title">Export Reports</div>
-                <div class="feature-desc">Download detailed PDF reports with full analysis and source citations</div>
+
+            <!-- Free Transcript Services Dropdown -->
+            <div class="dropdown-container">
+                <button class="dropdown-button" onclick="toggleDropdown('transcripts-dropdown')">
+                    <i class="fas fa-file-alt"></i>
+                    <span>Find Transcripts</span>
+                    <i class="fas fa-chevron-down dropdown-arrow" id="transcripts-arrow"></i>
+                </button>
+                <div class="dropdown-content" id="transcripts-dropdown">
+                    <h4>Free Transcript Services</h4>
+                    <p>Need a specific transcript? Check out these free services:</p>
+                    <ul>
+                        <li><a href="https://www.c-span.org/search/?searchtype=Videos" target="_blank"><strong>C-SPAN.org</strong></a> - Congressional hearings, speeches, and political events</li>
+                        <li><a href="https://www.rev.com/blog/transcripts" target="_blank"><strong>Rev.com/blog</strong></a> - Popular speeches, interviews, and debates</li>
+                        <li><a href="http://transcripts.cnn.com/" target="_blank"><strong>CNN Transcripts</strong></a> - CNN show transcripts and interviews</li>
+                        <li><a href="https://www.politico.com/transcripts" target="_blank"><strong>Politico Transcripts</strong></a> - Political speeches and events</li>
+                        <li><a href="https://www.whitehouse.gov/briefing-room/" target="_blank"><strong>WhiteHouse.gov</strong></a> - Official White House statements and briefings</li>
+                        <li><a href="https://www.presidency.ucsb.edu/" target="_blank"><strong>American Presidency Project</strong></a> - Historical presidential documents</li>
+                        <li><a href="https://www.govinfo.gov/" target="_blank"><strong>GovInfo.gov</strong></a> - Official government transcripts and documents</li>
+                    </ul>
+                </div>
             </div>
         </div>
 
@@ -1217,5 +1276,41 @@
     <!-- JavaScript -->
     <script src="/static/js/app.js"></script>
     <script src="/static/js/enhanced.js"></script>
+    <script>
+        // Toggle dropdown function
+        function toggleDropdown(dropdownId) {
+            const dropdown = document.getElementById(dropdownId);
+            const arrow = document.getElementById(dropdownId.replace('-dropdown', '-arrow'));
+            
+            // Close other dropdowns
+            document.querySelectorAll('.dropdown-content').forEach(d => {
+                if (d.id !== dropdownId) {
+                    d.classList.remove('show');
+                }
+            });
+            
+            document.querySelectorAll('.dropdown-arrow').forEach(a => {
+                if (a.id !== arrow.id) {
+                    a.classList.remove('open');
+                }
+            });
+            
+            // Toggle current dropdown
+            dropdown.classList.toggle('show');
+            arrow.classList.toggle('open');
+        }
+        
+        // Close dropdowns when clicking outside
+        document.addEventListener('click', function(event) {
+            if (!event.target.closest('.dropdown-container')) {
+                document.querySelectorAll('.dropdown-content').forEach(d => {
+                    d.classList.remove('show');
+                });
+                document.querySelectorAll('.dropdown-arrow').forEach(a => {
+                    a.classList.remove('open');
+                });
+            }
+        });
+    </script>
 </body>
 </html>
