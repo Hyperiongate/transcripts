@@ -27,8 +27,6 @@ from services.factcheck import FactChecker
 from services.export import PDFExporter
 from services.context_resolver import ContextResolver
 from services.speaker_history import SpeakerHistoryTracker
-from services.temporal_context import TemporalContextHandler
-from services.temporal_context import TemporalContextHandler
 
 # Configure logging
 logging.basicConfig(
@@ -52,7 +50,6 @@ fact_checker = FactChecker()
 pdf_exporter = PDFExporter()
 context_resolver = ContextResolver()
 speaker_tracker = SpeakerHistoryTracker()
-temporal_handler = TemporalContextHandler()
 job_storage = get_job_storage()
 
 # File upload handling
@@ -98,11 +95,7 @@ def analyze():
                 }), 400
             
             transcript = result['transcript']
-            # Try to get upload date for temporal context
-            video_id = result.get('video_id', '')
-            title = result.get('title', 'Unknown')
-            # For now, we'll just use the title - in production, you'd fetch metadata
-            source = f"YouTube: {title}"
+            source = f"YouTube: {result.get('title', 'Unknown')}"
             
         elif input_type == 'file':
             # File upload
@@ -339,6 +332,11 @@ def process_transcript(job_id, transcript, source):
         job_storage.update(job_id, {'progress': 20})
         cleaned_transcript = transcript_processor.clean_transcript(transcript)
         
+        # ENHANCED: Analyze full transcript for context FIRST
+        job_storage.update(job_id, {'progress': 25})
+        context_resolver.analyze_full_transcript(transcript)
+        logger.info(f"Job {job_id}: Full transcript analysis complete - {context_resolver.get_context_summary()}")
+        
         # Identify speakers and topics
         job_storage.update(job_id, {'progress': 30})
         speakers, topics = claim_extractor.identify_speakers(transcript)
@@ -362,20 +360,24 @@ def process_transcript(job_id, transcript, source):
         claims = claim_extractor.extract_claims(cleaned_transcript)
         logger.info(f"Job {job_id}: Extracted {len(claims)} claims")
         
-        # Add temporal context processing
-        processed_claims = temporal_handler.process_claims_with_temporal_context(claims, source)
-        
-        # Add pronoun resolution context
-        for claim in processed_claims:
+        # Add context resolution
+        for claim in claims:
             resolved_text, context_info = context_resolver.resolve_context(claim['text'])
             claim['resolved_text'] = resolved_text
             claim['context_info'] = context_info
-            claim['full_text'] = claim.get('original_text', claim['text'])  # Use temporal original
+            claim['full_text'] = claim['text']
             context_resolver.add_claim_to_context(claim['text'])
+            
+            # Log resolution info
+            if context_info.get('resolved'):
+                logger.info(f"Resolved claim: '{claim['text']}' → '{resolved_text}'")
+            if context_info.get('resolutions'):
+                for resolution in context_info['resolutions']:
+                    logger.info(f"Name resolution: {resolution}")
         
         # Prioritize and filter claims
         job_storage.update(job_id, {'progress': 50})
-        verified_claims = claim_extractor.filter_verifiable(processed_claims)
+        verified_claims = claim_extractor.filter_verifiable(claims)
         prioritized_claims = claim_extractor.prioritize_claims(verified_claims)
         logger.info(f"Job {job_id}: Checking {len(prioritized_claims)} prioritized claims")
         
@@ -383,12 +385,9 @@ def process_transcript(job_id, transcript, source):
         claims_to_check = []
         for claim in prioritized_claims[:Config.MAX_CLAIMS_PER_TRANSCRIPT]:
             if isinstance(claim, dict):
-                # Use the temporally adjusted text for fact-checking
-                text_for_checking = claim.get('text', claim.get('resolved_text', ''))
                 claims_to_check.append({
-                    'text': text_for_checking,
-                    'full_context': claim.get('full_text', claim.get('original_text', text_for_checking)),
-                    'temporal_note': claim.get('temporal_note'),
+                    'text': claim.get('resolved_text', claim['text']),
+                    'full_context': claim.get('full_text', claim['text']),
                     'original': claim
                 })
             else:
@@ -411,17 +410,11 @@ def process_transcript(job_id, transcript, source):
             elapsed_time = time.time() - start_time
             if elapsed_time > batch_timeout:
                 logger.warning(f"Fact-checking timeout reached after {elapsed_time:.1f}s and {len(fact_check_results)} claims")
-                # Add unverified results for remaining claims
+                # Add demo results for remaining claims
                 for claim_data in claims_to_check[i:]:
-                    unverified_result = {
-                        'claim': claim_data['text'],
-                        'full_context': claim_data['full_context'],
-                        'verdict': 'unverified',
-                        'confidence': 0,
-                        'explanation': 'Time limit reached - claim not checked',
-                        'sources': []
-                    }
-                    fact_check_results.append(unverified_result)
+                    demo_result = fact_checker._create_demo_result(claim_data['text'])
+                    demo_result['full_context'] = claim_data['full_context']
+                    fact_check_results.append(demo_result)
                 break
             
             batch = claims_to_check[i:i + Config.FACT_CHECK_BATCH_SIZE]
@@ -430,17 +423,14 @@ def process_transcript(job_id, transcript, source):
                 batch_texts = [c['text'] for c in batch]
                 batch_results = fact_checker.batch_check(batch_texts)
                 
-                # Add full context and temporal notes back to results
+                # Add full context back to results
                 for j, result in enumerate(batch_results):
                     result['full_context'] = batch[j]['full_context']
-                    
-                    # Add temporal note if present
-                    if batch[j].get('temporal_note'):
-                        result['temporal_context'] = batch[j]['temporal_note']
-                    
                     original = batch[j]['original']
                     if original.get('context_info', {}).get('resolved'):
                         result['context_note'] = f"Context resolved: {original['context_info'].get('resolved_claim', '')}"
+                    if original.get('context_info', {}).get('resolutions'):
+                        result['name_resolutions'] = original['context_info']['resolutions']
                 
                 fact_check_results.extend(batch_results)
                 
@@ -449,17 +439,10 @@ def process_transcript(job_id, transcript, source):
                 job_storage.update(job_id, {'progress': progress})
             except Exception as e:
                 logger.error(f"Error checking batch starting at {i}: {str(e)}")
-                # Add error results for this batch
                 for claim_data in batch:
-                    error_result = {
-                        'claim': claim_data['text'],
-                        'full_context': claim_data['full_context'],
-                        'verdict': 'unverified',
-                        'confidence': 0,
-                        'explanation': 'Error during fact-checking',
-                        'sources': []
-                    }
-                    fact_check_results.append(error_result)
+                    demo_result = fact_checker._create_demo_result(claim_data['text'])
+                    demo_result['full_context'] = claim_data['full_context']
+                    fact_check_results.append(demo_result)
         
         # Calculate overall credibility
         job_storage.update(job_id, {'progress': 90})
@@ -498,7 +481,8 @@ def process_transcript(job_id, transcript, source):
             'fact_checks': fact_check_results,
             'summary': summary,
             'conversational_summary': conversational_summary,
-            'analyzed_at': datetime.now().isoformat()
+            'analyzed_at': datetime.now().isoformat(),
+            'context_summary': context_resolver.get_context_summary()  # Add context analysis summary
         }
         
         # Track this analysis for the speaker
@@ -658,6 +642,19 @@ def generate_text_report(results):
             report.append(f"Patterns: {', '.join(history['patterns'])}")
         report.append("")
     
+    # Add context analysis summary
+    if results.get('context_summary'):
+        context = results['context_summary']
+        report.append("CONTEXT ANALYSIS")
+        report.append("-" * 50)
+        report.append(f"People identified: {context['people']}")
+        report.append(f"Organizations: {context['organizations']}")
+        report.append(f"Locations: {context['locations']}")
+        report.append(f"Name mappings resolved: {context['name_mappings']}")
+        if context.get('topics'):
+            report.append(f"Main topics: {', '.join(context['topics'])}")
+        report.append("")
+    
     report.append("STATISTICS")
     report.append("-" * 50)
     report.append(f"Total Claims: {results.get('checked_claims', 0)}")
@@ -683,9 +680,11 @@ def generate_text_report(results):
         else:
             report.append(f"Claim: {check.get('claim', 'N/A')}")
         
-        # Add temporal context if present
-        if check.get('temporal_context'):
-            report.append(f"Temporal context: {check['temporal_context']}")
+        # Show context resolution if any
+        if check.get('context_note'):
+            report.append(f"Context: {check['context_note']}")
+        if check.get('name_resolutions'):
+            report.append(f"Name resolutions: {', '.join(check['name_resolutions'])}")
         
         report.append(f"Verdict: {check.get('verdict', 'unverified').upper()}")
         
@@ -695,10 +694,7 @@ def generate_text_report(results):
         report.append(f"Explanation: {check.get('explanation', 'No explanation available')}")
         
         if check.get('sources'):
-            # Filter out demo sources
-            real_sources = [s for s in check['sources'] if 'demo' not in s.lower()]
-            if real_sources:
-                report.append(f"Sources: {', '.join(real_sources)}")
+            report.append(f"Sources: {', '.join(check['sources'])}")
         
         report.append("")
     
