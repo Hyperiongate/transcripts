@@ -285,6 +285,58 @@
     margin-bottom: 20px;
 }
 
+/* Fact check list container with scroll */
+#fact-check-list {
+    max-height: 800px;
+    overflow-y: auto;
+    padding-right: 10px;
+}
+
+/* Custom scrollbar for fact check list */
+#fact-check-list::-webkit-scrollbar {
+    width: 8px;
+}
+
+#fact-check-list::-webkit-scrollbar-track {
+    background: #f1f1f1;
+    border-radius: 4px;
+}
+
+#fact-check-list::-webkit-scrollbar-thumb {
+    background: #888;
+    border-radius: 4px;
+}
+
+#fact-check-list::-webkit-scrollbar-thumb:hover {
+    background: #555;
+}
+
+/* Individual fact check details scroll */
+.fact-check-details-wrapper {
+    max-height: 500px;
+    overflow-y: auto;
+    overflow-x: hidden;
+}
+
+/* Custom scrollbar for fact check details */
+.fact-check-details-wrapper::-webkit-scrollbar {
+    width: 8px;
+}
+
+.fact-check-details-wrapper::-webkit-scrollbar-track {
+    background: #f1f1f1;
+    border-radius: 4px;
+}
+
+.fact-check-details-wrapper::-webkit-scrollbar-thumb {
+    background: #888;
+    border-radius: 4px;
+}
+
+.fact-check-details-wrapper::-webkit-scrollbar-thumb:hover {
+    background: #555;
+}
+
 /* Responsive Design */
 @media (max-width: 768px) {
     .results-header {
