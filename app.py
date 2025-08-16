@@ -146,7 +146,7 @@ def analyze():
         if len(transcript) > Config.MAX_TRANSCRIPT_LENGTH:
             return jsonify({'success': False, 'error': 'Transcript too long'}), 400
         
-        # Create job
+        # Create job with source included
         job_data = {
             'id': job_id,
             'status': 'processing',
@@ -160,9 +160,11 @@ def analyze():
         thread = Thread(target=process_transcript, args=(job_id, transcript, source))
         thread.start()
         
+        # Return response with source
         return jsonify({
             'success': True,
             'job_id': job_id,
+            'source': source,
             'message': 'Analysis started'
         })
         
@@ -410,9 +412,9 @@ def process_transcript(job_id, transcript, source):
             elapsed_time = time.time() - start_time
             if elapsed_time > batch_timeout:
                 logger.warning(f"Fact-checking timeout reached after {elapsed_time:.1f}s and {len(fact_check_results)} claims")
-                # Add demo results for remaining claims
+                # Add intelligent results for remaining claims
                 for claim_data in claims_to_check[i:]:
-                    demo_result = fact_checker._create_demo_result(claim_data['text'])
+                    demo_result = fact_checker._create_intelligent_result(claim_data['text'])
                     demo_result['full_context'] = claim_data['full_context']
                     fact_check_results.append(demo_result)
                 break
@@ -440,7 +442,7 @@ def process_transcript(job_id, transcript, source):
             except Exception as e:
                 logger.error(f"Error checking batch starting at {i}: {str(e)}")
                 for claim_data in batch:
-                    demo_result = fact_checker._create_demo_result(claim_data['text'])
+                    demo_result = fact_checker._create_intelligent_result(claim_data['text'])
                     demo_result['full_context'] = claim_data['full_context']
                     fact_check_results.append(demo_result)
         
