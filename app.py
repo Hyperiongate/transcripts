@@ -279,12 +279,14 @@ def calculate_enhanced_credibility_score(fact_checks: list) -> int:
     total_weight = 0
     weighted_score = 0
     
-    # Enhanced verdict weights
+    # Enhanced verdict weights with new verdicts
     verdict_scores = {
         'true': 100,
         'mostly_true': 85,
         'mixed': 50,
-        'lacks_context': 40,  # More nuanced than false
+        'unclear': 45,  # NEW: Ambiguous claims
+        'misleading': 25,  # NEW: Technically true but deceptive
+        'lacks_context': 40,
         'unsubstantiated': 30,
         'mostly_false': 15,
         'false': 0,
@@ -379,8 +381,11 @@ def generate_enhanced_summary(fact_checks: list, credibility_score: int,
     if verdict_counts['false'] + verdict_counts['mostly_false'] > 0:
         findings.append(f"{verdict_counts['false'] + verdict_counts['mostly_false']} proven false")
     
-    if verdict_counts['deceptive'] > 0:
-        findings.append(f"⚠️ {verdict_counts['deceptive']} appear deliberately deceptive")
+    if verdict_counts['misleading'] > 0:
+        findings.append(f"⚠️ {verdict_counts['misleading']} misleading (technically true but deceptive)")
+    
+    if verdict_counts['unclear'] > 0:
+        findings.append(f"{verdict_counts['unclear']} too unclear to verify")
     
     if verdict_counts['lacks_context'] > 0:
         findings.append(f"{verdict_counts['lacks_context']} missing critical context")
