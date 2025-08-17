@@ -1,410 +1,394 @@
-// Transcript Fact Checker - Main JavaScript
+// Fact Checker Application JavaScript
 
-// Global variables
-let currentJobId = null;
-let pollInterval = null;
-
-// Initialize on page load
 document.addEventListener('DOMContentLoaded', function() {
-    initializeTabs();
-    initializeFileUpload();
-    initializeTextInput();
-});
-
-// Tab functionality
-function initializeTabs() {
-    const tabs = document.querySelectorAll('.tab-button');
-    const panels = document.querySelectorAll('.input-panel');
+    // Tab switching
+    const methodTabs = document.querySelectorAll('.method-tab');
+    const inputPanels = document.querySelectorAll('.input-panel');
     
-    tabs.forEach(tab => {
-        tab.addEventListener('click', () => {
-            // Remove active class from all
-            tabs.forEach(t => t.classList.remove('active'));
-            panels.forEach(p => p.classList.remove('active'));
+    methodTabs.forEach(tab => {
+        tab.addEventListener('click', function() {
+            const method = this.dataset.method;
             
-            // Add active class to clicked tab and corresponding panel
-            tab.classList.add('active');
-            const tabName = tab.getAttribute('data-tab');
-            document.getElementById(`${tabName}-panel`).classList.add('active');
+            // Update active states
+            methodTabs.forEach(t => t.classList.remove('active'));
+            inputPanels.forEach(p => p.classList.remove('active'));
+            
+            this.classList.add('active');
+            document.getElementById(`${method}-panel`).classList.add('active');
         });
     });
-}
-
-// File upload functionality
-function initializeFileUpload() {
-    const dropZone = document.getElementById('file-drop-zone');
+    
+    // File upload
     const fileInput = document.getElementById('file-input');
+    const fileUploadArea = document.querySelector('.file-upload-area');
     
-    if (!dropZone || !fileInput) return;
-    
-    // Click to upload
-    dropZone.addEventListener('click', () => fileInput.click());
-    
-    // Drag and drop
-    dropZone.addEventListener('dragover', (e) => {
-        e.preventDefault();
-        dropZone.classList.add('dragover');
-    });
-    
-    dropZone.addEventListener('dragleave', () => {
-        dropZone.classList.remove('dragover');
-    });
-    
-    dropZone.addEventListener('drop', (e) => {
-        e.preventDefault();
-        dropZone.classList.remove('dragover');
+    if (fileUploadArea) {
+        fileUploadArea.addEventListener('click', () => fileInput.click());
         
-        const files = e.dataTransfer.files;
-        if (files.length > 0) {
-            handleFileSelect(files[0]);
-        }
-    });
-    
-    // File input change
-    fileInput.addEventListener('change', (e) => {
-        if (e.target.files.length > 0) {
-            handleFileSelect(e.target.files[0]);
-        }
-    });
-}
-
-// Text input character counter
-function initializeTextInput() {
-    const textInput = document.getElementById('text-input');
-    const charCount = document.getElementById('char-count');
-    
-    if (!textInput || !charCount) return;
-    
-    textInput.addEventListener('input', () => {
-        charCount.textContent = textInput.value.length;
-    });
-}
-
-// Handle file selection
-function handleFileSelect(file) {
-    const allowedTypes = ['.txt', '.srt', '.vtt'];
-    const fileExt = '.' + file.name.split('.').pop().toLowerCase();
-    
-    if (!allowedTypes.includes(fileExt)) {
-        alert('Please upload a TXT, SRT, or VTT file.');
-        return;
+        fileUploadArea.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            fileUploadArea.classList.add('dragover');
+        });
+        
+        fileUploadArea.addEventListener('dragleave', () => {
+            fileUploadArea.classList.remove('dragover');
+        });
+        
+        fileUploadArea.addEventListener('drop', (e) => {
+            e.preventDefault();
+            fileUploadArea.classList.remove('dragover');
+            
+            if (e.dataTransfer.files.length > 0) {
+                fileInput.files = e.dataTransfer.files;
+                updateFileInfo(e.dataTransfer.files[0]);
+            }
+        });
+        
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                updateFileInfo(e.target.files[0]);
+            }
+        });
     }
     
-    if (file.size > 10 * 1024 * 1024) {
-        alert('File size must be less than 10MB.');
-        return;
+    // Form submission
+    const form = document.getElementById('fact-check-form');
+    form.addEventListener('submit', handleSubmit);
+});
+
+function updateFileInfo(file) {
+    const fileInfo = document.querySelector('.file-info');
+    if (fileInfo) {
+        fileInfo.textContent = `Selected: ${file.name} (${formatFileSize(file.size)})`;
     }
+}
+
+function formatFileSize(bytes) {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
+async function handleSubmit(e) {
+    e.preventDefault();
     
-    // Show file info
-    document.getElementById('file-info').style.display = 'flex';
-    document.getElementById('file-name').textContent = file.name;
-    document.getElementById('file-drop-zone').style.display = 'none';
-}
-
-// Remove selected file
-window.removeFile = function() {
-    document.getElementById('file-input').value = '';
-    document.getElementById('file-info').style.display = 'none';
-    document.getElementById('file-drop-zone').style.display = 'block';
-}
-
-// Start analysis
-window.startAnalysis = async function() {
-    // Disable button to prevent double submission
-    const analyzeButton = document.getElementById('analyze-button');
-    analyzeButton.disabled = true;
+    // Get the active input method
+    const activePanel = document.querySelector('.input-panel.active');
+    const method = activePanel.id.replace('-panel', '');
+    
+    let transcript = '';
+    let source = '';
     
     try {
-        // Get active tab
-        const activeTab = document.querySelector('.tab-button.active').getAttribute('data-tab');
-        
-        let analysisData = {
-            type: activeTab
-        };
-        
-        // Validate and prepare data based on input type
-        if (activeTab === 'text') {
-            const text = document.getElementById('text-input').value.trim();
-            if (!text) {
-                alert('Please enter some text to analyze.');
-                analyzeButton.disabled = false;
-                return;
-            }
-            if (text.length < 50) {
-                alert('Please enter at least 50 characters of text.');
-                analyzeButton.disabled = false;
-                return;
-            }
-            if (text.length > 50000) {
-                alert('Text is too long. Maximum 50,000 characters allowed.');
-                analyzeButton.disabled = false;
-                return;
-            }
-            analysisData.content = text;
+        // Get transcript based on method
+        if (method === 'text') {
+            transcript = document.getElementById('transcript-text').value.trim();
+            source = 'Direct Input';
             
-        } else if (activeTab === 'file') {
+            if (!transcript) {
+                showError('Please enter a transcript to analyze');
+                return;
+            }
+        } else if (method === 'file') {
             const fileInput = document.getElementById('file-input');
-            if (!fileInput.files.length) {
-                alert('Please select a file to analyze.');
-                analyzeButton.disabled = false;
+            if (!fileInput.files || fileInput.files.length === 0) {
+                showError('Please select a file to analyze');
                 return;
             }
             
-            // For file upload, we need to use FormData
-            const formData = new FormData();
-            formData.append('file', fileInput.files[0]);
-            formData.append('type', 'file');
-            
-            try {
-                showProgress();
-                updateProgressMessage('Uploading file...');
-                
-                const response = await fetch('/api/analyze', {
-                    method: 'POST',
-                    body: formData
-                });
-                
-                const result = await response.json();
-                
-                if (result.success) {
-                    currentJobId = result.job_id;
-                    console.log('Analysis started with job ID:', currentJobId);
-                    pollJobStatus();
-                } else {
-                    hideProgress();
-                    alert(result.error || 'Analysis failed.');
-                }
-            } catch (error) {
-                hideProgress();
-                alert('Error: ' + error.message);
-            } finally {
-                analyzeButton.disabled = false;
+            const file = fileInput.files[0];
+            transcript = await readFile(file);
+            source = `File: ${file.name}`;
+        } else if (method === 'youtube') {
+            const url = document.getElementById('youtube-url').value.trim();
+            if (!url) {
+                showError('Please enter a YouTube URL');
+                return;
             }
+            
+            // For YouTube, send the URL as the transcript
+            transcript = url;
+            source = `YouTube: ${url}`;
+        }
+        
+        // Validate transcript
+        if (!transcript || transcript.length < 50) {
+            showError('Transcript is too short. Please provide more content to analyze.');
             return;
         }
         
-        // For text input
-        try {
-            showProgress();
-            updateProgressMessage('Processing text...');
-            
-            const response = await fetch('/api/analyze', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(analysisData)
-            });
-            
-            const result = await response.json();
-            
-            if (result.success) {
-                currentJobId = result.job_id;
-                console.log('Analysis started with job ID:', currentJobId);
-                console.log('Source:', result.source);
-                pollJobStatus();
-            } else {
-                hideProgress();
-                alert(result.error || 'Analysis failed.');
-            }
-        } catch (error) {
-            hideProgress();
-            alert('Error: ' + error.message);
-        }
-    } finally {
-        analyzeButton.disabled = false;
-    }
-}
-
-// Show progress section
-function showProgress() {
-    document.getElementById('input-section').style.display = 'none';
-    document.getElementById('progress-section').style.display = 'block';
-    document.getElementById('results-section').style.display = 'none';
-}
-
-// Hide progress section
-function hideProgress() {
-    document.getElementById('progress-section').style.display = 'none';
-    document.getElementById('input-section').style.display = 'block';
-}
-
-// Update progress message
-function updateProgressMessage(message) {
-    const progressText = document.getElementById('progress-text');
-    if (progressText) {
-        progressText.textContent = message;
-    }
-}
-
-// Poll job status
-function pollJobStatus() {
-    let errorCount = 0;
-    const maxErrors = 5;
-    
-    pollInterval = setInterval(async () => {
-        try {
-            const response = await fetch(`/api/status/${currentJobId}`);
-            const status = await response.json();
-            
-            if (status.error && response.status === 404) {
-                clearInterval(pollInterval);
-                hideProgress();
-                alert('Job not found. Please try again.');
-                return;
-            }
-            
-            updateProgress(status.progress || 0);
-            
-            // Update message based on status
-            if (status.status === 'processing') {
-                updateProgressMessage('Processing transcript...');
-            } else if (status.status === 'fact_checking') {
-                updateProgressMessage('Fact checking claims...');
-            } else if (status.status === 'generating_report') {
-                updateProgressMessage('Generating report...');
-            }
-            
-            if (status.status === 'complete') {
-                clearInterval(pollInterval);
-                fetchResults();
-            } else if (status.status === 'error') {
-                clearInterval(pollInterval);
-                hideProgress();
-                alert('Analysis error: ' + (status.error || 'Unknown error'));
-            }
-            
-            // Reset error count on successful request
-            errorCount = 0;
-            
-        } catch (error) {
-            errorCount++;
-            console.error('Error checking status:', error);
-            
-            if (errorCount >= maxErrors) {
-                clearInterval(pollInterval);
-                hideProgress();
-                alert('Error checking status: ' + error.message);
-            }
-        }
-    }, 1000);
-}
-
-// Update progress display
-function updateProgress(progress) {
-    const progressFill = document.getElementById('progress-fill');
-    if (progressFill) {
-        progressFill.style.width = progress + '%';
-    }
-    
-    // Update steps
-    const steps = document.querySelectorAll('.step');
-    steps.forEach(step => step.classList.remove('active'));
-    
-    if (progress < 25) {
-        const step1 = document.getElementById('step-1');
-        if (step1) step1.classList.add('active');
-    } else if (progress < 50) {
-        const step2 = document.getElementById('step-2');
-        if (step2) step2.classList.add('active');
-    } else if (progress < 75) {
-        const step3 = document.getElementById('step-3');
-        if (step3) step3.classList.add('active');
-    } else {
-        const step4 = document.getElementById('step-4');
-        if (step4) step4.classList.add('active');
-    }
-}
-
-// Fetch analysis results
-async function fetchResults() {
-    try {
-        updateProgressMessage('Loading results...');
+        // Send to API
+        await analyzeTranscript(transcript, source);
         
-        const response = await fetch(`/api/results/${currentJobId}`);
+    } catch (error) {
+        console.error('Error:', error);
+        showError('An error occurred while processing your request');
+    }
+}
+
+async function readFile(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = e => resolve(e.target.result);
+        reader.onerror = reject;
+        reader.readAsText(file);
+    });
+}
+
+async function analyzeTranscript(transcript, source) {
+    // Show progress section
+    document.getElementById('progress-section').classList.remove('hidden');
+    document.getElementById('results-section').classList.add('hidden');
+    
+    // Reset progress
+    updateProgress(0, 'Initializing analysis...');
+    
+    try {
+        // Send analysis request
+        const response = await fetch('/api/analyze', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                transcript: transcript,
+                source: source
+            })
+        });
+        
         const data = await response.json();
         
-        if (data.success) {
-            // Use the global displayResults function from enhanced.js
-            if (window.displayResults) {
-                window.displayResults(data.results);
-            } else {
-                console.error('displayResults function not found');
-                hideProgress();
-                alert('Error displaying results. Please refresh the page.');
-            }
-        } else {
-            throw new Error(data.error || 'Failed to fetch results');
+        if (!response.ok) {
+            throw new Error(data.error || 'Analysis failed');
         }
+        
+        if (!data.success) {
+            throw new Error(data.error || 'Analysis failed');
+        }
+        
+        // Start polling for results
+        const jobId = data.job_id;
+        pollJobStatus(jobId);
+        
     } catch (error) {
-        hideProgress();
-        alert('Error fetching results: ' + error.message);
+        console.error('Analysis error:', error);
+        showError(error.message || 'Failed to analyze transcript');
+        document.getElementById('progress-section').classList.add('hidden');
     }
 }
 
-// Export results as PDF only
-window.exportResults = async function(format) {
-    if (!currentJobId) {
-        alert('No results to export');
+async function pollJobStatus(jobId) {
+    const maxAttempts = 60; // 5 minutes max
+    let attempts = 0;
+    
+    const interval = setInterval(async () => {
+        try {
+            const response = await fetch(`/api/status/${jobId}`);
+            const data = await response.json();
+            
+            if (!response.ok || !data.success) {
+                throw new Error('Failed to get job status');
+            }
+            
+            // Update progress
+            updateProgress(data.progress || 0, getProgressText(data.progress));
+            
+            if (data.status === 'completed') {
+                clearInterval(interval);
+                await loadResults(jobId);
+            } else if (data.status === 'failed') {
+                clearInterval(interval);
+                throw new Error(data.error || 'Analysis failed');
+            }
+            
+            attempts++;
+            if (attempts >= maxAttempts) {
+                clearInterval(interval);
+                throw new Error('Analysis timed out');
+            }
+            
+        } catch (error) {
+            clearInterval(interval);
+            console.error('Polling error:', error);
+            showError(error.message || 'Failed to get analysis status');
+            document.getElementById('progress-section').classList.add('hidden');
+        }
+    }, 5000); // Poll every 5 seconds
+}
+
+function updateProgress(percent, text) {
+    const progressFill = document.getElementById('progress-fill');
+    const progressText = document.getElementById('progress-text');
+    
+    progressFill.style.width = percent + '%';
+    progressText.textContent = text;
+}
+
+function getProgressText(progress) {
+    if (progress < 20) return 'Processing transcript...';
+    if (progress < 40) return 'Extracting claims...';
+    if (progress < 60) return 'Fact-checking claims...';
+    if (progress < 80) return 'Analyzing credibility...';
+    if (progress < 100) return 'Finalizing results...';
+    return 'Analysis complete!';
+}
+
+async function loadResults(jobId) {
+    try {
+        const response = await fetch(`/api/results/${jobId}`);
+        const results = await response.json();
+        
+        if (!response.ok || !results.success) {
+            throw new Error('Failed to load results');
+        }
+        
+        // Display results
+        displayResults(results);
+        
+        // Show results section
+        document.getElementById('progress-section').classList.add('hidden');
+        document.getElementById('results-section').classList.remove('hidden');
+        
+        // Set up export buttons
+        setupExportButtons(jobId);
+        
+    } catch (error) {
+        console.error('Results error:', error);
+        showError('Failed to load analysis results');
+    }
+}
+
+function displayResults(results) {
+    // Update credibility score
+    const score = results.credibility_score || 0;
+    document.getElementById('credibility-meter').style.width = score + '%';
+    document.getElementById('credibility-score').textContent = score + '%';
+    document.getElementById('credibility-label').textContent = results.credibility_label || 'Unknown';
+    
+    // Update stats
+    updateStats(results);
+    
+    // Display summary
+    const summaryContainer = document.getElementById('analysis-summary');
+    if (results.speaker_context && results.speaker_context.speaker) {
+        const context = results.speaker_context;
+        
+        let summaryHtml = '<div class="speaker-context-section">';
+        summaryHtml += `<h4>About ${context.speaker}:</h4>`;
+        
+        if (context.criminal_record) {
+            summaryHtml += `<div class="alert alert-danger">
+                <strong>⚖️ Criminal Record:</strong> ${context.criminal_record}
+            </div>`;
+        }
+        
+        if (context.fraud_history) {
+            summaryHtml += `<div class="alert alert-warning">
+                <strong>💰 Fraud History:</strong> ${context.fraud_history}
+            </div>`;
+        }
+        
+        summaryHtml += '</div>';
+        summaryContainer.innerHTML = summaryHtml;
+    }
+    
+    if (results.conversational_summary) {
+        summaryContainer.innerHTML += `<div class="conversational-summary">
+            <h4>Summary:</h4>
+            <p>${results.conversational_summary}</p>
+        </div>`;
+    }
+    
+    // Display fact checks
+    if (window.displayEnhancedFactChecks) {
+        window.updateEnhancedStats(results);
+        window.displayEnhancedFactChecks(results.fact_checks || []);
+    } else {
+        displayFactChecks(results.fact_checks || []);
+    }
+}
+
+function updateStats(results) {
+    let verifiedCount = 0;
+    let falseCount = 0;
+    let unverifiedCount = 0;
+    
+    if (results.fact_checks && Array.isArray(results.fact_checks)) {
+        results.fact_checks.forEach(check => {
+            const verdict = (check.verdict || 'unverified').toLowerCase();
+            if (verdict === 'true' || verdict === 'mostly_true') {
+                verifiedCount++;
+            } else if (verdict === 'false' || verdict === 'mostly_false') {
+                falseCount++;
+            } else {
+                unverifiedCount++;
+            }
+        });
+    }
+    
+    document.getElementById('verified-claims').textContent = verifiedCount;
+    document.getElementById('false-claims').textContent = falseCount;
+    document.getElementById('unverified-claims').textContent = unverifiedCount;
+}
+
+function displayFactChecks(factChecks) {
+    const container = document.getElementById('fact-check-list');
+    container.innerHTML = '';
+    
+    if (!factChecks || factChecks.length === 0) {
+        container.innerHTML = '<p>No fact checks available.</p>';
         return;
     }
     
-    try {
-        const response = await fetch(`/api/export/${currentJobId}`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ format: 'pdf' })  // Always PDF
-        });
+    factChecks.forEach((check, index) => {
+        const item = document.createElement('div');
+        item.className = 'fact-check-item';
         
-        if (response.ok) {
-            // Create a blob from the response
-            const blob = await response.blob();
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `fact-check-report-${new Date().toISOString().split('T')[0]}.pdf`;
-            document.body.appendChild(a);
-            a.click();
-            window.URL.revokeObjectURL(url);
-            document.body.removeChild(a);
-        } else {
-            const result = await response.json();
-            alert('Export failed: ' + (result.error || 'Unknown error'));
-        }
-    } catch (error) {
-        alert('Export error: ' + error.message);
-    }
+        const verdict = check.verdict || 'unverified';
+        const verdictClass = getVerdictClass(verdict);
+        
+        item.innerHTML = `
+            <div class="fact-check-header">
+                <div class="fact-check-claim">${check.claim}</div>
+                <div class="fact-check-verdict ${verdictClass}">${verdict}</div>
+            </div>
+            <div class="fact-check-details">
+                <p>${check.explanation || 'No explanation available'}</p>
+                <div class="fact-check-meta">
+                    <span>Confidence: ${check.confidence || 0}%</span>
+                    <span>Source: ${check.source || 'Unknown'}</span>
+                </div>
+            </div>
+        `;
+        
+        container.appendChild(item);
+    });
 }
 
-// Reset for new analysis
-window.resetAnalysis = function() {
-    currentJobId = null;
-    
-    // Clear inputs
-    const textInput = document.getElementById('text-input');
-    if (textInput) textInput.value = '';
-    
-    const charCount = document.getElementById('char-count');
-    if (charCount) charCount.textContent = '0';
-    
-    removeFile();
-    
-    // Reset UI
-    document.getElementById('results-section').style.display = 'none';
-    document.getElementById('input-section').style.display = 'block';
-    
-    // Reset progress
-    const progressFill = document.getElementById('progress-fill');
-    if (progressFill) progressFill.style.width = '0%';
-    
-    const progressText = document.getElementById('progress-text');
-    if (progressText) progressText.textContent = 'Initializing...';
-    
-    // Clear any intervals
-    if (pollInterval) {
-        clearInterval(pollInterval);
-        pollInterval = null;
-    }
+function getVerdictClass(verdict) {
+    const verdictLower = verdict.toLowerCase();
+    if (verdictLower === 'true' || verdictLower === 'mostly_true') return 'verdict-true';
+    if (verdictLower === 'false' || verdictLower === 'mostly_false') return 'verdict-false';
+    if (verdictLower === 'mixed') return 'verdict-mixed';
+    return 'verdict-unverified';
 }
+
+function setupExportButtons(jobId) {
+    const exportButtons = document.querySelectorAll('.export-btn');
+    exportButtons.forEach(btn => {
+        btn.addEventListener('click', function() {
+            const format = this.dataset.format;
+            window.location.href = `/api/export/${jobId}/${format}`;
+        });
+    });
+}
+
+function showError(message) {
+    // Simple alert for now - you can make this prettier
+    alert('Error: ' + message);
+}
+
+// Make displayResults available globally for enhanced.js
+window.displayResults = displayResults;
