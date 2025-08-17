@@ -11,24 +11,15 @@ from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
 import time
 
-# Import other modules
-from .political_topics import PoliticalTopicsChecker
-from .speaker_history import SpeakerHistoryTracker
-
 logger = logging.getLogger(__name__)
 
 class EnhancedFactChecker:
     """Enhanced fact checker with AI filtering and temporal awareness"""
     
-    def __init__(self, config, temporal_processor=None):
+    def __init__(self, config):
         self.google_api_key = config.GOOGLE_FACTCHECK_API_KEY
         self.openai_api_key = config.OPENAI_API_KEY
         self.fred_api_key = config.FRED_API_KEY
-        self.temporal_processor = temporal_processor
-        
-        # Initialize sub-checkers
-        self.political_checker = PoliticalTopicsChecker()
-        self.speaker_tracker = SpeakerHistoryTracker()
         
         # Enhanced configuration
         self.enable_ai_filtering = True
@@ -61,6 +52,18 @@ class EnhancedFactChecker:
         self.recent_statements = {}
         self.statement_cache_duration = timedelta(hours=24)
         
+        # Immigration data for 2025 claims
+        self.immigration_data = {
+            'border_encounters_2024': 2475669,
+            'border_encounters_2023': 2475669,
+            'border_encounters_2022': 2378944,
+            'border_encounters_2021': 1734686,
+            'border_encounters_2020': 458088,
+            'deportations_2023': 142580,
+            'ice_arrests_2024': 170590,  # FY2024 arrests
+            'criminal_arrests_2024': 108790,  # Criminal aliens arrested
+        }
+    
     def check_claims_batch(self, claims: List[str], source: str = None) -> List[Dict]:
         """Main entry point with enhanced AI filtering"""
         if not claims:
@@ -69,15 +72,7 @@ class EnhancedFactChecker:
         # Step 1: Filter out conversational content
         filtered_claims = self._filter_conversational_claims(claims)
         
-        # Step 2: Apply temporal context if available
-        if self.temporal_processor and source:
-            temporal_claims = []
-            for claim in filtered_claims:
-                processed = self.temporal_processor.process_claim_with_context(claim, source)
-                temporal_claims.append(processed)
-            filtered_claims = temporal_claims
-        
-        # Step 3: Check claims with enhanced logic
+        # Step 2: Check claims with enhanced logic
         results = []
         with ThreadPoolExecutor(max_workers=5) as executor:
             future_to_claim = {
@@ -98,7 +93,7 @@ class EnhancedFactChecker:
         return results
     
     def _filter_conversational_claims(self, claims: List[str]) -> List[str]:
-        """Filter out conversational/greeting content using AI when available"""
+        """Filter out conversational/greeting content"""
         filtered = []
         
         for claim in claims:
@@ -178,46 +173,65 @@ Answer with ONLY 'factual' or 'conversational'. No explanation needed."""
         
         # 1. "Thus far in 2025" interpretation
         if temporal_info.get('partial_year') and '2025' in claim:
-            claim_adjusted = self._adjust_partial_year_claim(claim)
+            claim_adjusted = claim
+            temporal_note = f"This refers to data from {temporal_info['year']} up to the current date, not the full year."
         else:
             claim_adjusted = claim
+            temporal_note = None
         
         # 2. Netanyahu statement verification
         if 'netanyahu' in claim.lower() and any(word in claim.lower() for word in ['said', 'stated', 'claimed']):
             source_result = self._verify_statement_source(claim, 'Netanyahu')
             if source_result:
+                if temporal_note:
+                    source_result['temporal_note'] = temporal_note
                 return source_result
         
         # 3. Ukraine war context
         if 'ukraine' in claim.lower() and 'war' in claim.lower():
             war_result = self._check_ukraine_war_claim(claim)
             if war_result:
+                if temporal_note:
+                    war_result['temporal_note'] = temporal_note
                 return war_result
         
         # 4. Percentage interpretation fix
         if '90%' in claim and 'border' in claim.lower():
             border_result = self._check_border_percentage_claim(claim)
             if border_result:
+                if temporal_note:
+                    border_result['temporal_note'] = temporal_note
                 return border_result
         
-        # 5. Check with actual numbers from political topics
-        political_result = self.political_checker.check_claim(claim_adjusted)
-        if political_result and political_result.get('found'):
-            # Enhance with actual numbers if available
-            if political_result.get('verdict') in ['false', 'mostly_false']:
-                political_result = self._add_actual_numbers(claim, political_result)
-            return self._enhance_result(claim, political_result, temporal_info)
+        # 5. Immigration numbers for 2025
+        if '2025' in claim and any(term in claim.lower() for term in ['arrest', 'alien', 'illegal', 'criminal']):
+            immigration_result = self._check_2025_immigration_claims(claim)
+            if immigration_result:
+                if temporal_note:
+                    immigration_result['temporal_note'] = temporal_note
+                return immigration_result
         
-        # 6. Google Fact Check with better handling
+        # 6. Check political/economic data
+        political_result = self._check_political_economic_claim(claim_adjusted)
+        if political_result and political_result.get('found'):
+            if temporal_note:
+                political_result['temporal_note'] = temporal_note
+            return political_result
+        
+        # 7. Google Fact Check with better handling
         if self.google_api_key:
             google_result = self._check_google_enhanced(claim_adjusted)
             if google_result['found']:
-                return self._enhance_result(claim, google_result, temporal_info)
+                if temporal_note:
+                    google_result['temporal_note'] = temporal_note
+                return google_result
         
-        # 7. Pattern analysis
+        # 8. Pattern analysis
         pattern_result = self._analyze_claim_patterns(claim)
         if pattern_result['found']:
-            return self._enhance_result(claim, pattern_result, temporal_info)
+            if temporal_note:
+                pattern_result['temporal_note'] = temporal_note
+            return pattern_result
         
         # Default intelligent analysis
         return self._create_intelligent_result(claim, temporal_info)
@@ -254,21 +268,8 @@ Answer with ONLY 'factual' or 'conversational'. No explanation needed."""
         
         return context
     
-    def _adjust_partial_year_claim(self, claim: str) -> str:
-        """Adjust claims about partial year data"""
-        # Don't change the claim text, but add context in the result
-        return claim
-    
     def _verify_statement_source(self, claim: str, person: str) -> Optional[Dict]:
         """Verify if a person actually made a statement"""
-        # Check cache first
-        cache_key = f"{person.lower()}_{claim[:50]}"
-        if cache_key in self.recent_statements:
-            cached = self.recent_statements[cache_key]
-            if datetime.now() - cached['time'] < self.statement_cache_duration:
-                return cached['result']
-        
-        # For Netanyahu and other major figures, be more nuanced
         explanation = (
             f"This claim attributes a statement to {person}. While multiple news sources "
             f"may have reported similar claims, verification requires checking primary sources "
@@ -286,19 +287,12 @@ Answer with ONLY 'factual' or 'conversational'. No explanation needed."""
             'api_response': False
         }
         
-        # Cache the result
-        self.recent_statements[cache_key] = {
-            'time': datetime.now(),
-            'result': result
-        }
-        
         return result
     
     def _check_ukraine_war_claim(self, claim: str) -> Optional[Dict]:
         """Handle Ukraine war claims with proper historical context"""
         claim_lower = claim.lower()
         
-        # Check what aspect is being discussed
         if any(phrase in claim_lower for phrase in ['war started', 'war began', 'started the war']):
             if 'biden' in claim_lower or '2022' in claim:
                 return {
@@ -335,67 +329,118 @@ Answer with ONLY 'factual' or 'conversational'. No explanation needed."""
     def _check_border_percentage_claim(self, claim: str) -> Optional[Dict]:
         """Handle border crossing percentage claims correctly"""
         if '90%' in claim and 'down' in claim.lower() and 'border' in claim.lower():
-            # Extract the actual context
-            numbers = re.findall(r'(\d+(?:,\d+)?)', claim)
-            
             explanation = (
                 "This claim states that border crossings are down 90%, meaning they have decreased "
                 "by 90% from a previous level. This is a percentage decrease, not an absolute number. "
-                "For example, if there were 1,000 crossings before, a 90% decrease would mean there "
-                "are now 100 crossings (not 90 crossings)."
+                "Without knowing the specific time period for comparison, this claim cannot be fully verified. "
+                "Border encounter statistics vary significantly by month and year."
             )
             
-            # Try to get actual data
-            current_year = datetime.now().year
-            if self.political_checker:
-                # Get recent border data
-                recent_data = self.political_checker.immigration_data.get(f'border_encounters_{current_year}', 0)
-                last_year_data = self.political_checker.immigration_data.get(f'border_encounters_{current_year-1}', 0)
-                
-                if recent_data and last_year_data:
-                    actual_decrease = ((last_year_data - recent_data) / last_year_data) * 100
-                    
-                    if abs(actual_decrease - 90) < 10:  # Within reasonable range
-                        verdict = 'mostly_true'
-                        explanation += f" Current data shows approximately {actual_decrease:.1f}% decrease."
-                    else:
-                        verdict = 'false'
-                        explanation += f" However, actual data shows only a {actual_decrease:.1f}% change, not 90%."
-                else:
-                    verdict = 'unverified'
-            else:
-                verdict = 'unverified'
+            # Try to provide context with actual data
+            current_monthly_avg = self.immigration_data.get('border_encounters_2024', 0) / 12
+            peak_monthly = self.immigration_data.get('border_encounters_2021', 0) / 12
+            
+            if current_monthly_avg and peak_monthly:
+                actual_decrease = ((peak_monthly - current_monthly_avg) / peak_monthly) * 100
+                explanation += f" For context: comparing 2024 monthly average to 2021 peak shows approximately {actual_decrease:.0f}% decrease."
             
             return {
                 'claim': claim,
-                'verdict': verdict,
+                'verdict': 'lacks_context',
                 'confidence': 75,
                 'explanation': explanation,
                 'source': 'Border Statistics Analysis',
                 'interpretation_note': 'Percentage decrease, not absolute number',
+                'missing_context': 'Specific time periods for comparison needed',
                 'api_response': False
             }
         
         return None
     
-    def _add_actual_numbers(self, claim: str, result: Dict) -> Dict:
-        """Add actual numbers to false claims when available"""
-        if 'explanation' in result:
-            # Look for number patterns in the original explanation
-            claimed_match = re.search(r'claimed?\s+(\d+(?:,\d+)?(?:\.\d+)?(?:\s*(?:million|billion))?)', 
-                                    result['explanation'], re.IGNORECASE)
-            actual_match = re.search(r'actual(?:ly)?\s+(\d+(?:,\d+)?(?:\.\d+)?(?:\s*(?:million|billion))?)', 
-                                   result['explanation'], re.IGNORECASE)
-            
-            if claimed_match and actual_match:
-                result['claimed_value'] = claimed_match.group(1)
-                result['actual_value'] = actual_match.group(1)
-                result['explanation'] = (
-                    f"{result['explanation']} "
-                    f"The actual number is {result['actual_value']}, not {result['claimed_value']} as stated."
-                )
+    def _check_2025_immigration_claims(self, claim: str) -> Optional[Dict]:
+        """Handle 2025 immigration claims with proper context"""
+        claim_lower = claim.lower()
         
-        return result
+        # Extract numbers from claim
+        numbers = re.findall(r'(\d+(?:,\d+)?(?:\.\d+)?)\s*(?:thousand|million)?', claim)
+        
+        if 'arrest' in claim_lower and ('alien' in claim_lower or 'criminal' in claim_lower):
+            # Check if it's about 300,000 arrests
+            if any('300' in num for num in numbers):
+                return {
+                    'claim': claim,
+                    'verdict': 'unverified',
+                    'confidence': 60,
+                    'explanation': (
+                        "This claim about arrests in 2025 cannot be fully verified as the year is still ongoing. "
+                        "For context: In FY2024, ICE made 170,590 total administrative arrests, including "
+                        "108,790 arrests of individuals with criminal convictions or charges. The claimed "
+                        "300,000 figure for 2025 would represent a significant increase if accurate."
+                    ),
+                    'source': 'ICE Statistics',
+                    'actual_data': {
+                        'fy2024_total_arrests': 170590,
+                        'fy2024_criminal_arrests': 108790
+                    },
+                    'temporal_note': 'Data for 2025 is preliminary and subject to change',
+                    'api_response': False
+                }
+        
+        return None
+    
+    def _check_political_economic_claim(self, claim: str) -> Optional[Dict]:
+        """Check political and economic claims against known data"""
+        claim_lower = claim.lower()
+        
+        # Border/immigration numbers
+        if any(term in claim_lower for term in ['border', 'crossing', 'encounter', 'immigration']):
+            # Extract year if mentioned
+            year_match = re.search(r'20\d{2}', claim)
+            if year_match:
+                year = year_match.group()
+                data_key = f'border_encounters_{year}'
+                
+                if data_key in self.immigration_data:
+                    actual_value = self.immigration_data[data_key]
+                    
+                    # Look for numbers in claim
+                    numbers = re.findall(r'(\d+(?:,\d+)?(?:\.\d+)?)\s*(?:million)?', claim)
+                    
+                    for num_str in numbers:
+                        claimed_value = self._parse_number(num_str)
+                        
+                        # Check if claim mentions millions
+                        if 'million' in claim_lower:
+                            claimed_value *= 1000000
+                        
+                        # Compare values
+                        if actual_value > 0:
+                            difference = abs(claimed_value - actual_value) / actual_value
+                            
+                            if difference < 0.1:  # Within 10%
+                                return {
+                                    'claim': claim,
+                                    'verdict': 'true',
+                                    'confidence': 85,
+                                    'explanation': f'Accurate. Official CBP data shows {actual_value:,} encounters in {year}.',
+                                    'source': 'CBP Statistics',
+                                    'found': True,
+                                    'api_response': False
+                                }
+                            elif difference > 0.5:  # More than 50% off
+                                return {
+                                    'claim': claim,
+                                    'verdict': 'false',
+                                    'confidence': 85,
+                                    'explanation': f'Incorrect. The actual number was {actual_value:,}, not {claimed_value:,.0f}.',
+                                    'source': 'CBP Statistics',
+                                    'found': True,
+                                    'claimed_value': f'{claimed_value:,.0f}',
+                                    'actual_value': f'{actual_value:,}',
+                                    'api_response': False
+                                }
+        
+        return {'found': False}
     
     def _check_google_enhanced(self, claim: str) -> Dict:
         """Enhanced Google fact check with better source handling"""
@@ -432,6 +477,7 @@ Answer with ONLY 'factual' or 'conversational'. No explanation needed."""
                             best_result = self._parse_google_result(claim_data)
                     
                     if best_result:
+                        best_result['claim'] = claim
                         return best_result
             
         except Exception as e:
@@ -579,22 +625,31 @@ Answer with ONLY 'factual' or 'conversational'. No explanation needed."""
             'api_response': False
         }
     
-    def _enhance_result(self, original_claim: str, result: Dict, temporal_info: Dict = None) -> Dict:
-        """Enhance result with claim text and temporal context"""
-        result['claim'] = original_claim
+    def _parse_number(self, num_str: str) -> float:
+        """Parse number string to float"""
+        num_str = str(num_str).lower().replace(',', '')
         
-        # Add temporal context if present
-        if temporal_info:
-            if temporal_info.get('partial_year'):
-                result['temporal_context'] = (
-                    f"Referring to partial {temporal_info['year']} data"
-                )
-            result['temporal_info'] = temporal_info
+        multipliers = {
+            'thousand': 1000,
+            'million': 1000000,
+            'billion': 1000000000,
+            'trillion': 1000000000000
+        }
         
-        # Ensure all required fields
-        if 'confidence' not in result:
-            result['confidence'] = 50
-        if 'api_response' not in result:
-            result['api_response'] = False
+        for word, multiplier in multipliers.items():
+            if word in num_str:
+                num_str = num_str.replace(word, '').strip()
+                try:
+                    return float(num_str) * multiplier
+                except:
+                    return 0
         
-        return result
+        try:
+            return float(num_str)
+        except:
+            return 0
+
+# Main FactChecker class that will be used by the app
+class FactChecker(EnhancedFactChecker):
+    """Main FactChecker class with all enhancements"""
+    pass
