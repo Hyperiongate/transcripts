@@ -9,7 +9,6 @@ document.addEventListener('DOMContentLoaded', function() {
     initializeTabs();
     initializeFileUpload();
     initializeTextInput();
-    // Removed YouTube initialization as it doesn't exist in HTML
 });
 
 // Tab functionality
@@ -35,6 +34,8 @@ function initializeTabs() {
 function initializeFileUpload() {
     const dropZone = document.getElementById('file-drop-zone');
     const fileInput = document.getElementById('file-input');
+    
+    if (!dropZone || !fileInput) return;
     
     // Click to upload
     dropZone.addEventListener('click', () => fileInput.click());
@@ -71,6 +72,8 @@ function initializeFileUpload() {
 function initializeTextInput() {
     const textInput = document.getElementById('text-input');
     const charCount = document.getElementById('char-count');
+    
+    if (!textInput || !charCount) return;
     
     textInput.addEventListener('input', () => {
         charCount.textContent = textInput.value.length;
@@ -124,14 +127,17 @@ window.startAnalysis = async function() {
             const text = document.getElementById('text-input').value.trim();
             if (!text) {
                 alert('Please enter some text to analyze.');
+                analyzeButton.disabled = false;
                 return;
             }
             if (text.length < 50) {
                 alert('Please enter at least 50 characters of text.');
+                analyzeButton.disabled = false;
                 return;
             }
             if (text.length > 50000) {
                 alert('Text is too long. Maximum 50,000 characters allowed.');
+                analyzeButton.disabled = false;
                 return;
             }
             analysisData.content = text;
@@ -140,6 +146,7 @@ window.startAnalysis = async function() {
             const fileInput = document.getElementById('file-input');
             if (!fileInput.files.length) {
                 alert('Please select a file to analyze.');
+                analyzeButton.disabled = false;
                 return;
             }
             
@@ -224,7 +231,10 @@ function hideProgress() {
 
 // Update progress message
 function updateProgressMessage(message) {
-    document.getElementById('progress-text').textContent = message;
+    const progressText = document.getElementById('progress-text');
+    if (progressText) {
+        progressText.textContent = message;
+    }
 }
 
 // Poll job status
@@ -282,20 +292,27 @@ function pollJobStatus() {
 
 // Update progress display
 function updateProgress(progress) {
-    document.getElementById('progress-fill').style.width = progress + '%';
+    const progressFill = document.getElementById('progress-fill');
+    if (progressFill) {
+        progressFill.style.width = progress + '%';
+    }
     
     // Update steps
     const steps = document.querySelectorAll('.step');
     steps.forEach(step => step.classList.remove('active'));
     
     if (progress < 25) {
-        document.getElementById('step-1').classList.add('active');
+        const step1 = document.getElementById('step-1');
+        if (step1) step1.classList.add('active');
     } else if (progress < 50) {
-        document.getElementById('step-2').classList.add('active');
+        const step2 = document.getElementById('step-2');
+        if (step2) step2.classList.add('active');
     } else if (progress < 75) {
-        document.getElementById('step-3').classList.add('active');
+        const step3 = document.getElementById('step-3');
+        if (step3) step3.classList.add('active');
     } else {
-        document.getElementById('step-4').classList.add('active');
+        const step4 = document.getElementById('step-4');
+        if (step4) step4.classList.add('active');
     }
 }
 
@@ -309,7 +326,13 @@ async function fetchResults() {
         
         if (data.success) {
             // Use the global displayResults function from enhanced.js
-            displayResults(data.results);
+            if (window.displayResults) {
+                window.displayResults(data.results);
+            } else {
+                console.error('displayResults function not found');
+                hideProgress();
+                alert('Error displaying results. Please refresh the page.');
+            }
         } else {
             throw new Error(data.error || 'Failed to fetch results');
         }
@@ -360,8 +383,12 @@ window.resetAnalysis = function() {
     currentJobId = null;
     
     // Clear inputs
-    document.getElementById('text-input').value = '';
-    document.getElementById('char-count').textContent = '0';
+    const textInput = document.getElementById('text-input');
+    if (textInput) textInput.value = '';
+    
+    const charCount = document.getElementById('char-count');
+    if (charCount) charCount.textContent = '0';
+    
     removeFile();
     
     // Reset UI
@@ -369,8 +396,11 @@ window.resetAnalysis = function() {
     document.getElementById('input-section').style.display = 'block';
     
     // Reset progress
-    document.getElementById('progress-fill').style.width = '0%';
-    document.getElementById('progress-text').textContent = 'Initializing...';
+    const progressFill = document.getElementById('progress-fill');
+    if (progressFill) progressFill.style.width = '0%';
+    
+    const progressText = document.getElementById('progress-text');
+    if (progressText) progressText.textContent = 'Initializing...';
     
     // Clear any intervals
     if (pollInterval) {
