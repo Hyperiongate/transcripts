@@ -93,6 +93,53 @@ class FactChecker:
         
         return results
     
+    def calculate_credibility(self, fact_check_results: List[Dict[str, Any]]) -> float:
+        """Calculate overall credibility score based on fact check results"""
+        if not fact_check_results:
+            return 50.0  # Default neutral score
+        
+        # Weight each verdict type
+        verdict_weights = {
+            'true': 100,
+            'mostly_true': 85,
+            'mixed': 50,
+            'misleading': 25,
+            'deceptive': 15,
+            'lacks_context': 40,
+            'unsubstantiated': 30,
+            'mostly_false': 20,
+            'false': 0,
+            'unverified': 50
+        }
+        
+        total_weight = 0
+        total_score = 0
+        
+        for result in fact_check_results:
+            verdict = result.get('verdict', 'unverified').lower()
+            confidence = result.get('confidence', 50) / 100.0  # Convert to 0-1 scale
+            
+            # Get base score for verdict
+            base_score = verdict_weights.get(verdict, 50)
+            
+            # Weight by confidence
+            weighted_score = base_score * confidence
+            
+            # Add to totals
+            total_score += weighted_score
+            total_weight += confidence
+        
+        # Calculate average credibility
+        if total_weight > 0:
+            credibility = total_score / total_weight
+        else:
+            credibility = 50.0
+        
+        # Ensure score is between 0 and 100
+        credibility = max(0, min(100, credibility))
+        
+        return round(credibility, 1)
+    
     def check_claim(self, claim: str) -> Dict[str, Any]:
         """Check a single claim using all available methods"""
         # Check cache first
