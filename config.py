@@ -1,110 +1,61 @@
 """
-Configuration for Transcript Fact Checker
+Enhanced Configuration File for Fact Checker Application
 """
 import os
-from dotenv import load_dotenv
-
-# Load environment variables
-load_dotenv()
+from datetime import timedelta
 
 class Config:
-    """Application configuration"""
+    """Configuration for fact-checking application"""
     
-    # Flask
-    SECRET_KEY = os.getenv('SECRET_KEY', 'dev-secret-key-change-this')
-    DEBUG = os.getenv('FLASK_DEBUG', 'False').lower() == 'true'
+    # Flask settings
+    SECRET_KEY = os.environ.get('SECRET_KEY') or 'dev-secret-key-change-in-production'
+    DEBUG = os.environ.get('FLASK_DEBUG', 'False').lower() == 'true'
     
-    # Primary Fact-Checking APIs
-    GOOGLE_FACTCHECK_API_KEY = os.getenv('GOOGLE_FACTCHECK_API_KEY')
+    # API Keys
+    GOOGLE_FACTCHECK_API_KEY = os.environ.get('GOOGLE_FACTCHECK_API_KEY')
+    OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
+    FRED_API_KEY = os.environ.get('FRED_API_KEY')
+    YOUTUBE_API_KEY = os.environ.get('YOUTUBE_API_KEY')
     
-    # Economic Data API
-    FRED_API_KEY = os.getenv('FRED_API_KEY')  # Federal Reserve Economic Data
-    
-    # News and Media APIs
-    NEWS_API_KEY = os.getenv('NEWS_API_KEY')  # newsapi.org
-    MEDIASTACK_API_KEY = os.getenv('MEDIASTACK_API_KEY')  # mediastack.com - better news coverage
-    
-    # Web Scraping APIs (for accessing fact-checker sites)
-    SCRAPERAPI_KEY = os.getenv('SCRAPERAPI_KEY')  # scraperapi.com
-    SCRAPINGBEE_API_KEY = os.getenv('SCRAPINGBEE_API_KEY')  # scrapingbee.com
-    
-    # Optional AI Enhancement
-    OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
-    
-    # Processing Limits
+    # Application limits
     MAX_TRANSCRIPT_LENGTH = 50000  # characters
-    MAX_CLAIMS_PER_TRANSCRIPT = 50
-    MIN_CLAIM_LENGTH = 10
-    MAX_CLAIM_LENGTH = 500
+    MAX_CLAIMS_TO_CHECK = 50  # maximum claims per analysis
+    MAX_CLAIM_LENGTH = 500  # characters per claim
     
-    # Fact Checking
-    FACT_CHECK_CONFIDENCE_THRESHOLD = 0.7
-    FACT_CHECK_BATCH_SIZE = 5
-    FACT_CHECK_RATE_LIMIT_DELAY = 0.5  # seconds between API calls
-    MIN_SOURCES_FOR_VERIFICATION = 2  # Minimum sources needed to verify
-    
-    # File Upload
-    MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
-    ALLOWED_EXTENSIONS = {'txt', 'srt', 'vtt', 'json'}
+    # Timeouts
+    FACT_CHECK_TIMEOUT = 10  # seconds per claim
+    TOTAL_ANALYSIS_TIMEOUT = 300  # 5 minutes total
+    API_TIMEOUT = 5  # seconds for external API calls
     
     # Caching
-    CACHE_TTL = 3600  # 1 hour
+    CACHE_TYPE = 'simple'
+    CACHE_DEFAULT_TIMEOUT = 3600  # 1 hour
     
-    # YouTube
-    YOUTUBE_MAX_DURATION = 3600  # 1 hour max video duration
+    # File upload settings
+    UPLOAD_FOLDER = 'uploads'
+    ALLOWED_EXTENSIONS = {'txt', 'srt', 'vtt'}
+    MAX_CONTENT_LENGTH = 16 * 1024 * 1024  # 16MB
     
-    # Export
-    EXPORT_FORMATS = ['pdf', 'json', 'txt']
+    # Job storage
+    JOB_STORAGE_TYPE = os.environ.get('JOB_STORAGE_TYPE', 'memory')
+    JOB_RETENTION_HOURS = 24
+    
+    # Logging
+    LOG_LEVEL = os.environ.get('LOG_LEVEL', 'INFO')
+    LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     
     @classmethod
     def validate(cls):
-        """Validate required configuration"""
+        """Validate configuration"""
         warnings = []
         
         if not cls.GOOGLE_FACTCHECK_API_KEY:
-            warnings.append("GOOGLE_FACTCHECK_API_KEY not set - using limited analysis")
+            warnings.append("Google Fact Check API key not set - fact checking will be limited")
         
-        if not cls.FRED_API_KEY:
-            warnings.append("FRED_API_KEY not set - economic data verification disabled")
+        if not cls.OPENAI_API_KEY:
+            warnings.append("OpenAI API key not set - AI filtering disabled")
         
-        if not cls.NEWS_API_KEY and not cls.MEDIASTACK_API_KEY:
-            warnings.append("No news APIs configured - news verification disabled")
+        if cls.DEBUG:
+            warnings.append("Running in DEBUG mode - not for production")
         
-        if not cls.SCRAPERAPI_KEY and not cls.SCRAPINGBEE_API_KEY:
-            warnings.append("No web scraping API keys - fact-checker site access limited")
-        
-        if warnings:
-            print("⚠️  Configuration Status:")
-            for warning in warnings:
-                print(f"   - {warning}")
-        else:
-            print("✅ All API keys configured for enhanced fact-checking")
-        
-        # Show what's active
-        print("\n📊 Active Data Sources:")
-        if cls.GOOGLE_FACTCHECK_API_KEY:
-            print("   ✓ Google Fact Check API")
-        if cls.FRED_API_KEY:
-            print("   ✓ Federal Reserve Economic Data (FRED)")
-        if cls.NEWS_API_KEY or cls.MEDIASTACK_API_KEY:
-            print("   ✓ News APIs (News API/MediaStack)")
-        if cls.SCRAPERAPI_KEY or cls.SCRAPINGBEE_API_KEY:
-            print("   ✓ Web Scraping")
-        
-        return True
-    
-    @classmethod
-    def get_active_apis(cls):
-        """Return list of configured APIs"""
-        active = []
-        
-        if cls.GOOGLE_FACTCHECK_API_KEY:
-            active.append("Google Fact Check")
-        if cls.FRED_API_KEY:
-            active.append("Federal Reserve Economic Data")
-        if cls.NEWS_API_KEY:
-            active.append("News API")
-        if cls.SCRAPERAPI_KEY or cls.SCRAPINGBEE_API_KEY:
-            active.append("Web Scraping")
-            
-        return active
+        return warnings
