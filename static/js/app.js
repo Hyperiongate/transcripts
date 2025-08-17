@@ -1,19 +1,5 @@
 // Transcript Fact Checker - Main JavaScript
 
-// Enhanced verdict handling with clearer language
-const VERDICT_MAPPINGS = {
-    'true': { class: 'true', icon: 'fa-check-circle', label: 'True' },
-    'mostly_true': { class: 'true', icon: 'fa-check-circle', label: 'Mostly True' },
-    'mixed': { class: 'mixed', icon: 'fa-adjust', label: 'Mixed' },
-    'misleading': { class: 'deceptive', icon: 'fa-exclamation-triangle', label: 'Deceptive' },
-    'deceptive': { class: 'deceptive', icon: 'fa-exclamation-triangle', label: 'Deceptive' },
-    'lacks_context': { class: 'lacks_context', icon: 'fa-info-circle', label: 'Lacks Critical Context' },
-    'unsubstantiated': { class: 'unsubstantiated', icon: 'fa-question-circle', label: 'Unsubstantiated' },
-    'mostly_false': { class: 'false', icon: 'fa-times-circle', label: 'Mostly False' },
-    'false': { class: 'false', icon: 'fa-times-circle', label: 'False' },
-    'unverified': { class: 'unverified', icon: 'fa-question-circle', label: 'Unverified' }
-};
-
 // Global variables
 let currentJobId = null;
 let pollInterval = null;
@@ -23,7 +9,6 @@ document.addEventListener('DOMContentLoaded', function() {
     initializeTabs();
     initializeFileUpload();
     initializeTextInput();
-    initializeYouTubeInput();
 });
 
 // Tab functionality
@@ -101,69 +86,6 @@ function initializeTextInput() {
     });
 }
 
-// YouTube input validation and formatting
-function initializeYouTubeInput() {
-    const youtubeInput = document.getElementById('youtube-url');
-    
-    if (!youtubeInput) {
-        console.warn('YouTube input element not found');
-        return;
-    }
-    
-    // Add placeholder examples
-    youtubeInput.placeholder = 'https://www.youtube.com/watch?v=... or https://youtu.be/...';
-    
-    // Auto-format YouTube URLs
-    youtubeInput.addEventListener('paste', (e) => {
-        setTimeout(() => {
-            const url = youtubeInput.value.trim();
-            if (url && isValidYouTubeUrl(url)) {
-                youtubeInput.style.borderColor = '#10b981'; // Green border for valid
-            } else if (url) {
-                youtubeInput.style.borderColor = '#ef4444'; // Red border for invalid
-            }
-        }, 100);
-    });
-    
-    youtubeInput.addEventListener('input', () => {
-        const url = youtubeInput.value.trim();
-        if (url && isValidYouTubeUrl(url)) {
-            youtubeInput.style.borderColor = '#10b981';
-        } else if (url) {
-            youtubeInput.style.borderColor = '#ef4444';
-        } else {
-            youtubeInput.style.borderColor = '#e5e7eb'; // Default
-        }
-    });
-}
-
-// Validate YouTube URL
-function isValidYouTubeUrl(url) {
-    const patterns = [
-        /^(https?:\/\/)?(www\.)?(youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|m\.youtube\.com\/watch\?v=)([a-zA-Z0-9_-]{11})/,
-        /^[a-zA-Z0-9_-]{11}$/ // Just video ID
-    ];
-    
-    return patterns.some(pattern => pattern.test(url));
-}
-
-// Extract YouTube video ID
-function extractVideoId(url) {
-    const patterns = [
-        /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|m\.youtube\.com\/watch\?v=)([a-zA-Z0-9_-]{11})/,
-        /^([a-zA-Z0-9_-]{11})$/ // Just video ID
-    ];
-    
-    for (const pattern of patterns) {
-        const match = url.match(pattern);
-        if (match) {
-            return match[1];
-        }
-    }
-    
-    return null;
-}
-
 // Handle file selection
 function handleFileSelect(file) {
     const allowedTypes = ['.txt', '.srt', '.vtt'];
@@ -198,7 +120,7 @@ function removeFile() {
     document.getElementById('file-drop-zone').style.display = 'block';
 }
 
-// Start analysis
+// Start analysis - MAIN FUNCTION
 async function startAnalysis() {
     // Disable button to prevent double submission
     const analyzeButton = document.getElementById('analyze-button');
@@ -231,29 +153,6 @@ async function startAnalysis() {
                 return;
             }
             analysisData.content = text;
-            
-        } else if (activeTab === 'youtube') {
-            const url = document.getElementById('youtube-url').value.trim();
-            if (!url) {
-                alert('Please enter a YouTube URL.');
-                analyzeButton.disabled = false;
-                return;
-            }
-            
-            // Validate YouTube URL
-            if (!isValidYouTubeUrl(url)) {
-                alert('Please enter a valid YouTube URL.\n\nExamples:\n- https://www.youtube.com/watch?v=VIDEO_ID\n- https://youtu.be/VIDEO_ID\n- Just the video ID');
-                analyzeButton.disabled = false;
-                return;
-            }
-            
-            // Show video ID for confirmation
-            const videoId = extractVideoId(url);
-            if (videoId) {
-                console.log('Extracting transcript for video ID:', videoId);
-            }
-            
-            analysisData.url = url;
             
         } else if (activeTab === 'file') {
             const fileInput = document.getElementById('file-input');
@@ -296,15 +195,10 @@ async function startAnalysis() {
             return;
         }
         
-        // For text and YouTube inputs
+        // For text input
         try {
             showProgress();
-            
-            if (activeTab === 'youtube') {
-                updateProgressMessage('Extracting YouTube transcript...');
-            } else {
-                updateProgressMessage('Processing text...');
-            }
+            updateProgressMessage('Processing text...');
             
             const response = await fetch('/api/analyze', {
                 method: 'POST',
@@ -460,8 +354,8 @@ function displayResults(data) {
     
     // Update credibility meter pointer
     const pointer = document.getElementById('credibility-pointer');
-    const rotation = (score / 100) * 180 - 90; // -90 to 90 degrees
-    pointer.style.transform = `rotate(${rotation}deg)`;
+    const position = (score / 100) * 100; // Percentage position
+    pointer.style.left = `calc(${position}% - 3px)`; // Center the pointer
     
     // Update summary
     document.getElementById('analysis-summary').textContent = data.summary || 'Analysis complete.';
@@ -473,8 +367,14 @@ function displayResults(data) {
     document.getElementById('false-claims').textContent = stats.false || 0;
     document.getElementById('unverified-claims').textContent = stats.unverified || 0;
     
-    // Display fact checks
-    displayFactChecks(data.fact_checks || []);
+    // Use enhanced display function if available, otherwise use basic display
+    if (typeof window.displayResults === 'function' && window.displayResults !== displayResults) {
+        // Call enhanced displayResults from enhanced.js
+        window.displayResults(data);
+    } else {
+        // Display fact checks with basic functionality
+        displayFactChecks(data.fact_checks || []);
+    }
 }
 
 // Get credibility label based on score
@@ -485,7 +385,7 @@ function getCredibilityLabel(score) {
     return 'Very Low Credibility';
 }
 
-// Display individual fact checks
+// Basic fact check display (will be overridden by enhanced version)
 function displayFactChecks(factChecks) {
     const container = document.getElementById('fact-check-list');
     container.innerHTML = '';
@@ -500,16 +400,14 @@ function displayFactChecks(factChecks) {
         item.className = 'fact-check-item';
         
         const verdict = check.verdict || 'unverified';
-        const verdictClass = getVerdictClass(verdict);
-        const verdictIcon = getVerdictIcon(verdict);
-        const verdictLabel = formatVerdict(verdict);
+        const verdictClass = verdict.toLowerCase();
         
         item.innerHTML = `
             <div class="fact-check-header">
                 <span class="fact-check-number">#${index + 1}</span>
                 <span class="fact-check-verdict ${verdictClass}">
-                    <i class="fas ${verdictIcon}"></i>
-                    ${verdictLabel}
+                    <i class="fas fa-${verdictClass === 'true' ? 'check' : verdictClass === 'false' ? 'times' : 'question'}-circle"></i>
+                    ${verdict}
                 </span>
             </div>
             <div class="fact-check-claim">
@@ -529,29 +427,6 @@ function displayFactChecks(factChecks) {
         
         container.appendChild(item);
     });
-}
-
-// Get verdict class for styling
-function getVerdictClass(verdict) {
-    const v = (verdict || 'unverified').toLowerCase().replace(' ', '_');
-    const mapping = VERDICT_MAPPINGS[v];
-    return mapping ? mapping.class : 'unverified';
-}
-
-// Get verdict icon
-function getVerdictIcon(verdict) {
-    const v = (verdict || 'unverified').toLowerCase().replace(' ', '_');
-    const mapping = VERDICT_MAPPINGS[v];
-    return mapping ? mapping.icon : 'fa-question-circle';
-}
-
-// Format verdict for display
-function formatVerdict(verdict) {
-    if (!verdict) return 'Unverified';
-    
-    const v = verdict.toLowerCase().replace(' ', '_');
-    const mapping = VERDICT_MAPPINGS[v];
-    return mapping ? mapping.label : verdict.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
 }
 
 // Export results
@@ -595,8 +470,6 @@ function resetAnalysis() {
     
     // Clear inputs
     document.getElementById('text-input').value = '';
-    document.getElementById('youtube-url').value = '';
-    document.getElementById('youtube-url').style.borderColor = '#e5e7eb';
     document.getElementById('char-count').textContent = '0';
     removeFile();
     
