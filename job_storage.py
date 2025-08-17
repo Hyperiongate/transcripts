@@ -1,187 +1,82 @@
 """
-Job Storage Manager - Handles job persistence with Redis support and fallback
+Job Storage Service
+Handles storage and retrieval of analysis jobs
 """
-import os
 import json
 import logging
-import threading
-from typing import Dict, Optional, Any
 from datetime import datetime, timedelta
+from typing import Dict, Optional
 
 logger = logging.getLogger(__name__)
 
 class JobStorage:
-    """Abstract base class for job storage"""
-    
-    def set(self, job_id: str, job_data: Dict[str, Any]) -> None:
-        raise NotImplementedError
-    
-    def get(self, job_id: str) -> Optional[Dict[str, Any]]:
-        raise NotImplementedError
-    
-    def update(self, job_id: str, updates: Dict[str, Any]) -> None:
-        raise NotImplementedError
-    
-    def delete(self, job_id: str) -> None:
-        raise NotImplementedError
-    
-    def exists(self, job_id: str) -> bool:
-        raise NotImplementedError
-    
-    def list_jobs(self) -> list:
-        raise NotImplementedError
-
-
-class InMemoryJobStorage(JobStorage):
-    """Thread-safe in-memory job storage for development"""
+    """Simple in-memory job storage"""
     
     def __init__(self):
-        self._jobs = {}
-        self._lock = threading.RLock()
-        logger.info("Using in-memory job storage (development mode)")
+        self.jobs = {}
+        self.max_age = timedelta(hours=24)
     
-    def set(self, job_id: str, job_data: Dict[str, Any]) -> None:
-        with self._lock:
-            self._jobs[job_id] = job_data.copy()
+    def set(self, job_id: str, data: Dict) -> None:
+        """Store job data"""
+        self.jobs[job_id] = {
+            'data': data,
+            'created_at': datetime.now()
+        }
+        self._cleanup_old_jobs()
     
-    def get(self, job_id: str) -> Optional[Dict[str, Any]]:
-        with self._lock:
-            return self._jobs.get(job_id, {}).copy() if job_id in self._jobs else None
+    def get(self, job_id: str) -> Optional[Dict]:
+        """Retrieve job data"""
+        if job_id in self.jobs:
+            return self.jobs[job_id]['data']
+        return None
     
-    def update(self, job_id: str, updates: Dict[str, Any]) -> None:
-        with self._lock:
-            if job_id in self._jobs:
-                self._jobs[job_id].update(updates)
-            else:
-                logger.warning(f"Attempted to update non-existent job: {job_id}")
-    
-    def delete(self, job_id: str) -> None:
-        with self._lock:
-            self._jobs.pop(job_id, None)
-    
-    def exists(self, job_id: str) -> bool:
-        with self._lock:
-            return job_id in self._jobs
-    
-    def list_jobs(self) -> list:
-        with self._lock:
-            return list(self._jobs.keys())
-
-
-class RedisJobStorage(JobStorage):
-    """Redis-based job storage for production"""
-    
-    def __init__(self, redis_url: str = None):
-        try:
-            import redis
-            self.redis_url = redis_url or os.environ.get('REDIS_URL', 'redis://localhost:6379')
-            self.redis_client = redis.from_url(self.redis_url, decode_responses=True)
-            self.redis_client.ping()  # Test connection
-            self.ttl = 3600  # 1 hour TTL for jobs
-            logger.info(f"Connected to Redis at {self._sanitize_url(self.redis_url)}")
-        except Exception as e:
-            logger.error(f"Failed to connect to Redis: {str(e)}")
-            raise
-    
-    def _sanitize_url(self, url: str) -> str:
-        """Remove password from Redis URL for logging"""
-        if '@' in url:
-            parts = url.split('@')
-            return parts[0].split('//')[0] + '//*****@' + parts[1]
-        return url
-    
-    def _key(self, job_id: str) -> str:
-        """Generate Redis key for job"""
-        return f"job:{job_id}"
-    
-    def set(self, job_id: str, job_data: Dict[str, Any]) -> None:
-        try:
-            key = self._key(job_id)
-            self.redis_client.setex(key, self.ttl, json.dumps(job_data))
-        except Exception as e:
-            logger.error(f"Redis set error for job {job_id}: {str(e)}")
-            raise
-    
-    def get(self, job_id: str) -> Optional[Dict[str, Any]]:
-        try:
-            key = self._key(job_id)
-            data = self.redis_client.get(key)
-            if data:
-                # Reset TTL on access to keep active jobs alive
-                self.redis_client.expire(key, self.ttl)
-                return json.loads(data)
-            return None
-        except Exception as e:
-            logger.error(f"Redis get error for job {job_id}: {str(e)}")
-            return None
-    
-    def update(self, job_id: str, updates: Dict[str, Any]) -> None:
-        try:
-            job_data = self.get(job_id)
-            if job_data:
-                job_data.update(updates)
-                self.set(job_id, job_data)
-            else:
-                logger.warning(f"Attempted to update non-existent job: {job_id}")
-        except Exception as e:
-            logger.error(f"Redis update error for job {job_id}: {str(e)}")
-            raise
+    def update(self, job_id: str, updates: Dict) -> None:
+        """Update job data"""
+        if job_id in self.jobs:
+            self.jobs[job_id]['data'].update(updates)
+            self.jobs[job_id]['updated_at'] = datetime.now()
     
     def delete(self, job_id: str) -> None:
-        try:
-            self.redis_client.delete(self._key(job_id))
-        except Exception as e:
-            logger.error(f"Redis delete error for job {job_id}: {str(e)}")
+        """Delete job data"""
+        if job_id in self.jobs:
+            del self.jobs[job_id]
     
-    def exists(self, job_id: str) -> bool:
-        try:
-            return bool(self.redis_client.exists(self._key(job_id)))
-        except Exception as e:
-            logger.error(f"Redis exists error for job {job_id}: {str(e)}")
-            return False
-    
-    def list_jobs(self) -> list:
-        try:
-            keys = self.redis_client.keys("job:*")
-            return [key.split(":", 1)[1] for key in keys]
-        except Exception as e:
-            logger.error(f"Redis list_jobs error: {str(e)}")
-            return []
-
-
-class JobStorageManager:
-    """Factory class to create appropriate job storage"""
-    
-    _instance = None
-    _storage = None
-    
-    def __new__(cls):
-        if cls._instance is None:
-            cls._instance = super(JobStorageManager, cls).__new__(cls)
-        return cls._instance
-    
-    @classmethod
-    def get_storage(cls) -> JobStorage:
-        """Get or create job storage instance"""
-        if cls._storage is None:
-            # Try Redis first if URL is available
-            redis_url = os.environ.get('REDIS_URL')
-            if redis_url:
-                try:
-                    cls._storage = RedisJobStorage(redis_url)
-                    logger.info("Using Redis job storage")
-                except Exception as e:
-                    logger.warning(f"Failed to initialize Redis storage: {str(e)}")
-                    logger.info("Falling back to in-memory storage")
-                    cls._storage = InMemoryJobStorage()
-            else:
-                # Use in-memory storage for development
-                cls._storage = InMemoryJobStorage()
+    def _cleanup_old_jobs(self) -> None:
+        """Remove jobs older than max_age"""
+        current_time = datetime.now()
+        jobs_to_delete = []
         
-        return cls._storage
-
-
-# Convenience function for easy import
-def get_job_storage() -> JobStorage:
-    """Get the configured job storage instance"""
-    return JobStorageManager.get_storage()
+        for job_id, job_info in self.jobs.items():
+            if current_time - job_info['created_at'] > self.max_age:
+                jobs_to_delete.append(job_id)
+        
+        for job_id in jobs_to_delete:
+            del self.jobs[job_id]
+        
+        if jobs_to_delete:
+            logger.info(f"Cleaned up {len(jobs_to_delete)} old jobs")
+    
+    def get_all_jobs(self) -> Dict[str, Dict]:
+        """Get all jobs (for debugging)"""
+        return {
+            job_id: job_info['data'] 
+            for job_id, job_info in self.jobs.items()
+        }
+    
+    def get_stats(self) -> Dict:
+        """Get storage statistics"""
+        return {
+            'total_jobs': len(self.jobs),
+            'active_jobs': sum(
+                1 for job in self.jobs.values() 
+                if job['data'].get('status') == 'processing'
+            ),
+            'completed_jobs': sum(
+                1 for job in self.jobs.values() 
+                if job['data'].get('status') == 'completed'
+            ),
+            'failed_jobs': sum(
+                1 for job in self.jobs.values() 
+                if job['data'].get('status') == 'failed'
+            )
+        }
