@@ -91,12 +91,30 @@ function getDemoNotes() {
 
 // Enhanced display function with all improvements
 window.displayResults = function(results) {
+    // First call the basic display to set up core elements
+    const score = results.credibility_score || 0;
+    document.getElementById('credibility-value').textContent = Math.round(score);
+    document.getElementById('credibility-label').textContent = getCredibilityLabel(score);
+    
+    // Update credibility meter pointer
+    const pointer = document.getElementById('credibility-pointer');
+    const position = (score / 100) * 100;
+    pointer.style.left = `calc(${position}% - 3px)`;
+    
+    // Update summary
+    document.getElementById('analysis-summary').textContent = results.summary || 'Analysis complete.';
+    
     // Display speaker info if available
     if (results.speaker) {
         const speakerDiv = document.createElement('div');
         speakerDiv.className = 'speaker-info';
         speakerDiv.innerHTML = `<strong>Speaker Identified:</strong> ${results.speaker}`;
-        document.getElementById('analysis-summary').parentElement.appendChild(speakerDiv);
+        const summaryParent = document.getElementById('analysis-summary').parentElement;
+        // Check if speaker info already exists
+        const existingSpeaker = summaryParent.querySelector('.speaker-info');
+        if (!existingSpeaker) {
+            summaryParent.appendChild(speakerDiv);
+        }
     }
     
     // Display topics if available
@@ -104,21 +122,34 @@ window.displayResults = function(results) {
         const topicsDiv = document.createElement('div');
         topicsDiv.className = 'topic-info';
         topicsDiv.innerHTML = `<strong>Topics Discussed:</strong> ${results.topics.join(', ')}`;
-        document.getElementById('analysis-summary').parentElement.appendChild(topicsDiv);
+        const summaryParent = document.getElementById('analysis-summary').parentElement;
+        // Check if topics info already exists
+        const existingTopics = summaryParent.querySelector('.topic-info');
+        if (!existingTopics) {
+            summaryParent.appendChild(topicsDiv);
+        }
     }
     
     // Display speaker context if available
     if (results.speaker_context) {
         const contextHtml = generateSpeakerContextHTML(results.speaker_context);
         const summarySection = document.getElementById('analysis-summary').parentElement;
-        summarySection.insertAdjacentHTML('afterbegin', contextHtml);
+        // Check if context already exists
+        const existingContext = summarySection.querySelector('.speaker-context-section');
+        if (!existingContext) {
+            summarySection.insertAdjacentHTML('afterbegin', contextHtml);
+        }
     }
     
     // Add demo mode notes if in demo mode
     if (results.mode === 'demo') {
         const notesHtml = getDemoNotes();
         const summarySection = document.getElementById('analysis-summary').parentElement;
-        summarySection.insertAdjacentHTML('beforeend', notesHtml);
+        // Check if notes already exist
+        const existingNotes = summarySection.querySelector('.analysis-notes');
+        if (!existingNotes) {
+            summarySection.insertAdjacentHTML('beforeend', notesHtml);
+        }
     }
     
     // Display conversational summary if available
@@ -129,7 +160,12 @@ window.displayResults = function(results) {
             <h4>Summary</h4>
             <p>${results.conversational_summary}</p>
         `;
-        document.getElementById('analysis-summary').parentElement.appendChild(summaryDiv);
+        const summaryParent = document.getElementById('analysis-summary').parentElement;
+        // Check if conversational summary already exists
+        const existingConvSummary = summaryParent.querySelector('.conversational-summary');
+        if (!existingConvSummary) {
+            summaryParent.appendChild(summaryDiv);
+        }
     }
     
     // Update statistics with proper counts
@@ -308,7 +344,7 @@ window.toggleFactCheck = function(itemId) {
     }
 };
 
-// Enhanced verdict helpers
+// Enhanced verdict helpers - override basic versions
 window.getVerdictClass = function(verdict) {
     const v = (verdict || 'unverified').toLowerCase().replace(' ', '_');
     const mapping = VERDICT_MAPPINGS[v];
@@ -327,6 +363,14 @@ window.formatVerdict = function(verdict) {
     const v = verdict.toLowerCase().replace(' ', '_');
     const mapping = VERDICT_MAPPINGS[v];
     return mapping ? mapping.label : verdict.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
+};
+
+// Helper function for credibility label
+window.getCredibilityLabel = function(score) {
+    if (score >= 80) return 'Highly Credible';
+    if (score >= 60) return 'Moderately Credible';
+    if (score >= 40) return 'Low Credibility';
+    return 'Very Low Credibility';
 };
 
 // Add CSS for speaker context display
