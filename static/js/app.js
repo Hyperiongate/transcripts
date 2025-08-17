@@ -1,344 +1,497 @@
-// Fact Checker Application JavaScript
+// Transcript Fact Checker - Main JavaScript
 
+// Enhanced verdict handling with clearer language
+const VERDICT_MAPPINGS = {
+    'true': { class: 'true', icon: 'fa-check-circle', label: 'True' },
+    'mostly_true': { class: 'true', icon: 'fa-check-circle', label: 'Mostly True' },
+    'mixed': { class: 'mixed', icon: 'fa-adjust', label: 'Mixed' },
+    'misleading': { class: 'deceptive', icon: 'fa-exclamation-triangle', label: 'Deceptive' },
+    'deceptive': { class: 'deceptive', icon: 'fa-exclamation-triangle', label: 'Deceptive' },
+    'lacks_context': { class: 'lacks_context', icon: 'fa-info-circle', label: 'Lacks Critical Context' },
+    'unsubstantiated': { class: 'unsubstantiated', icon: 'fa-question-circle', label: 'Unsubstantiated' },
+    'mostly_false': { class: 'false', icon: 'fa-times-circle', label: 'Mostly False' },
+    'false': { class: 'false', icon: 'fa-times-circle', label: 'False' },
+    'unverified': { class: 'unverified', icon: 'fa-question-circle', label: 'Unverified' }
+};
+
+// Global variables
+let currentJobId = null;
+let pollInterval = null;
+
+// Initialize on page load
 document.addEventListener('DOMContentLoaded', function() {
-    // Tab switching
-    const methodTabs = document.querySelectorAll('.method-tab');
-    const inputPanels = document.querySelectorAll('.input-panel');
-    
-    methodTabs.forEach(tab => {
-        tab.addEventListener('click', function() {
-            const method = this.dataset.method;
-            
-            // Update active states
-            methodTabs.forEach(t => t.classList.remove('active'));
-            inputPanels.forEach(p => p.classList.remove('active'));
-            
-            this.classList.add('active');
-            document.getElementById(`${method}-panel`).classList.add('active');
-        });
-    });
-    
-    // File upload
-    const fileInput = document.getElementById('file-input');
-    const fileUploadArea = document.querySelector('.file-upload-area');
-    
-    if (fileUploadArea) {
-        fileUploadArea.addEventListener('click', () => fileInput.click());
-        
-        fileUploadArea.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            fileUploadArea.classList.add('dragover');
-        });
-        
-        fileUploadArea.addEventListener('dragleave', () => {
-            fileUploadArea.classList.remove('dragover');
-        });
-        
-        fileUploadArea.addEventListener('drop', (e) => {
-            e.preventDefault();
-            fileUploadArea.classList.remove('dragover');
-            
-            if (e.dataTransfer.files.length > 0) {
-                fileInput.files = e.dataTransfer.files;
-                updateFileInfo(e.dataTransfer.files[0]);
-            }
-        });
-        
-        fileInput.addEventListener('change', (e) => {
-            if (e.target.files.length > 0) {
-                updateFileInfo(e.target.files[0]);
-            }
-        });
-    }
-    
-    // Form submission
-    const form = document.getElementById('fact-check-form');
-    form.addEventListener('submit', handleSubmit);
+    initializeTabs();
+    initializeFileUpload();
+    initializeTextInput();
+    initializeYouTubeInput();
 });
 
-function updateFileInfo(file) {
-    const fileInfo = document.querySelector('.file-info');
-    if (fileInfo) {
-        fileInfo.textContent = `Selected: ${file.name} (${formatFileSize(file.size)})`;
+// Tab functionality
+function initializeTabs() {
+    const tabs = document.querySelectorAll('.tab-button');
+    const panels = document.querySelectorAll('.input-panel');
+    
+    tabs.forEach(tab => {
+        tab.addEventListener('click', () => {
+            // Remove active class from all
+            tabs.forEach(t => t.classList.remove('active'));
+            panels.forEach(p => p.classList.remove('active'));
+            
+            // Add active class to clicked tab and corresponding panel
+            tab.classList.add('active');
+            const tabName = tab.getAttribute('data-tab');
+            document.getElementById(`${tabName}-panel`).classList.add('active');
+        });
+    });
+}
+
+// File upload functionality
+function initializeFileUpload() {
+    const dropZone = document.getElementById('file-drop-zone');
+    const fileInput = document.getElementById('file-input');
+    
+    if (!dropZone || !fileInput) {
+        console.warn('File upload elements not found');
+        return;
     }
+    
+    // Click to upload
+    dropZone.addEventListener('click', () => fileInput.click());
+    
+    // Drag and drop
+    dropZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropZone.classList.add('dragover');
+    });
+    
+    dropZone.addEventListener('dragleave', () => {
+        dropZone.classList.remove('dragover');
+    });
+    
+    dropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropZone.classList.remove('dragover');
+        
+        const files = e.dataTransfer.files;
+        if (files.length > 0) {
+            handleFileSelect(files[0]);
+        }
+    });
+    
+    // File input change
+    fileInput.addEventListener('change', (e) => {
+        if (e.target.files.length > 0) {
+            handleFileSelect(e.target.files[0]);
+        }
+    });
 }
 
-function formatFileSize(bytes) {
-    if (bytes === 0) return '0 Bytes';
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+// Text input character counter
+function initializeTextInput() {
+    const textInput = document.getElementById('text-input');
+    const charCount = document.getElementById('char-count');
+    
+    if (!textInput || !charCount) {
+        console.warn('Text input elements not found');
+        return;
+    }
+    
+    textInput.addEventListener('input', () => {
+        charCount.textContent = textInput.value.length;
+    });
 }
 
-async function handleSubmit(e) {
-    e.preventDefault();
+// YouTube input validation and formatting
+function initializeYouTubeInput() {
+    const youtubeInput = document.getElementById('youtube-url');
     
-    // Get the active input method
-    const activePanel = document.querySelector('.input-panel.active');
-    const method = activePanel.id.replace('-panel', '');
+    if (!youtubeInput) {
+        console.warn('YouTube input element not found');
+        return;
+    }
     
-    let transcript = '';
-    let source = '';
+    // Add placeholder examples
+    youtubeInput.placeholder = 'https://www.youtube.com/watch?v=... or https://youtu.be/...';
+    
+    // Auto-format YouTube URLs
+    youtubeInput.addEventListener('paste', (e) => {
+        setTimeout(() => {
+            const url = youtubeInput.value.trim();
+            if (url && isValidYouTubeUrl(url)) {
+                youtubeInput.style.borderColor = '#10b981'; // Green border for valid
+            } else if (url) {
+                youtubeInput.style.borderColor = '#ef4444'; // Red border for invalid
+            }
+        }, 100);
+    });
+    
+    youtubeInput.addEventListener('input', () => {
+        const url = youtubeInput.value.trim();
+        if (url && isValidYouTubeUrl(url)) {
+            youtubeInput.style.borderColor = '#10b981';
+        } else if (url) {
+            youtubeInput.style.borderColor = '#ef4444';
+        } else {
+            youtubeInput.style.borderColor = '#e5e7eb'; // Default
+        }
+    });
+}
+
+// Validate YouTube URL
+function isValidYouTubeUrl(url) {
+    const patterns = [
+        /^(https?:\/\/)?(www\.)?(youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|m\.youtube\.com\/watch\?v=)([a-zA-Z0-9_-]{11})/,
+        /^[a-zA-Z0-9_-]{11}$/ // Just video ID
+    ];
+    
+    return patterns.some(pattern => pattern.test(url));
+}
+
+// Extract YouTube video ID
+function extractVideoId(url) {
+    const patterns = [
+        /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|m\.youtube\.com\/watch\?v=)([a-zA-Z0-9_-]{11})/,
+        /^([a-zA-Z0-9_-]{11})$/ // Just video ID
+    ];
+    
+    for (const pattern of patterns) {
+        const match = url.match(pattern);
+        if (match) {
+            return match[1];
+        }
+    }
+    
+    return null;
+}
+
+// Handle file selection
+function handleFileSelect(file) {
+    const allowedTypes = ['.txt', '.srt', '.vtt'];
+    const fileExt = '.' + file.name.split('.').pop().toLowerCase();
+    
+    if (!allowedTypes.includes(fileExt)) {
+        alert('Please upload a TXT, SRT, or VTT file.');
+        return;
+    }
+    
+    if (file.size > 10 * 1024 * 1024) {
+        alert('File size must be less than 10MB.');
+        return;
+    }
+    
+    // Show file info
+    document.getElementById('file-info').style.display = 'flex';
+    document.getElementById('file-name').textContent = file.name;
+    document.getElementById('file-drop-zone').style.display = 'none';
+    
+    // Store file reference
+    const fileInput = document.getElementById('file-input');
+    const dataTransfer = new DataTransfer();
+    dataTransfer.items.add(file);
+    fileInput.files = dataTransfer.files;
+}
+
+// Remove selected file
+function removeFile() {
+    document.getElementById('file-input').value = '';
+    document.getElementById('file-info').style.display = 'none';
+    document.getElementById('file-drop-zone').style.display = 'block';
+}
+
+// Start analysis
+async function startAnalysis() {
+    // Disable button to prevent double submission
+    const analyzeButton = document.getElementById('analyze-button');
+    analyzeButton.disabled = true;
     
     try {
-        // Get transcript based on method
-        if (method === 'text') {
-            transcript = document.getElementById('transcript-text').value.trim();
-            source = 'Direct Input';
-            
-            if (!transcript) {
-                showError('Please enter a transcript to analyze');
+        // Get active tab
+        const activeTab = document.querySelector('.tab-button.active').getAttribute('data-tab');
+        
+        let analysisData = {
+            type: activeTab
+        };
+        
+        // Validate and prepare data based on input type
+        if (activeTab === 'text') {
+            const text = document.getElementById('text-input').value.trim();
+            if (!text) {
+                alert('Please enter some text to analyze.');
+                analyzeButton.disabled = false;
                 return;
             }
-        } else if (method === 'file') {
-            const fileInput = document.getElementById('file-input');
-            if (!fileInput.files || fileInput.files.length === 0) {
-                showError('Please select a file to analyze');
+            if (text.length < 50) {
+                alert('Please enter at least 50 characters of text.');
+                analyzeButton.disabled = false;
                 return;
             }
+            if (text.length > 50000) {
+                alert('Text is too long. Maximum 50,000 characters allowed.');
+                analyzeButton.disabled = false;
+                return;
+            }
+            analysisData.content = text;
             
-            const file = fileInput.files[0];
-            transcript = await readFile(file);
-            source = `File: ${file.name}`;
-        } else if (method === 'youtube') {
+        } else if (activeTab === 'youtube') {
             const url = document.getElementById('youtube-url').value.trim();
             if (!url) {
-                showError('Please enter a YouTube URL');
+                alert('Please enter a YouTube URL.');
+                analyzeButton.disabled = false;
                 return;
             }
             
-            // For YouTube, send the URL as the transcript
-            transcript = url;
-            source = `YouTube: ${url}`;
-        }
-        
-        // Validate transcript
-        if (!transcript || transcript.length < 50) {
-            showError('Transcript is too short. Please provide more content to analyze.');
+            // Validate YouTube URL
+            if (!isValidYouTubeUrl(url)) {
+                alert('Please enter a valid YouTube URL.\n\nExamples:\n- https://www.youtube.com/watch?v=VIDEO_ID\n- https://youtu.be/VIDEO_ID\n- Just the video ID');
+                analyzeButton.disabled = false;
+                return;
+            }
+            
+            // Show video ID for confirmation
+            const videoId = extractVideoId(url);
+            if (videoId) {
+                console.log('Extracting transcript for video ID:', videoId);
+            }
+            
+            analysisData.url = url;
+            
+        } else if (activeTab === 'file') {
+            const fileInput = document.getElementById('file-input');
+            if (!fileInput.files.length) {
+                alert('Please select a file to analyze.');
+                analyzeButton.disabled = false;
+                return;
+            }
+            
+            // For file upload, we need to use FormData
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+            formData.append('type', 'file');
+            
+            try {
+                showProgress();
+                updateProgressMessage('Uploading file...');
+                
+                const response = await fetch('/api/analyze', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const result = await response.json();
+                
+                if (result.success) {
+                    currentJobId = result.job_id;
+                    console.log('Analysis started with job ID:', currentJobId);
+                    pollJobStatus();
+                } else {
+                    hideProgress();
+                    alert(result.error || 'Analysis failed.');
+                }
+            } catch (error) {
+                hideProgress();
+                alert('Error: ' + error.message);
+            } finally {
+                analyzeButton.disabled = false;
+            }
             return;
         }
         
-        // Send to API
-        await analyzeTranscript(transcript, source);
-        
-    } catch (error) {
-        console.error('Error:', error);
-        showError('An error occurred while processing your request');
-    }
-}
-
-async function readFile(file) {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = e => resolve(e.target.result);
-        reader.onerror = reject;
-        reader.readAsText(file);
-    });
-}
-
-async function analyzeTranscript(transcript, source) {
-    // Show progress section
-    document.getElementById('progress-section').classList.remove('hidden');
-    document.getElementById('results-section').classList.add('hidden');
-    
-    // Reset progress
-    updateProgress(0, 'Initializing analysis...');
-    
-    try {
-        // Send analysis request
-        const response = await fetch('/api/analyze', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-                transcript: transcript,
-                source: source
-            })
-        });
-        
-        const data = await response.json();
-        
-        if (!response.ok) {
-            throw new Error(data.error || 'Analysis failed');
+        // For text and YouTube inputs
+        try {
+            showProgress();
+            
+            if (activeTab === 'youtube') {
+                updateProgressMessage('Extracting YouTube transcript...');
+            } else {
+                updateProgressMessage('Processing text...');
+            }
+            
+            const response = await fetch('/api/analyze', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(analysisData)
+            });
+            
+            const result = await response.json();
+            
+            if (result.success) {
+                currentJobId = result.job_id;
+                console.log('Analysis started with job ID:', currentJobId);
+                console.log('Source:', result.source);
+                pollJobStatus();
+            } else {
+                hideProgress();
+                alert(result.error || 'Analysis failed.');
+            }
+        } catch (error) {
+            hideProgress();
+            alert('Error: ' + error.message);
         }
-        
-        if (!data.success) {
-            throw new Error(data.error || 'Analysis failed');
-        }
-        
-        // Start polling for results
-        const jobId = data.job_id;
-        pollJobStatus(jobId);
         
     } catch (error) {
         console.error('Analysis error:', error);
-        showError(error.message || 'Failed to analyze transcript');
-        document.getElementById('progress-section').classList.add('hidden');
+        alert('An error occurred. Please try again.');
+    } finally {
+        analyzeButton.disabled = false;
     }
 }
 
-async function pollJobStatus(jobId) {
+// Show progress section
+function showProgress() {
+    document.getElementById('input-section').style.display = 'none';
+    document.getElementById('progress-section').style.display = 'block';
+    document.getElementById('results-section').style.display = 'none';
+}
+
+// Hide progress section
+function hideProgress() {
+    document.getElementById('progress-section').style.display = 'none';
+    document.getElementById('input-section').style.display = 'block';
+}
+
+// Update progress message
+function updateProgressMessage(message) {
+    document.getElementById('progress-text').textContent = message;
+}
+
+// Update progress bar
+function updateProgress(percent) {
+    document.getElementById('progress-fill').style.width = percent + '%';
+    
+    // Update step indicators
+    const steps = ['step-1', 'step-2', 'step-3', 'step-4'];
+    const stepPercent = 100 / steps.length;
+    
+    steps.forEach((stepId, index) => {
+        const step = document.getElementById(stepId);
+        if (percent >= (index + 1) * stepPercent) {
+            step.classList.add('active');
+        } else {
+            step.classList.remove('active');
+        }
+    });
+}
+
+// Poll job status
+async function pollJobStatus() {
     const maxAttempts = 60; // 5 minutes max
     let attempts = 0;
     
-    const interval = setInterval(async () => {
+    pollInterval = setInterval(async () => {
         try {
-            const response = await fetch(`/api/status/${jobId}`);
-            const data = await response.json();
+            const response = await fetch(`/api/status/${currentJobId}`);
+            const result = await response.json();
             
-            if (!response.ok || !data.success) {
-                throw new Error('Failed to get job status');
+            if (result.success) {
+                // Update progress
+                updateProgress(result.progress || 0);
+                
+                // Update message based on status
+                switch (result.status) {
+                    case 'processing':
+                        updateProgressMessage('Processing transcript...');
+                        break;
+                    case 'extracting':
+                        updateProgressMessage('Extracting claims...');
+                        break;
+                    case 'checking':
+                        updateProgressMessage('Fact-checking claims...');
+                        break;
+                    case 'analyzing':
+                        updateProgressMessage('Analyzing credibility...');
+                        break;
+                    case 'completed':
+                        updateProgressMessage('Analysis complete!');
+                        clearInterval(pollInterval);
+                        await loadResults();
+                        break;
+                    case 'failed':
+                        clearInterval(pollInterval);
+                        hideProgress();
+                        alert('Analysis failed: ' + (result.error || 'Unknown error'));
+                        break;
+                }
+            } else {
+                attempts++;
+                if (attempts >= maxAttempts) {
+                    clearInterval(pollInterval);
+                    hideProgress();
+                    alert('Analysis timed out. Please try again.');
+                }
             }
-            
-            // Update progress
-            updateProgress(data.progress || 0, getProgressText(data.progress));
-            
-            if (data.status === 'completed') {
-                clearInterval(interval);
-                await loadResults(jobId);
-            } else if (data.status === 'failed') {
-                clearInterval(interval);
-                throw new Error(data.error || 'Analysis failed');
-            }
-            
-            attempts++;
-            if (attempts >= maxAttempts) {
-                clearInterval(interval);
-                throw new Error('Analysis timed out');
-            }
-            
         } catch (error) {
-            clearInterval(interval);
-            console.error('Polling error:', error);
-            showError(error.message || 'Failed to get analysis status');
-            document.getElementById('progress-section').classList.add('hidden');
+            console.error('Poll error:', error);
+            clearInterval(pollInterval);
+            hideProgress();
+            alert('Error checking status. Please refresh the page.');
         }
-    }, 5000); // Poll every 5 seconds
+    }, 2000); // Poll every 2 seconds
 }
 
-function updateProgress(percent, text) {
-    const progressFill = document.getElementById('progress-fill');
-    const progressText = document.getElementById('progress-text');
-    
-    progressFill.style.width = percent + '%';
-    progressText.textContent = text;
-}
-
-function getProgressText(progress) {
-    if (progress < 20) return 'Processing transcript...';
-    if (progress < 40) return 'Extracting claims...';
-    if (progress < 60) return 'Fact-checking claims...';
-    if (progress < 80) return 'Analyzing credibility...';
-    if (progress < 100) return 'Finalizing results...';
-    return 'Analysis complete!';
-}
-
-async function loadResults(jobId) {
+// Load and display results
+async function loadResults() {
     try {
-        const response = await fetch(`/api/results/${jobId}`);
-        const results = await response.json();
+        const response = await fetch(`/api/results/${currentJobId}`);
+        const result = await response.json();
         
-        if (!response.ok || !results.success) {
+        if (result.success && result.data) {
+            displayResults(result.data);
+        } else {
             throw new Error('Failed to load results');
         }
-        
-        // Display results
-        displayResults(results);
-        
-        // Show results section
-        document.getElementById('progress-section').classList.add('hidden');
-        document.getElementById('results-section').classList.remove('hidden');
-        
-        // Set up export buttons
-        setupExportButtons(jobId);
-        
     } catch (error) {
-        console.error('Results error:', error);
-        showError('Failed to load analysis results');
+        console.error('Load results error:', error);
+        alert('Error loading results. Please refresh the page.');
     }
 }
 
-function displayResults(results) {
+// Display results
+function displayResults(data) {
+    // Hide progress, show results
+    document.getElementById('progress-section').style.display = 'none';
+    document.getElementById('results-section').style.display = 'block';
+    
     // Update credibility score
-    const score = results.credibility_score || 0;
-    document.getElementById('credibility-meter').style.width = score + '%';
-    document.getElementById('credibility-score').textContent = score + '%';
-    document.getElementById('credibility-label').textContent = results.credibility_label || 'Unknown';
+    const score = data.credibility_score || 0;
+    document.getElementById('credibility-value').textContent = Math.round(score);
+    document.getElementById('credibility-label').textContent = getCredibilityLabel(score);
     
-    // Update stats
-    updateStats(results);
+    // Update credibility meter pointer
+    const pointer = document.getElementById('credibility-pointer');
+    const rotation = (score / 100) * 180 - 90; // -90 to 90 degrees
+    pointer.style.transform = `rotate(${rotation}deg)`;
     
-    // Display summary
-    const summaryContainer = document.getElementById('analysis-summary');
-    if (results.speaker_context && results.speaker_context.speaker) {
-        const context = results.speaker_context;
-        
-        let summaryHtml = '<div class="speaker-context-section">';
-        summaryHtml += `<h4>About ${context.speaker}:</h4>`;
-        
-        if (context.criminal_record) {
-            summaryHtml += `<div class="alert alert-danger">
-                <strong>⚖️ Criminal Record:</strong> ${context.criminal_record}
-            </div>`;
-        }
-        
-        if (context.fraud_history) {
-            summaryHtml += `<div class="alert alert-warning">
-                <strong>💰 Fraud History:</strong> ${context.fraud_history}
-            </div>`;
-        }
-        
-        summaryHtml += '</div>';
-        summaryContainer.innerHTML = summaryHtml;
-    }
+    // Update summary
+    document.getElementById('analysis-summary').textContent = data.summary || 'Analysis complete.';
     
-    if (results.conversational_summary) {
-        summaryContainer.innerHTML += `<div class="conversational-summary">
-            <h4>Summary:</h4>
-            <p>${results.conversational_summary}</p>
-        </div>`;
-    }
+    // Update statistics
+    const stats = data.statistics || {};
+    document.getElementById('total-claims').textContent = stats.total_claims || 0;
+    document.getElementById('verified-claims').textContent = stats.verified || 0;
+    document.getElementById('false-claims').textContent = stats.false || 0;
+    document.getElementById('unverified-claims').textContent = stats.unverified || 0;
     
     // Display fact checks
-    if (window.displayEnhancedFactChecks) {
-        window.updateEnhancedStats(results);
-        window.displayEnhancedFactChecks(results.fact_checks || []);
-    } else {
-        displayFactChecks(results.fact_checks || []);
-    }
+    displayFactChecks(data.fact_checks || []);
 }
 
-function updateStats(results) {
-    let verifiedCount = 0;
-    let falseCount = 0;
-    let unverifiedCount = 0;
-    
-    if (results.fact_checks && Array.isArray(results.fact_checks)) {
-        results.fact_checks.forEach(check => {
-            const verdict = (check.verdict || 'unverified').toLowerCase();
-            if (verdict === 'true' || verdict === 'mostly_true') {
-                verifiedCount++;
-            } else if (verdict === 'false' || verdict === 'mostly_false') {
-                falseCount++;
-            } else {
-                unverifiedCount++;
-            }
-        });
-    }
-    
-    document.getElementById('verified-claims').textContent = verifiedCount;
-    document.getElementById('false-claims').textContent = falseCount;
-    document.getElementById('unverified-claims').textContent = unverifiedCount;
+// Get credibility label based on score
+function getCredibilityLabel(score) {
+    if (score >= 80) return 'Highly Credible';
+    if (score >= 60) return 'Moderately Credible';
+    if (score >= 40) return 'Low Credibility';
+    return 'Very Low Credibility';
 }
 
+// Display individual fact checks
 function displayFactChecks(factChecks) {
     const container = document.getElementById('fact-check-list');
     container.innerHTML = '';
     
-    if (!factChecks || factChecks.length === 0) {
-        container.innerHTML = '<p>No fact checks available.</p>';
+    if (factChecks.length === 0) {
+        container.innerHTML = '<p>No claims found to fact-check.</p>';
         return;
     }
     
@@ -348,47 +501,122 @@ function displayFactChecks(factChecks) {
         
         const verdict = check.verdict || 'unverified';
         const verdictClass = getVerdictClass(verdict);
+        const verdictIcon = getVerdictIcon(verdict);
+        const verdictLabel = formatVerdict(verdict);
         
         item.innerHTML = `
             <div class="fact-check-header">
-                <div class="fact-check-claim">${check.claim}</div>
-                <div class="fact-check-verdict ${verdictClass}">${verdict}</div>
+                <span class="fact-check-number">#${index + 1}</span>
+                <span class="fact-check-verdict ${verdictClass}">
+                    <i class="fas ${verdictIcon}"></i>
+                    ${verdictLabel}
+                </span>
+            </div>
+            <div class="fact-check-claim">
+                <strong>Claim:</strong> ${check.claim}
             </div>
             <div class="fact-check-details">
-                <p>${check.explanation || 'No explanation available'}</p>
-                <div class="fact-check-meta">
-                    <span>Confidence: ${check.confidence || 0}%</span>
-                    <span>Source: ${check.source || 'Unknown'}</span>
-                </div>
+                <p><strong>Explanation:</strong> ${check.explanation || 'No explanation available.'}</p>
+                ${check.confidence ? `<p><strong>Confidence:</strong> ${check.confidence}%</p>` : ''}
             </div>
+            ${check.source ? `
+                <div class="fact-check-source">
+                    <strong>Source:</strong> 
+                    ${check.source_url ? `<a href="${check.source_url}" target="_blank">${check.source}</a>` : check.source}
+                </div>
+            ` : ''}
         `;
         
         container.appendChild(item);
     });
 }
 
+// Get verdict class for styling
 function getVerdictClass(verdict) {
-    const verdictLower = verdict.toLowerCase();
-    if (verdictLower === 'true' || verdictLower === 'mostly_true') return 'verdict-true';
-    if (verdictLower === 'false' || verdictLower === 'mostly_false') return 'verdict-false';
-    if (verdictLower === 'mixed') return 'verdict-mixed';
-    return 'verdict-unverified';
+    const v = (verdict || 'unverified').toLowerCase().replace(' ', '_');
+    const mapping = VERDICT_MAPPINGS[v];
+    return mapping ? mapping.class : 'unverified';
 }
 
-function setupExportButtons(jobId) {
-    const exportButtons = document.querySelectorAll('.export-btn');
-    exportButtons.forEach(btn => {
-        btn.addEventListener('click', function() {
-            const format = this.dataset.format;
-            window.location.href = `/api/export/${jobId}/${format}`;
+// Get verdict icon
+function getVerdictIcon(verdict) {
+    const v = (verdict || 'unverified').toLowerCase().replace(' ', '_');
+    const mapping = VERDICT_MAPPINGS[v];
+    return mapping ? mapping.icon : 'fa-question-circle';
+}
+
+// Format verdict for display
+function formatVerdict(verdict) {
+    if (!verdict) return 'Unverified';
+    
+    const v = verdict.toLowerCase().replace(' ', '_');
+    const mapping = VERDICT_MAPPINGS[v];
+    return mapping ? mapping.label : verdict.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
+}
+
+// Export results
+async function exportResults(format) {
+    if (!currentJobId) {
+        alert('No results to export');
+        return;
+    }
+    
+    try {
+        const response = await fetch(`/api/export/${currentJobId}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ format: format })
         });
+        
+        if (response.ok) {
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `fact-check-report-${new Date().toISOString().split('T')[0]}.${format}`;
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+        } else {
+            const result = await response.json();
+            alert('Export failed: ' + (result.error || 'Unknown error'));
+        }
+    } catch (error) {
+        alert('Export error: ' + error.message);
+    }
+}
+
+// Reset for new analysis
+function resetAnalysis() {
+    currentJobId = null;
+    
+    // Clear inputs
+    document.getElementById('text-input').value = '';
+    document.getElementById('youtube-url').value = '';
+    document.getElementById('youtube-url').style.borderColor = '#e5e7eb';
+    document.getElementById('char-count').textContent = '0';
+    removeFile();
+    
+    // Reset UI
+    document.getElementById('results-section').style.display = 'none';
+    document.getElementById('input-section').style.display = 'block';
+    
+    // Reset progress
+    document.getElementById('progress-fill').style.width = '0%';
+    document.getElementById('progress-text').textContent = 'Initializing...';
+    
+    // Reset step indicators
+    const steps = ['step-1', 'step-2', 'step-3', 'step-4'];
+    steps.forEach(stepId => {
+        document.getElementById(stepId).classList.remove('active');
     });
+    
+    // Clear any intervals
+    if (pollInterval) {
+        clearInterval(pollInterval);
+        pollInterval = null;
+    }
 }
-
-function showError(message) {
-    // Simple alert for now - you can make this prettier
-    alert('Error: ' + message);
-}
-
-// Make displayResults available globally for enhanced.js
-window.displayResults = displayResults;
