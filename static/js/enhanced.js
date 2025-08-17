@@ -57,102 +57,85 @@ function generateSpeakerContextHTML(context) {
     
     // Fact-checking history
     if (context.fact_check_history) {
-        const alertClass = context.fact_check_history.toLowerCase().includes('false') ? 'alert-warning' : 'alert-info';
-        html += `<div class="alert ${alertClass}">
+        const alertClass = context.fact_check_history.toLowerCase().includes('false') ? 'warning' : 'info';
+        html += `<div class="alert alert-${alertClass}">
             <strong>📊 Fact-Check History:</strong> ${context.fact_check_history}
         </div>`;
     }
     
     // Credibility notes
     if (context.credibility_notes) {
-        let alertClass = 'alert-info';
-        if (context.credibility_notes.toLowerCase().includes('pattern') || 
-            context.credibility_notes.toLowerCase().includes('false')) {
-            alertClass = 'alert-warning';
-        } else if (context.credibility_notes.toLowerCase().includes('accurate') || 
-                   context.credibility_notes.toLowerCase().includes('factual')) {
-            alertClass = 'alert-success';
-        }
-        
-        html += `<div class="alert ${alertClass}">
-            <strong>📝 Credibility Assessment:</strong> ${context.credibility_notes}
+        const alertClass = context.credibility_notes.toLowerCase().includes('accurate') ? 'success' : 'info';
+        html += `<div class="alert alert-${alertClass}">
+            <strong>📝 Credibility Notes:</strong> ${context.credibility_notes}
         </div>`;
-    }
-    
-    // Legal issues
-    if (context.legal_issues && context.legal_issues.length > 0) {
-        html += '<div class="alert alert-warning">';
-        html += '<strong>⚡ Legal Issues:</strong>';
-        html += '<ul style="margin: 10px 0 0 20px; padding: 0;">';
-        context.legal_issues.forEach(issue => {
-            html += `<li>${issue}</li>`;
-        });
-        html += '</ul></div>';
     }
     
     html += '</div>';
-    html += '<hr>';
-    
     return html;
 }
 
-// Override the displayResults function to show ALL information including speaker context
+// Function to display demo mode notes
+function getDemoNotes() {
+    return `
+        <div class="analysis-notes">
+            <h4>⚠️ Demo Mode Active</h4>
+            <ul>
+                <li>Using simulated fact-checking for demonstration</li>
+                <li>Live API integration available with valid API keys</li>
+                <li>All verdicts and explanations are examples only</li>
+            </ul>
+        </div>
+    `;
+}
+
+// Enhanced display function with all improvements
 window.displayResults = function(results) {
-    // Hide progress, show results
-    document.getElementById('progress-section').style.display = 'none';
-    document.getElementById('results-section').style.display = 'block';
-    
-    // Update credibility meter
-    const credibilityScore = results.credibility_score || 0;
-    document.getElementById('credibility-value').textContent = Math.round(credibilityScore);
-    document.getElementById('credibility-label').textContent = results.credibility_label || 'Unknown';
-    
-    // Position meter pointer
-    const pointer = document.getElementById('credibility-pointer');
-    pointer.style.left = `${credibilityScore}%`;
-    
-    // Build comprehensive summary HTML
-    let summaryHtml = '';
-    
-    // DYNAMIC SPEAKER CONTEXT SECTION
-    if (results.speaker_context && results.speaker_context.speaker) {
-        summaryHtml += generateSpeakerContextHTML(results.speaker_context);
+    // Display speaker info if available
+    if (results.speaker) {
+        const speakerDiv = document.createElement('div');
+        speakerDiv.className = 'speaker-info';
+        speakerDiv.innerHTML = `<strong>Speaker Identified:</strong> ${results.speaker}`;
+        document.getElementById('analysis-summary').parentElement.appendChild(speakerDiv);
     }
     
-    // CONVERSATIONAL SUMMARY
-    if (results.conversational_summary) {
-        summaryHtml += `<div class="conversational-summary">
-            <h4>Summary:</h4>
-            <p>${results.conversational_summary}</p>
-        </div>`;
-    } else if (results.summary) {
-        summaryHtml += `<p>${results.summary}</p>`;
-    }
-    
-    // SPEAKERS AND TOPICS
-    if (results.speakers && results.speakers.length > 0) {
-        summaryHtml += `<div class="speaker-info"><strong>Speakers Identified:</strong> ${results.speakers.slice(0, 5).join(', ')}</div>`;
-    }
-    
+    // Display topics if available
     if (results.topics && results.topics.length > 0) {
-        summaryHtml += `<div class="topic-info"><strong>Key Topics:</strong> ${results.topics.join(', ')}</div>`;
+        const topicsDiv = document.createElement('div');
+        topicsDiv.className = 'topic-info';
+        topicsDiv.innerHTML = `<strong>Topics Discussed:</strong> ${results.topics.join(', ')}`;
+        document.getElementById('analysis-summary').parentElement.appendChild(topicsDiv);
     }
     
-    // ANALYSIS NOTES (for demo mode)
-    if (results.analysis_notes && results.analysis_notes.length > 0) {
-        summaryHtml += '<div class="analysis-notes"><h4>Important Notes:</h4><ul>';
-        results.analysis_notes.forEach(note => {
-            summaryHtml += `<li>${note}</li>`;
-        });
-        summaryHtml += '</ul></div>';
+    // Display speaker context if available
+    if (results.speaker_context) {
+        const contextHtml = generateSpeakerContextHTML(results.speaker_context);
+        const summarySection = document.getElementById('analysis-summary').parentElement;
+        summarySection.insertAdjacentHTML('afterbegin', contextHtml);
     }
     
-    document.getElementById('analysis-summary').innerHTML = summaryHtml;
+    // Add demo mode notes if in demo mode
+    if (results.mode === 'demo') {
+        const notesHtml = getDemoNotes();
+        const summarySection = document.getElementById('analysis-summary').parentElement;
+        summarySection.insertAdjacentHTML('beforeend', notesHtml);
+    }
     
-    // Update statistics
-    document.getElementById('total-claims').textContent = results.checked_claims || 0;
+    // Display conversational summary if available
+    if (results.conversational_summary) {
+        const summaryDiv = document.createElement('div');
+        summaryDiv.className = 'conversational-summary';
+        summaryDiv.innerHTML = `
+            <h4>Summary</h4>
+            <p>${results.conversational_summary}</p>
+        `;
+        document.getElementById('analysis-summary').parentElement.appendChild(summaryDiv);
+    }
     
-    // Count verdicts properly
+    // Update statistics with proper counts
+    const totalClaims = results.fact_checks ? results.fact_checks.length : 0;
+    document.getElementById('total-claims').textContent = totalClaims;
+    
     let verifiedCount = 0;
     let falseCount = 0;
     let unverifiedCount = 0;
@@ -327,18 +310,20 @@ window.toggleFactCheck = function(itemId) {
 
 // Enhanced verdict helpers
 window.getVerdictClass = function(verdict) {
-    const v = verdict.toLowerCase().replace(' ', '_');
+    const v = (verdict || 'unverified').toLowerCase().replace(' ', '_');
     const mapping = VERDICT_MAPPINGS[v];
     return mapping ? mapping.class : 'unverified';
 };
 
 window.getVerdictIcon = function(verdict) {
-    const v = verdict.toLowerCase().replace(' ', '_');
+    const v = (verdict || 'unverified').toLowerCase().replace(' ', '_');
     const mapping = VERDICT_MAPPINGS[v];
     return mapping ? mapping.icon : 'fa-question-circle';
 };
 
 window.formatVerdict = function(verdict) {
+    if (!verdict) return 'Unverified';
+    
     const v = verdict.toLowerCase().replace(' ', '_');
     const mapping = VERDICT_MAPPINGS[v];
     return mapping ? mapping.label : verdict.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
