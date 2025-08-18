@@ -335,16 +335,15 @@ function getProgressText(progress) {
 
 // Get progress step
 function getProgressStep(progress) {
-    if (progress < 20) return 1;
-    if (progress < 40) return 2;
-    if (progress < 60) return 3;
-    if (progress < 80) return 4;
-    return 5;
+    if (progress < 25) return 1;
+    if (progress < 50) return 2;
+    if (progress < 75) return 3;
+    return 4;
 }
 
 // Update progress steps
 function updateProgressSteps(activeStep) {
-    for (let i = 1; i <= 5; i++) {
+    for (let i = 1; i <= 4; i++) {
         const step = document.getElementById(`step-${i}`);
         if (step) {
             if (i <= activeStep) {
@@ -389,7 +388,7 @@ function displayResults(results) {
     const score = results.credibility_score || 0;
     const credibilityValue = document.getElementById('credibility-value');
     const credibilityLabel = document.getElementById('credibility-label');
-    const meterPointer = document.querySelector('.meter-pointer');
+    const meterPointer = document.getElementById('credibility-pointer');
     
     credibilityValue.textContent = Math.round(score);
     credibilityLabel.textContent = getCredibilityLabel(score);
@@ -502,21 +501,45 @@ function displayFactChecks(factChecks) {
     
     factChecks.forEach((check, index) => {
         const item = document.createElement('div');
-        item.className = 'fact-check-item';
-        
         const verdict = check.verdict || 'unverified';
         const verdictClass = getVerdictClass(verdict);
         
+        item.className = `fact-check-item ${verdictClass}`;
+        
         item.innerHTML = `
-            <div class="fact-check-header">
-                <div class="fact-check-claim">${check.claim}</div>
-                <div class="fact-check-verdict ${verdictClass}">${verdict}</div>
+            <div class="fact-check-header" onclick="toggleFactCheck('fact-check-details-${index}')">
+                <div class="fact-check-claim">
+                    <i class="fas fa-chevron-right toggle-icon" id="fact-check-details-${index}-icon"></i>
+                    ${check.claim}
+                </div>
+                <div class="fact-check-verdict ${verdictClass}">
+                    <i class="fas ${getVerdictIcon(verdict)}"></i>
+                    ${getVerdictLabel(verdict)}
+                </div>
             </div>
-            <div class="fact-check-details">
-                <p>${check.explanation || 'No explanation available'}</p>
-                <div class="fact-check-meta">
-                    <span>Confidence: ${check.confidence || 0}%</span>
-                    <span>Source: ${check.source || 'Unknown'}</span>
+            <div class="fact-check-details-wrapper" id="fact-check-details-${index}" style="display: none;">
+                <div class="fact-check-details">
+                    ${check.explanation ? `
+                        <div class="explanation-section">
+                            <h4>Explanation</h4>
+                            <p>${check.explanation}</p>
+                        </div>
+                    ` : ''}
+                    ${check.confidence ? `
+                        <div class="confidence-section">
+                            <h4>Confidence Level</h4>
+                            <div class="confidence-bar">
+                                <div class="confidence-fill" style="width: ${check.confidence}%"></div>
+                            </div>
+                            <span class="confidence-text">${check.confidence}% confident</span>
+                        </div>
+                    ` : ''}
+                    ${check.source ? `
+                        <div class="sources-section">
+                            <h4>Source</h4>
+                            <p>${check.source}</p>
+                        </div>
+                    ` : ''}
                 </div>
             </div>
         `;
@@ -525,13 +548,62 @@ function displayFactChecks(factChecks) {
     });
 }
 
+// Get verdict icon
+function getVerdictIcon(verdict) {
+    const verdictLower = verdict.toLowerCase();
+    if (verdictLower === 'true' || verdictLower === 'mostly_true') return 'fa-check-circle';
+    if (verdictLower === 'false' || verdictLower === 'mostly_false') return 'fa-times-circle';
+    if (verdictLower === 'mixed') return 'fa-adjust';
+    if (verdictLower === 'misleading' || verdictLower === 'deceptive') return 'fa-exclamation-triangle';
+    if (verdictLower === 'lacks_context') return 'fa-info-circle';
+    if (verdictLower === 'unsubstantiated') return 'fa-question-circle';
+    return 'fa-question-circle';
+}
+
+// Get verdict label
+function getVerdictLabel(verdict) {
+    const verdictLower = verdict.toLowerCase();
+    const labelMap = {
+        'true': 'True',
+        'mostly_true': 'Mostly True',
+        'false': 'False',
+        'mostly_false': 'Mostly False',
+        'mixed': 'Mixed',
+        'misleading': 'Deceptive',
+        'deceptive': 'Deceptive',
+        'lacks_context': 'Lacks Context',
+        'unsubstantiated': 'Unsubstantiated',
+        'unverified': 'Unverified'
+    };
+    return labelMap[verdictLower] || 'Unverified';
+}
+
+// Toggle fact check details
+function toggleFactCheck(detailsId) {
+    const details = document.getElementById(detailsId);
+    const icon = document.getElementById(`${detailsId}-icon`);
+    
+    if (details.style.display === 'none') {
+        details.style.display = 'block';
+        icon.classList.remove('fa-chevron-right');
+        icon.classList.add('fa-chevron-down');
+    } else {
+        details.style.display = 'none';
+        icon.classList.remove('fa-chevron-down');
+        icon.classList.add('fa-chevron-right');
+    }
+}
+
 // Get verdict class
 function getVerdictClass(verdict) {
     const verdictLower = verdict.toLowerCase();
-    if (verdictLower === 'true' || verdictLower === 'mostly_true') return 'verdict-true';
-    if (verdictLower === 'false' || verdictLower === 'mostly_false') return 'verdict-false';
-    if (verdictLower === 'mixed') return 'verdict-mixed';
-    return 'verdict-unverified';
+    if (verdictLower === 'true' || verdictLower === 'mostly_true') return 'true';
+    if (verdictLower === 'false' || verdictLower === 'mostly_false') return 'false';
+    if (verdictLower === 'mixed') return 'mixed';
+    if (verdictLower === 'misleading' || verdictLower === 'deceptive') return 'deceptive';
+    if (verdictLower === 'lacks_context') return 'lacks_context';
+    if (verdictLower === 'unsubstantiated') return 'unsubstantiated';
+    return 'unverified';
 }
 
 // Setup export buttons
@@ -606,3 +678,5 @@ window.displayResults = displayResults;
 window.resetAnalysis = resetAnalysis;
 window.removeFile = removeFile;
 window.toggleDropdown = toggleDropdown;
+window.exportResults = exportResults;
+window.toggleFactCheck = toggleFactCheck;
