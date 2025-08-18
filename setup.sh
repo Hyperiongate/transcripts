@@ -32,4 +32,22 @@ echo "Downloading NLTK data..."
 python -c "import nltk; nltk.download('punkt'); nltk.download('stopwords'); nltk.download('averaged_perceptron_tagger')"
 
 # Start services with Docker Compose
-echo "Starting services
+echo "Starting services with Docker Compose..."
+docker-compose up -d
+
+# Wait for services to be ready
+echo "Waiting for services to be ready..."
+sleep 10
+
+# Check if services are running
+if docker-compose ps | grep -q "Up"; then
+    echo "✓ Services are running successfully!"
+    echo ""
+    echo "Application is available at: http://localhost:5000"
+    echo ""
+    echo "To view logs: docker-compose logs -f"
+    echo "To stop services: docker-compose down"
+else
+    echo "✗ Failed to start services. Check docker-compose logs for errors."
+    exit 1
+fi
