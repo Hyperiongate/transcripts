@@ -49,7 +49,7 @@ redis_client = redis.from_url(Config.REDIS_URL)
 # Initialize services
 transcript_processor = TranscriptProcessor()
 claim_extractor = ClaimExtractor()
-fact_checker = FactChecker()
+fact_checker = FactChecker(Config)  # Pass Config to FactChecker
 
 # Enhanced speaker database with current information
 SPEAKER_DATABASE = {
@@ -172,13 +172,18 @@ def analyze():
             update_job_progress(job_id, 60, 'Fact-checking claims...')
             fact_checks = []
             
-            for i, claim in enumerate(claims):
-                progress = 60 + (30 * i / len(claims))
-                update_job_progress(job_id, progress, f'Fact-checking claim {i+1} of {len(claims)}...')
-                
-                # Enhanced fact checking with better context
-                fact_check_result = fact_checker.check_claim(claim, metadata)
-                fact_checks.append(fact_check_result)
+            # Use batch checking if available
+            if hasattr(fact_checker, 'check_claims_batch'):
+                fact_checks = fact_checker.check_claims_batch(claims, source)
+            else:
+                # Fallback to individual checking
+                for i, claim in enumerate(claims):
+                    progress = 60 + (30 * i / len(claims))
+                    update_job_progress(job_id, progress, f'Fact-checking claim {i+1} of {len(claims)}...')
+                    
+                    # Check individual claim
+                    fact_check_result = fact_checker._check_claim_comprehensive(claim)
+                    fact_checks.append(fact_check_result)
             
             # Step 5: Calculate credibility score (95%)
             update_job_progress(job_id, 95, 'Calculating credibility score...')
