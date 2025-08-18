@@ -367,7 +367,10 @@ function displayResults(data) {
     // Update credibility score
     const score = data.credibility_score || 0;
     document.getElementById('credibility-value').textContent = Math.round(score);
-    document.getElementById('credibility-label').textContent = getCredibilityLabel(score);
+    
+    // Use enhanced getCredibilityLabel if available, otherwise use local version
+    const labelFunc = window.getCredibilityLabel || getCredibilityLabel;
+    document.getElementById('credibility-label').textContent = labelFunc(score);
     
     // Update credibility meter pointer
     const pointer = document.getElementById('credibility-pointer');
@@ -375,11 +378,11 @@ function displayResults(data) {
     pointer.style.left = `calc(${position}% - 3px)`; // Center the pointer
     
     // Update summary
-    document.getElementById('analysis-summary').textContent = data.summary || 'Analysis complete.';
+    document.getElementById('analysis-summary').textContent = data.conversational_summary || data.summary || 'Analysis complete.';
     
     // Update statistics
     const stats = data.statistics || {};
-    document.getElementById('total-claims').textContent = stats.total_claims || 0;
+    document.getElementById('total-claims').textContent = data.total_claims || stats.total_claims || 0;
     document.getElementById('verified-claims').textContent = stats.verified || 0;
     document.getElementById('false-claims').textContent = stats.false || 0;
     document.getElementById('unverified-claims').textContent = stats.unverified || 0;
@@ -400,6 +403,11 @@ function getCredibilityLabel(score) {
     if (score >= 60) return 'Moderately Credible';
     if (score >= 40) return 'Low Credibility';
     return 'Very Low Credibility';
+}
+
+// Make it available globally if not already defined by enhanced.js
+if (typeof window.getCredibilityLabel === 'undefined') {
+    window.getCredibilityLabel = getCredibilityLabel;
 }
 
 // Basic fact check display (will be overridden by enhanced version)
