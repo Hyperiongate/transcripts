@@ -120,7 +120,7 @@ function removeFile() {
     document.getElementById('file-drop-zone').style.display = 'block';
 }
 
-// Start analysis - MAIN FUNCTION
+// Start analysis
 async function startAnalysis() {
     // Disable button to prevent double submission
     const analyzeButton = document.getElementById('analyze-button');
@@ -153,6 +153,7 @@ async function startAnalysis() {
                 return;
             }
             analysisData.transcript = text;
+            analysisData.source = 'Direct Input';
             
         } else if (activeTab === 'file') {
             const fileInput = document.getElementById('file-input');
@@ -287,14 +288,11 @@ function updateProgress(percent) {
 
 // Poll job status
 async function pollJobStatus() {
-    const maxAttempts = 90; // 3 minutes max (90 * 2 seconds)
+    const maxAttempts = 60; // 5 minutes max
     let attempts = 0;
     
     pollInterval = setInterval(async () => {
-        attempts++;
-        
         try {
-            console.log(`Polling attempt ${attempts}/${maxAttempts} for job ${currentJobId}`);
             const response = await fetch(`/api/status/${currentJobId}`);
             const result = await response.json();
             
@@ -306,46 +304,33 @@ async function pollJobStatus() {
                 switch (result.status) {
                     case 'processing':
                         updateProgressMessage('Processing transcript...');
-                        console.log('Status: processing, Progress:', result.progress);
                         break;
                     case 'extracting':
                         updateProgressMessage('Extracting claims...');
-                        console.log('Status: extracting, Progress:', result.progress);
                         break;
                     case 'checking':
                         updateProgressMessage('Fact-checking claims...');
-                        console.log('Status: checking, Progress:', result.progress, 'Claims:', result.total_claims);
                         break;
                     case 'analyzing':
                         updateProgressMessage('Analyzing credibility...');
-                        console.log('Status: analyzing, Progress:', result.progress);
                         break;
                     case 'completed':
                         updateProgressMessage('Analysis complete!');
-                        console.log('Status: completed');
                         clearInterval(pollInterval);
                         await loadResults();
                         break;
                     case 'failed':
                         clearInterval(pollInterval);
                         hideProgress();
-                        console.error('Analysis failed:', result.error);
                         alert('Analysis failed: ' + (result.error || 'Unknown error'));
                         break;
-                    default:
-                        console.log('Unknown status:', result.status);
                 }
             } else {
-                console.error('Failed to get status:', result);
+                attempts++;
                 if (attempts >= maxAttempts) {
                     clearInterval(pollInterval);
                     hideProgress();
-                    alert('Analysis timed out after 3 minutes. This might be due to:\n\n' +
-                          '1. API rate limits\n' +
-                          '2. Long transcript processing\n' + 
-                          '3. Server issues\n\n' +
-                          'Try a shorter transcript or check the server logs.');
-                }
+                    alert('Analysis timed out. Please try again.');
                 }
             }
         } catch (error) {
@@ -383,10 +368,7 @@ function displayResults(data) {
     // Update credibility score
     const score = data.credibility_score || 0;
     document.getElementById('credibility-value').textContent = Math.round(score);
-    
-    // Use enhanced getCredibilityLabel if available, otherwise use local version
-    const labelFunc = window.getCredibilityLabel || getCredibilityLabel;
-    document.getElementById('credibility-label').textContent = labelFunc(score);
+    document.getElementById('credibility-label').textContent = getCredibilityLabel(score);
     
     // Update credibility meter pointer
     const pointer = document.getElementById('credibility-pointer');
@@ -396,12 +378,30 @@ function displayResults(data) {
     // Update summary
     document.getElementById('analysis-summary').textContent = data.conversational_summary || data.summary || 'Analysis complete.';
     
-    // Update statistics
-    const stats = data.statistics || {};
-    document.getElementById('total-claims').textContent = data.total_claims || stats.total_claims || 0;
-    document.getElementById('verified-claims').textContent = stats.verified || 0;
-    document.getElementById('false-claims').textContent = stats.false || 0;
-    document.getElementById('unverified-claims').textContent = stats.unverified || 0;
+    // Update statistics - the backend returns these directly, not in a statistics object
+    document.getElementById('total-claims').textContent = data.total_claims || 0;
+    
+    // Calculate verified, false, and unverified from fact_checks
+    let verifiedCount = 0;
+    let falseCount = 0;
+    let unverifiedCount = 0;
+    
+    if (data.fact_checks && Array.isArray(data.fact_checks)) {
+        data.fact_checks.forEach(check => {
+            const verdict = (check.verdict || 'unverified').toLowerCase();
+            if (verdict === 'true' || verdict === 'mostly_true') {
+                verifiedCount++;
+            } else if (verdict === 'false' || verdict === 'mostly_false') {
+                falseCount++;
+            } else {
+                unverifiedCount++;
+            }
+        });
+    }
+    
+    document.getElementById('verified-claims').textContent = verifiedCount;
+    document.getElementById('false-claims').textContent = falseCount;
+    document.getElementById('unverified-claims').textContent = unverifiedCount;
     
     // Use enhanced display function if available, otherwise use basic display
     if (typeof window.displayResults === 'function' && window.displayResults !== displayResults) {
@@ -421,12 +421,7 @@ function getCredibilityLabel(score) {
     return 'Very Low Credibility';
 }
 
-// Make it available globally if not already defined by enhanced.js
-if (typeof window.getCredibilityLabel === 'undefined') {
-    window.getCredibilityLabel = getCredibilityLabel;
-}
-
-// Basic fact check display (will be overridden by enhanced version)
+// Display individual fact checks
 function displayFactChecks(factChecks) {
     const container = document.getElementById('fact-check-list');
     container.innerHTML = '';
@@ -441,14 +436,16 @@ function displayFactChecks(factChecks) {
         item.className = 'fact-check-item';
         
         const verdict = check.verdict || 'unverified';
-        const verdictClass = verdict.toLowerCase();
+        const verdictClass = getVerdictClass(verdict);
+        const verdictIcon = getVerdictIcon(verdict);
+        const verdictLabel = formatVerdict(verdict);
         
         item.innerHTML = `
             <div class="fact-check-header">
                 <span class="fact-check-number">#${index + 1}</span>
                 <span class="fact-check-verdict ${verdictClass}">
-                    <i class="fas fa-${verdictClass === 'true' ? 'check' : verdictClass === 'false' ? 'times' : 'question'}-circle"></i>
-                    ${verdict}
+                    <i class="fas ${verdictIcon}"></i>
+                    ${verdictLabel}
                 </span>
             </div>
             <div class="fact-check-claim">
@@ -468,6 +465,46 @@ function displayFactChecks(factChecks) {
         
         container.appendChild(item);
     });
+}
+
+// Get verdict class for styling
+function getVerdictClass(verdict) {
+    const v = (verdict || 'unverified').toLowerCase().replace(' ', '_');
+    // If enhanced.js is loaded, use its VERDICT_MAPPINGS
+    if (typeof VERDICT_MAPPINGS !== 'undefined') {
+        const mapping = VERDICT_MAPPINGS[v];
+        return mapping ? mapping.class : 'unverified';
+    }
+    // Otherwise use basic mapping
+    return v;
+}
+
+// Get verdict icon
+function getVerdictIcon(verdict) {
+    const v = (verdict || 'unverified').toLowerCase().replace(' ', '_');
+    // If enhanced.js is loaded, use its VERDICT_MAPPINGS
+    if (typeof VERDICT_MAPPINGS !== 'undefined') {
+        const mapping = VERDICT_MAPPINGS[v];
+        return mapping ? mapping.icon : 'fa-question-circle';
+    }
+    // Otherwise use basic icons
+    if (v === 'true' || v === 'mostly_true') return 'fa-check-circle';
+    if (v === 'false' || v === 'mostly_false') return 'fa-times-circle';
+    return 'fa-question-circle';
+}
+
+// Format verdict for display
+function formatVerdict(verdict) {
+    if (!verdict) return 'Unverified';
+    
+    const v = verdict.toLowerCase().replace(' ', '_');
+    // If enhanced.js is loaded, use its VERDICT_MAPPINGS
+    if (typeof VERDICT_MAPPINGS !== 'undefined') {
+        const mapping = VERDICT_MAPPINGS[v];
+        return mapping ? mapping.label : verdict.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
+    }
+    // Otherwise use basic formatting
+    return verdict.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
 }
 
 // Export results
