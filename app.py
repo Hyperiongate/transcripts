@@ -7,9 +7,7 @@ import uuid
 from datetime import datetime
 from flask import Flask, render_template, jsonify, request, send_file
 from flask_cors import CORS
-from pymongo import MongoClient
 from dotenv import load_dotenv
-import redis
 import json
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter, A4
@@ -37,21 +35,53 @@ CORS(app)
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Initialize MongoDB
-mongo_client = MongoClient(Config.MONGODB_URI)
-db = mongo_client[Config.MONGODB_DB_NAME]
-jobs_collection = db['jobs']
-results_collection = db['results']
+# Database initialization with fallback
+mongo_client = None
+db = None
+jobs_collection = None
+results_collection = None
+redis_client = None
 
-# Initialize Redis
-redis_client = redis.from_url(Config.REDIS_URL)
+# In-memory storage as fallback
+in_memory_jobs = {}
+in_memory_results = {}
+
+# Try to connect to MongoDB if configured
+if Config.MONGODB_URI:
+    try:
+        from pymongo import MongoClient
+        mongo_client = MongoClient(Config.MONGODB_URI, serverSelectionTimeoutMS=5000)
+        # Test connection
+        mongo_client.server_info()
+        db = mongo_client[Config.MONGODB_DB_NAME]
+        jobs_collection = db['jobs']
+        results_collection = db['results']
+        logger.info("MongoDB connected successfully")
+    except Exception as e:
+        logger.warning(f"MongoDB connection failed: {str(e)}. Using in-memory storage.")
+        mongo_client = None
+else:
+    logger.info("MongoDB URI not configured. Using in-memory storage.")
+
+# Try to connect to Redis if configured
+if Config.REDIS_URL:
+    try:
+        import redis
+        redis_client = redis.from_url(Config.REDIS_URL, socket_connect_timeout=5)
+        redis_client.ping()
+        logger.info("Redis connected successfully")
+    except Exception as e:
+        logger.warning(f"Redis connection failed: {str(e)}. Using in-memory storage.")
+        redis_client = None
+else:
+    logger.info("Redis URL not configured. Using in-memory storage.")
 
 # Initialize services
 transcript_processor = TranscriptProcessor()
 claim_extractor = ClaimExtractor(openai_api_key=Config.OPENAI_API_KEY)
-fact_checker = FactChecker(Config)  # Pass Config to FactChecker
+fact_checker = FactChecker(Config)
 
-# Enhanced speaker database with current information
+# Enhanced speaker database
 SPEAKER_DATABASE = {
     'donald trump': {
         'full_name': 'Donald J. Trump',
@@ -91,6 +121,59 @@ SPEAKER_DATABASE = {
     }
 }
 
+# Storage helper functions
+def store_job(job_id, data):
+    """Store job data in available storage"""
+    if jobs_collection is not None:
+        try:
+            jobs_collection.insert_one({**data, 'job_id': job_id})
+            return True
+        except Exception as e:
+            logger.error(f"MongoDB insert error: {str(e)}")
+    
+    # Fallback to in-memory
+    in_memory_jobs[job_id] = data
+    return True
+
+def get_job(job_id):
+    """Retrieve job data from available storage"""
+    if jobs_collection is not None:
+        try:
+            job = jobs_collection.find_one({'job_id': job_id})
+            if job:
+                job.pop('_id', None)
+                return job
+        except Exception as e:
+            logger.error(f"MongoDB query error: {str(e)}")
+    
+    # Fallback to in-memory
+    return in_memory_jobs.get(job_id)
+
+def update_job(job_id, updates):
+    """Update job data in available storage"""
+    if jobs_collection is not None:
+        try:
+            jobs_collection.update_one(
+                {'job_id': job_id},
+                {'$set': updates}
+            )
+            return True
+        except Exception as e:
+            logger.error(f"MongoDB update error: {str(e)}")
+    
+    # Fallback to in-memory
+    if job_id in in_memory_jobs:
+        in_memory_jobs[job_id].update(updates)
+    return True
+
+def update_job_progress(job_id, progress, message):
+    """Update job progress in storage"""
+    update_job(job_id, {
+        'progress': progress,
+        'message': message,
+        'updated_at': datetime.now().isoformat()
+    })
+
 # Routes
 @app.route('/')
 def index():
@@ -100,11 +183,21 @@ def index():
 @app.route('/health')
 def health():
     """Health check endpoint"""
-    return jsonify({'status': 'healthy', 'timestamp': datetime.now().isoformat()})
+    db_status = "connected" if mongo_client else "in-memory"
+    redis_status = "connected" if redis_client else "in-memory"
+    
+    return jsonify({
+        'status': 'healthy',
+        'timestamp': datetime.now().isoformat(),
+        'storage': {
+            'database': db_status,
+            'cache': redis_status
+        }
+    })
 
 @app.route('/api/analyze', methods=['POST'])
 def analyze():
-    """Enhanced analyze endpoint with all improvements"""
+    """Analyze transcript endpoint"""
     try:
         data = request.get_json()
         
@@ -124,18 +217,15 @@ def analyze():
         # Create job
         job_id = str(uuid.uuid4())
         job_data = {
-            'id': job_id,
             'status': 'processing',
             'progress': 0,
+            'message': 'Initializing...',
             'source': source,
             'created_at': datetime.now().isoformat()
         }
         
-        # Store job in MongoDB
-        jobs_collection.insert_one({
-            'job_id': job_id,
-            **job_data
-        })
+        # Store job
+        store_job(job_id, job_data)
         
         # Process transcript
         try:
@@ -148,7 +238,6 @@ def analyze():
             
             # Step 3: Extract claims (40%)
             update_job_progress(job_id, 40, 'Extracting claims...')
-            # FIXED: Using correct method name
             claims_data = claim_extractor.extract_claims(processed_transcript, max_claims=Config.MAX_CLAIMS_PER_TRANSCRIPT)
             
             # Extract just the claim text for fact checking
@@ -157,31 +246,24 @@ def analyze():
             if not claims:
                 update_job_progress(job_id, 100, 'No verifiable claims found')
                 results = {
-                    'job_id': job_id,
                     'status': 'completed',
                     'claims': [],
                     'fact_checks': [],
                     'credibility_score': 100,
                     'credibility_label': 'No Claims to Verify',
+                    'total_claims': 0,
+                    'true_claims': 0,
+                    'false_claims': 0,
+                    'unverified_claims': 0,
                     'source': source,
                     'metadata': metadata
                 }
-                jobs_collection.update_one(
-                    {'job_id': job_id},
-                    {'$set': results}
-                )
+                update_job(job_id, results)
                 return jsonify({'success': True, 'job_id': job_id})
             
             # Step 4: Fact check claims (60-90%)
             update_job_progress(job_id, 60, 'Fact-checking claims...')
-            fact_checks = []
-            
-            # Use batch checking if available
-            if hasattr(fact_checker, 'check_claims_batch'):
-                fact_checks = fact_checker.check_claims_batch(claims, source)
-            else:
-                # Fallback to individual checking
-                fact_checks = fact_checker.check_claims(claims, context=metadata)
+            fact_checks = fact_checker.check_claims(claims, context=metadata)
             
             # Step 5: Calculate credibility score (95%)
             update_job_progress(job_id, 95, 'Calculating credibility score...')
@@ -190,12 +272,11 @@ def analyze():
             # Step 6: Complete (100%)
             update_job_progress(job_id, 100, 'Analysis complete')
             
-            # Get speaker context from metadata or claims
+            # Get speaker context
             speaker = None
             if metadata.get('speakers'):
                 speaker = metadata['speakers'][0] if metadata['speakers'] else None
             
-            # Look up speaker in database
             speaker_context = {}
             if speaker:
                 speaker_lower = speaker.lower()
@@ -207,7 +288,6 @@ def analyze():
             
             # Prepare results
             results = {
-                'job_id': job_id,
                 'status': 'completed',
                 'claims': claims,
                 'fact_checks': fact_checks,
@@ -224,20 +304,14 @@ def analyze():
             }
             
             # Store results
-            jobs_collection.update_one(
-                {'job_id': job_id},
-                {'$set': results}
-            )
+            update_job(job_id, results)
             
             return jsonify({'success': True, 'job_id': job_id})
             
         except Exception as e:
             logger.error(f"Processing error: {str(e)}")
             update_job_progress(job_id, -1, f'Error: {str(e)}')
-            jobs_collection.update_one(
-                {'job_id': job_id},
-                {'$set': {'status': 'failed', 'error': str(e)}}
-            )
+            update_job(job_id, {'status': 'failed', 'error': str(e)})
             return jsonify({'success': False, 'error': str(e)}), 500
             
     except Exception as e:
@@ -248,12 +322,9 @@ def analyze():
 def get_status(job_id):
     """Get job status"""
     try:
-        job = jobs_collection.find_one({'job_id': job_id})
+        job = get_job(job_id)
         if not job:
             return jsonify({'success': False, 'error': 'Job not found'}), 404
-        
-        # Remove MongoDB _id field
-        job.pop('_id', None)
         
         return jsonify({
             'success': True,
@@ -270,18 +341,16 @@ def get_status(job_id):
 def get_results(job_id):
     """Get analysis results"""
     try:
-        results = jobs_collection.find_one({'job_id': job_id})
+        results = get_job(job_id)
         if not results:
             return jsonify({'success': False, 'error': 'Results not found'}), 404
         
         if results.get('status') != 'completed':
             return jsonify({'success': False, 'error': 'Analysis not completed'}), 400
         
-        # Remove MongoDB _id field
-        results.pop('_id', None)
-        
         # Ensure all required fields
         results['success'] = True
+        results['job_id'] = job_id
         
         return jsonify(results)
     except Exception as e:
@@ -293,7 +362,7 @@ def export_pdf(job_id):
     """Export fact-check results as PDF"""
     try:
         # Get job results
-        results = jobs_collection.find_one({'job_id': job_id})
+        results = get_job(job_id)
         if not results or results['status'] != 'completed':
             return jsonify({'success': False, 'error': 'Results not found or not ready'}), 404
         
@@ -363,85 +432,6 @@ def export_pdf(job_id):
         elements.append(stats_table)
         elements.append(Spacer(1, 0.5*inch))
         
-        # Speaker Context if available
-        speaker_context = results.get('speaker_context', {})
-        if speaker_context and speaker_context.get('speaker'):
-            elements.append(Paragraph("Speaker Information", heading_style))
-            speaker_info = f"<b>Speaker:</b> {speaker_context.get('speaker', 'Unknown')}<br/>"
-            if speaker_context.get('role'):
-                speaker_info += f"<b>Role:</b> {speaker_context.get('role')}<br/>"
-            if speaker_context.get('credibility_notes'):
-                speaker_info += f"<b>Notes:</b> {speaker_context.get('credibility_notes')}"
-            elements.append(Paragraph(speaker_info, styles['Normal']))
-            elements.append(Spacer(1, 0.3*inch))
-        
-        # Detailed Fact Checks
-        elements.append(PageBreak())
-        elements.append(Paragraph("Detailed Fact Checks", heading_style))
-        elements.append(Spacer(1, 0.2*inch))
-        
-        fact_checks = results.get('fact_checks', [])
-        for i, check in enumerate(fact_checks, 1):
-            # Claim header
-            verdict = check.get('verdict', 'unverified')
-            verdict_color = {
-                'true': '#10b981',
-                'false': '#ef4444',
-                'unverified': '#f59e0b',
-                'misleading': '#dc2626',
-                'mixed': '#8b5cf6'
-            }.get(verdict.lower(), '#6b7280')
-            
-            claim_style = ParagraphStyle(
-                'Claim',
-                parent=styles['Normal'],
-                fontSize=12,
-                textColor=colors.HexColor('#1f2937'),
-                spaceAfter=6,
-                leftIndent=0
-            )
-            
-            elements.append(Paragraph(f"<b>Claim {i}:</b> {check.get('claim', 'N/A')}", claim_style))
-            
-            # Verdict
-            verdict_text = f"<font color='{verdict_color}'><b>Verdict: {verdict.upper()}</b></font>"
-            elements.append(Paragraph(verdict_text, styles['Normal']))
-            
-            # Explanation
-            if check.get('explanation'):
-                elements.append(Paragraph(f"<b>Explanation:</b> {check.get('explanation')}", styles['Normal']))
-            
-            # Sources
-            if check.get('sources'):
-                sources_text = "<b>Sources:</b><br/>"
-                for source in check.get('sources', []):
-                    sources_text += f"• {source}<br/>"
-                elements.append(Paragraph(sources_text, styles['Normal']))
-            
-            # Confidence
-            if check.get('confidence'):
-                elements.append(Paragraph(f"<b>Confidence:</b> {check.get('confidence')}%", styles['Normal']))
-            
-            elements.append(Spacer(1, 0.3*inch))
-            
-            # Add a separator line between claims
-            if i < len(fact_checks):
-                elements.append(Paragraph("<hr/>", styles['Normal']))
-                elements.append(Spacer(1, 0.2*inch))
-        
-        # Footer
-        elements.append(PageBreak())
-        footer_style = ParagraphStyle(
-            'Footer',
-            parent=styles['Normal'],
-            fontSize=10,
-            textColor=colors.HexColor('#6b7280'),
-            alignment=TA_CENTER
-        )
-        elements.append(Spacer(1, 2*inch))
-        elements.append(Paragraph("Generated by Transcript Fact Checker", footer_style))
-        elements.append(Paragraph("Powered by Google Fact Check API and Advanced NLP", footer_style))
-        
         # Build PDF
         doc.build(elements)
         buffer.seek(0)
@@ -457,18 +447,6 @@ def export_pdf(job_id):
     except Exception as e:
         logger.error(f"PDF export error: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
-
-# Helper functions
-def update_job_progress(job_id, progress, message):
-    """Update job progress in database"""
-    jobs_collection.update_one(
-        {'job_id': job_id},
-        {'$set': {
-            'progress': progress,
-            'message': message,
-            'updated_at': datetime.now().isoformat()
-        }}
-    )
 
 def calculate_credibility_score(fact_checks):
     """Calculate overall credibility score from fact checks"""
@@ -510,4 +488,9 @@ def calculate_credibility_score(fact_checks):
     }
 
 if __name__ == '__main__':
+    # Validate configuration on startup
+    warnings = Config.validate()
+    for warning in warnings:
+        logger.warning(warning)
+    
     app.run(debug=Config.DEBUG, host='0.0.0.0', port=Config.PORT)
