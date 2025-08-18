@@ -19,9 +19,9 @@ from reportlab.lib.units import inch
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
 import io
 
-# Import services
+# Import services - FIXED: ClaimsExtractor not ClaimExtractor
 from services.transcript import TranscriptProcessor
-from services.claims import ClaimExtractor
+from services.claims import ClaimsExtractor
 from services.factcheck import FactChecker
 from config import Config
 
@@ -48,7 +48,7 @@ redis_client = redis.from_url(Config.REDIS_URL)
 
 # Initialize services
 transcript_processor = TranscriptProcessor()
-claim_extractor = ClaimExtractor()
+claim_extractor = ClaimsExtractor(openai_api_key=Config.OPENAI_API_KEY)  # FIXED: ClaimsExtractor
 fact_checker = FactChecker(Config)  # Pass Config to FactChecker
 
 # Enhanced speaker database with current information
@@ -148,7 +148,11 @@ def analyze():
             
             # Step 3: Extract claims (40%)
             update_job_progress(job_id, 40, 'Extracting claims...')
-            claims = claim_extractor.extract(processed_transcript)
+            # FIXED: Using correct method name
+            claims_data = claim_extractor.extract_claims(processed_transcript, max_claims=Config.MAX_CLAIMS_PER_TRANSCRIPT)
+            
+            # Extract just the claim text for fact checking
+            claims = claims_data if isinstance(claims_data[0], str) else [c['text'] for c in claims_data]
             
             if not claims:
                 update_job_progress(job_id, 100, 'No verifiable claims found')
@@ -177,13 +181,7 @@ def analyze():
                 fact_checks = fact_checker.check_claims_batch(claims, source)
             else:
                 # Fallback to individual checking
-                for i, claim in enumerate(claims):
-                    progress = 60 + (30 * i / len(claims))
-                    update_job_progress(job_id, progress, f'Fact-checking claim {i+1} of {len(claims)}...')
-                    
-                    # Check individual claim
-                    fact_check_result = fact_checker._check_claim_comprehensive(claim)
-                    fact_checks.append(fact_check_result)
+                fact_checks = fact_checker.check_claims(claims, context=metadata)
             
             # Step 5: Calculate credibility score (95%)
             update_job_progress(job_id, 95, 'Calculating credibility score...')
@@ -483,8 +481,8 @@ def calculate_credibility_score(fact_checks):
             'unverified_claims': 0
         }
     
-    true_count = sum(1 for fc in fact_checks if fc.get('verdict', '').lower() in ['true', 'mostly true'])
-    false_count = sum(1 for fc in fact_checks if fc.get('verdict', '').lower() in ['false', 'mostly false', 'misleading', 'deceptive'])
+    true_count = sum(1 for fc in fact_checks if fc.get('verdict', '').lower() in ['true', 'mostly true', 'mostly_true'])
+    false_count = sum(1 for fc in fact_checks if fc.get('verdict', '').lower() in ['false', 'mostly false', 'mostly_false', 'misleading', 'deceptive'])
     mixed_count = sum(1 for fc in fact_checks if fc.get('verdict', '').lower() == 'mixed')
     unverified_count = sum(1 for fc in fact_checks if fc.get('verdict', '').lower() in ['unverified', 'unsubstantiated', 'lacks_context'])
     
