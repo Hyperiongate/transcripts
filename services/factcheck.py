@@ -1,6 +1,6 @@
 """
-Enhanced Fact-Checking Module with Nuanced Interpretation
-Includes unclear, misleading verdicts and interpretive analysis
+Enhanced Fact-Checking Module with Comprehensive OpenAI Integration
+Maximizes use of OpenAI for superior fact-checking accuracy
 """
 import re
 import logging
@@ -14,20 +14,30 @@ import time
 logger = logging.getLogger(__name__)
 
 class EnhancedFactChecker:
-    """Enhanced fact checker with nuanced interpretation and AI analysis"""
+    """Enhanced fact checker with comprehensive OpenAI integration"""
     
     def __init__(self, config):
         self.google_api_key = config.GOOGLE_FACTCHECK_API_KEY
         self.openai_api_key = config.OPENAI_API_KEY
         self.fred_api_key = config.FRED_API_KEY
         
+        # Initialize OpenAI client if available
+        self.openai_client = None
+        if self.openai_api_key:
+            try:
+                from openai import OpenAI
+                self.openai_client = OpenAI(api_key=self.openai_api_key)
+                logger.info("OpenAI client initialized successfully")
+            except Exception as e:
+                logger.error(f"Failed to initialize OpenAI client: {e}")
+        
         # Enhanced verdict options
         self.verdict_options = [
             'true',
             'mostly_true',
             'mixed',
-            'unclear',  # NEW: For ambiguous claims
-            'misleading',  # NEW: For technically true but deceptive
+            'unclear',
+            'misleading',
             'lacks_context',
             'mostly_false',
             'false',
@@ -35,10 +45,11 @@ class EnhancedFactChecker:
             'opinion'
         ]
         
-        # Enhanced configuration
-        self.enable_interpretive_analysis = True
-        self.enable_context_comparison = True
-        self.enable_nuance_detection = True
+        # Configuration for enhanced AI usage
+        self.use_gpt4 = True  # Use GPT-4 for better accuracy
+        self.enable_source_analysis = True
+        self.enable_context_enhancement = True
+        self.enable_claim_relationships = True
         
         # Conversational patterns to filter
         self.conversational_patterns = [
@@ -52,41 +63,33 @@ class EnhancedFactChecker:
             r"^(um|uh|er|ah|oh|well)",
         ]
         
-        # Immigration data for comparison
-        self.immigration_data = {
-            'border_encounters_2024': 2475669,
-            'border_encounters_2023': 2475669,
-            'border_encounters_2022': 2378944,
-            'border_encounters_2021': 1734686,
-            'border_encounters_2020': 458088,
-            'ice_arrests_2024': 170590,
-            'criminal_arrests_2024': 108790,
-            'removals_2024': 271484,  # Removals and returns
-        }
-        
         # Track similar claims for consistency
         self.claim_comparison_cache = {}
-    
+        
     def check_claims_batch(self, claims: List[str], source: str = None) -> List[Dict]:
-        """Check claims with nuanced interpretation and consistency checking"""
+        """Check claims with comprehensive AI analysis"""
         if not claims:
             return []
         
-        # Step 1: Filter conversational content
-        filtered_claims = self._filter_conversational_claims(claims)
+        # Step 1: Use AI to filter and categorize claims
+        filtered_claims = self._ai_filter_claims(claims) if self.openai_client else claims
         
-        # Step 2: Group similar claims for consistency
-        claim_groups = self._group_similar_claims(filtered_claims)
+        # Step 2: Analyze claim relationships
+        if self.openai_client and self.enable_claim_relationships:
+            claim_relationships = self._analyze_claim_relationships(filtered_claims)
+        else:
+            claim_relationships = {}
         
-        # Step 3: Check claims with context awareness
+        # Step 3: Check each claim with AI-first approach
         results = []
+        context_summary = self._generate_context_summary(filtered_claims) if self.openai_client else ""
         
         for i, claim in enumerate(filtered_claims):
             logger.info(f"Checking claim {i+1}/{len(filtered_claims)}: {claim[:80]}...")
             
-            # Try comprehensive check
             try:
-                result = self._check_claim_comprehensive(claim)
+                # AI-first comprehensive check
+                result = self._check_claim_ai_first(claim, context_summary, claim_relationships)
                 results.append(result)
             except Exception as e:
                 logger.error(f"Error checking claim: {str(e)}")
@@ -98,136 +101,344 @@ class EnhancedFactChecker:
                     'sources': []
                 })
             
-            # Rate limiting
-            time.sleep(0.5)
+            # Minimal rate limiting since we have budget
+            time.sleep(0.2)
         
-        # Step 4: Ensure consistency among similar claims
-        results = self._ensure_consistency(results, claim_groups)
+        # Step 4: Generate comprehensive summary
+        if self.openai_client and results:
+            summary = self._generate_fact_check_summary(results, source)
+            # Add summary to first result for easy access
+            if results:
+                results[0]['overall_summary'] = summary
         
         return results
     
-    def _extract_temporal_context(self, claim: str) -> Dict:
-        """Extract temporal context from claim"""
-        temporal_info = {}
+    def _ai_filter_claims(self, claims: List[str]) -> List[str]:
+        """Use AI to intelligently filter claims"""
+        if not self.openai_client or not claims:
+            return claims
         
-        # Check for year references
-        year_match = re.search(r'\b(20\d{2})\b', claim)
-        if year_match:
-            year = int(year_match.group(1))
-            temporal_info['year'] = year
+        try:
+            model = "gpt-4-1106-preview" if self.use_gpt4 else "gpt-3.5-turbo"
             
-            # Check if referring to partial year
-            current_year = datetime.now().year
-            if year == current_year:
-                temporal_info['partial_year'] = True
-                temporal_info['current_date'] = datetime.now().strftime('%B %d, %Y')
+            claims_text = "\n".join([f"{i+1}. {claim}" for i, claim in enumerate(claims)])
             
-            # Check for specific time references
-            if re.search(r'(so far|thus far|to date|as of|through)', claim, re.IGNORECASE):
-                temporal_info['partial_period'] = True
-        
-        # Check for relative time references
-        if re.search(r'(last|previous|past) (year|month|week)', claim, re.IGNORECASE):
-            temporal_info['relative_time'] = True
-        
-        return temporal_info
-    
-    def _check_patterns(self, claim: str) -> Optional[Dict]:
-        """Check for known patterns of misinformation"""
-        claim_lower = claim.lower()
-        
-        # Common false patterns
-        false_patterns = [
-            ('million illegal', 'billion illegal'),  # Number inflation
-            ('crime is down 90%', 'crime decreased 90%'),  # Extreme statistics
-            ('never said', "didn't say"),  # Denial patterns - fixed quote
-        ]
-        
-        for pattern, alt in false_patterns:
-            if pattern in claim_lower:
-                return {
-                    'found': True,
-                    'claim': claim,
-                    'verdict': 'false',
-                    'confidence': 75,
-                    'explanation': f'This claim contains exaggerated or false information commonly seen in misinformation',
-                    'sources': ['Pattern Analysis'],
-                    'api_response': False
-                }
-        
-        # Vague attribution patterns
-        vague_patterns = ['some people say', 'many believe', 'everyone knows', 'they say']
-        if any(pattern in claim_lower for pattern in vague_patterns):
-            return {
-                'found': True,
-                'claim': claim,
-                'verdict': 'lacks_context',
-                'confidence': 60,
-                'explanation': 'This claim uses vague attribution without specific sources.',
-                'interpretation': 'The speaker is making a general assertion without specific evidence',
-                'source': 'Pattern Analysis',
-                'api_response': False
-            }
-        
-        # Absolute statements
-        if re.search(r'\b(never|always|all|none|every)\b', claim_lower):
-            return {
-                'found': True,
-                'claim': claim,
-                'verdict': 'lacks_context',
-                'confidence': 70,
-                'explanation': 'Absolute claims rarely account for all exceptions and edge cases.',
-                'source': 'Pattern Analysis',
-                'api_response': False
-            }
-        
-        return None
-    
-    def _filter_conversational_claims(self, claims: List[str]) -> List[str]:
-        """Filter out conversational/greeting content"""
-        filtered = []
-        
-        for claim in claims:
-            claim_lower = claim.lower().strip()
-            is_conversational = any(
-                re.match(pattern, claim_lower) 
-                for pattern in self.conversational_patterns
+            response = self.openai_client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": """You are an expert at identifying factual claims that can be verified.
+Filter out: greetings, opinions, vague statements, procedural language.
+Keep: specific facts, statistics, historical claims, policy statements, verifiable assertions."""},
+                    {"role": "user", "content": f"""Review these statements and return ONLY the numbers of verifiable factual claims.
+Format: Return a comma-separated list of numbers (e.g., "1,3,5,8")
+
+Statements:
+{claims_text}"""}
+                ],
+                temperature=0.3,
+                max_tokens=200
             )
             
-            if is_conversational:
-                logger.info(f"Filtered conversational claim: {claim[:50]}...")
-                continue
+            # Parse response
+            numbers_text = response.choices[0].message.content.strip()
+            claim_indices = [int(n.strip()) - 1 for n in numbers_text.split(',') if n.strip().isdigit()]
             
-            filtered.append(claim)
-        
-        return filtered
+            filtered = [claims[i] for i in claim_indices if 0 <= i < len(claims)]
+            logger.info(f"AI filtered {len(claims)} claims down to {len(filtered)}")
+            return filtered if filtered else claims
+            
+        except Exception as e:
+            logger.error(f"AI filtering error: {e}")
+            return claims
     
-    def _group_similar_claims(self, claims: List[str]) -> Dict[str, List[str]]:
-        """Group similar claims together"""
-        groups = {}
+    def _analyze_claim_relationships(self, claims: List[str]) -> Dict:
+        """Analyze relationships between claims"""
+        if not self.openai_client or not claims:
+            return {}
         
-        # Simple grouping by key terms
-        for claim in claims:
-            # Extract key terms (numbers, main nouns)
-            key_terms = []
-            words = claim.lower().split()
+        try:
+            model = "gpt-4-1106-preview" if self.use_gpt4 else "gpt-3.5-turbo"
             
-            for word in words:
-                # Keep numbers
-                if any(char.isdigit() for char in word):
-                    key_terms.append(word)
-                # Keep significant words
-                elif len(word) > 5 and word not in ['about', 'around', 'approximately']:
-                    key_terms.append(word)
+            claims_text = "\n".join([f"{i+1}. {claim}" for i, claim in enumerate(claims)])
             
-            # Create group key
-            group_key = ' '.join(sorted(key_terms[:3]))
+            response = self.openai_client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": "You are an expert at analyzing logical relationships between claims."},
+                    {"role": "user", "content": f"""Analyze these claims and identify:
+1. Which claims contradict each other
+2. Which claims support each other
+3. Which claims are about the same topic
+4. Key themes across all claims
+
+Claims:
+{claims_text}
+
+Format your response as JSON."""}
+                ],
+                temperature=0.3,
+                max_tokens=500
+            )
             
-            if group_key not in groups:
-                groups[group_key] = []
-            groups[group_key].append(claim)
+            # Parse response
+            try:
+                relationships = json.loads(response.choices[0].message.content)
+                return relationships
+            except:
+                return {}
+                
+        except Exception as e:
+            logger.error(f"Relationship analysis error: {e}")
+            return {}
+    
+    def _generate_context_summary(self, claims: List[str]) -> str:
+        """Generate a context summary of all claims"""
+        if not self.openai_client or not claims:
+            return ""
         
-        return groups
+        try:
+            model = "gpt-4-1106-preview" if self.use_gpt4 else "gpt-3.5-turbo"
+            
+            claims_text = "\n".join([f"- {claim}" for claim in claims[:20]])  # Limit to first 20
+            
+            response = self.openai_client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": "You are an expert at understanding context and themes."},
+                    {"role": "user", "content": f"""Analyze these claims and provide a brief context summary including:
+- Main topic/theme
+- Time period referenced
+- Key figures mentioned
+- Overall narrative
+
+Claims:
+{claims_text}
+
+Keep the summary under 150 words."""}
+                ],
+                temperature=0.3,
+                max_tokens=200
+            )
+            
+            return response.choices[0].message.content.strip()
+            
+        except Exception as e:
+            logger.error(f"Context summary error: {e}")
+            return ""
+    
+    def _check_claim_ai_first(self, claim: str, context_summary: str, relationships: Dict) -> Dict:
+        """Check claim with AI-first approach"""
+        result = {
+            'claim': claim,
+            'verdict': 'unverified',
+            'confidence': 0,
+            'explanation': '',
+            'sources': [],
+            'ai_analysis': {},
+            'credibility_factors': {}
+        }
+        
+        # Step 1: Comprehensive AI analysis
+        if self.openai_client:
+            ai_result = self._comprehensive_ai_check(claim, context_summary)
+            if ai_result:
+                result.update(ai_result)
+                
+                # If AI has high confidence, we can trust it
+                if ai_result.get('confidence', 0) >= 80:
+                    return result
+        
+        # Step 2: Cross-reference with Google Fact Check for additional validation
+        if self.google_api_key:
+            google_result = self._check_google_factcheck(claim)
+            if google_result.get('found'):
+                # Merge results intelligently
+                result = self._merge_results(result, google_result)
+        
+        # Step 3: Enhance with source credibility analysis
+        if self.openai_client and self.enable_source_analysis:
+            credibility = self._analyze_source_credibility(claim, result.get('sources', []))
+            result['credibility_factors'] = credibility
+        
+        return result
+    
+    def _comprehensive_ai_check(self, claim: str, context: str = "") -> Optional[Dict]:
+        """Comprehensive fact-checking using AI"""
+        if not self.openai_client:
+            return None
+        
+        try:
+            model = "gpt-4-1106-preview" if self.use_gpt4 else "gpt-3.5-turbo"
+            
+            # Extract temporal context
+            temporal_info = self._extract_temporal_context(claim)
+            temporal_context = f"\nTemporal context: {json.dumps(temporal_info)}" if temporal_info else ""
+            
+            response = self.openai_client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": """You are an expert fact-checker with access to knowledge up to April 2024.
+Analyze claims for factual accuracy, considering context, nuance, and potential interpretations.
+Be rigorous but fair. Consider what the speaker likely meant, not just literal words."""},
+                    {"role": "user", "content": f"""Fact-check this claim with comprehensive analysis.
+
+Context: {context}
+{temporal_context}
+
+Claim: "{claim}"
+
+Provide your analysis in JSON format with these fields:
+{{
+    "verdict": "true/mostly_true/mixed/unclear/misleading/lacks_context/mostly_false/false/unverified",
+    "confidence": 0-100,
+    "explanation": "detailed explanation",
+    "interpretation": "what the speaker appears to be claiming",
+    "key_issues": ["list of any issues"],
+    "missing_context": "any critical missing context",
+    "fact_check_notes": "additional notes for fact-checkers",
+    "sources_needed": ["suggested sources to verify"],
+    "related_facts": ["relevant related facts"]
+}}"""}
+                ],
+                temperature=0.3,
+                max_tokens=800
+            )
+            
+            # Parse response
+            try:
+                result = json.loads(response.choices[0].message.content)
+                
+                # Ensure all required fields
+                return {
+                    'verdict': result.get('verdict', 'unverified'),
+                    'confidence': result.get('confidence', 50),
+                    'explanation': result.get('explanation', ''),
+                    'ai_analysis': result,
+                    'sources': ['AI Analysis (GPT-4)' if self.use_gpt4 else 'AI Analysis (GPT-3.5)'],
+                    'interpretation': result.get('interpretation', ''),
+                    'missing_context': result.get('missing_context'),
+                    'fact_check_notes': result.get('fact_check_notes')
+                }
+            except json.JSONDecodeError:
+                # Fallback to text parsing
+                text = response.choices[0].message.content
+                return {
+                    'verdict': 'unverified',
+                    'confidence': 50,
+                    'explanation': text,
+                    'sources': ['AI Analysis'],
+                    'ai_analysis': {'raw_response': text}
+                }
+                
+        except Exception as e:
+            logger.error(f"Comprehensive AI check error: {e}")
+            return None
+    
+    def _analyze_source_credibility(self, claim: str, sources: List[str]) -> Dict:
+        """Analyze credibility of sources"""
+        if not self.openai_client:
+            return {}
+        
+        try:
+            model = "gpt-3.5-turbo"  # Use faster model for this
+            
+            response = self.openai_client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": "You are an expert at evaluating source credibility."},
+                    {"role": "user", "content": f"""Evaluate the credibility of these sources for fact-checking this claim:
+
+Claim: "{claim}"
+Sources: {', '.join(sources) if sources else 'No sources available'}
+
+Provide a brief credibility assessment including:
+- Overall credibility (High/Medium/Low)
+- Potential biases
+- Recommendations for additional sources
+
+Format as JSON."""}
+                ],
+                temperature=0.3,
+                max_tokens=300
+            )
+            
+            try:
+                return json.loads(response.choices[0].message.content)
+            except:
+                return {'assessment': response.choices[0].message.content}
+                
+        except Exception as e:
+            logger.error(f"Source credibility analysis error: {e}")
+            return {}
+    
+    def _generate_fact_check_summary(self, results: List[Dict], source: str = None) -> Dict:
+        """Generate comprehensive summary of fact-checking results"""
+        if not self.openai_client or not results:
+            return {}
+        
+        try:
+            model = "gpt-4-1106-preview" if self.use_gpt4 else "gpt-3.5-turbo"
+            
+            # Prepare results summary
+            results_text = ""
+            for i, result in enumerate(results[:30], 1):  # Limit to 30 results
+                results_text += f"\n{i}. Claim: {result['claim'][:100]}...\n"
+                results_text += f"   Verdict: {result['verdict']} (Confidence: {result.get('confidence', 0)}%)\n"
+                results_text += f"   Explanation: {result.get('explanation', 'N/A')[:200]}...\n"
+            
+            response = self.openai_client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": """You are an expert at synthesizing fact-check results into clear, actionable summaries."""},
+                    {"role": "user", "content": f"""Analyze these fact-check results and provide a comprehensive summary:
+
+Source: {source or 'Unknown'}
+Results:
+{results_text}
+
+Create a summary including:
+1. Overall credibility assessment
+2. Key patterns in false/misleading claims
+3. Main topics covered
+4. Critical findings that need attention
+5. Recommendations for readers
+
+Format as JSON with these sections."""}
+                ],
+                temperature=0.3,
+                max_tokens=800
+            )
+            
+            try:
+                return json.loads(response.choices[0].message.content)
+            except:
+                return {'summary': response.choices[0].message.content}
+                
+        except Exception as e:
+            logger.error(f"Summary generation error: {e}")
+            return {}
+    
+    def _merge_results(self, ai_result: Dict, google_result: Dict) -> Dict:
+        """Intelligently merge AI and Google results"""
+        merged = ai_result.copy()
+        
+        # If Google has a different verdict, note it
+        if google_result.get('verdict') != ai_result.get('verdict'):
+            merged['cross_reference'] = {
+                'google_verdict': google_result.get('verdict'),
+                'google_explanation': google_result.get('explanation'),
+                'google_sources': google_result.get('sources', [])
+            }
+            
+            # Add Google sources
+            merged['sources'].extend(google_result.get('sources', []))
+            
+            # If Google has higher confidence on false claims, defer to it
+            if google_result.get('verdict') in ['false', 'mostly_false'] and google_result.get('confidence', 0) > 80:
+                merged['verdict'] = google_result['verdict']
+                merged['explanation'] = f"Google Fact Check: {google_result['explanation']}\n\nAI Analysis: {merged['explanation']}"
+        
+        return merged
     
     def _check_google_factcheck(self, claim: str) -> Dict:
         """Check claim using Google Fact Check API"""
@@ -294,205 +505,31 @@ class EnhancedFactChecker:
         
         return mapping.get(verdict_lower, 'unverified')
     
-    def _check_with_ai(self, claim: str, context: Dict = None) -> Optional[Dict]:
-        """Use AI to analyze claim validity"""
-        try:
-            if not self.openai_api_key:
-                return None
-                
-            # Try new OpenAI API format first
-            try:
-                from openai import OpenAI
-                client = OpenAI(api_key=self.openai_api_key)
-                
-                # Build context prompt
-                context_info = ""
-                if context:
-                    if context.get('speaker'):
-                        context_info += f"Speaker: {context['speaker']}\n"
-                    if context.get('date'):
-                        context_info += f"Date: {context['date']}\n"
-                    if context.get('topic'):
-                        context_info += f"Topic: {context['topic']}\n"
-                
-                prompt = f"""Analyze this factual claim for accuracy. Be objective and cite-based.
-
-{context_info}
-Claim: "{claim}"
-
-Provide:
-1. Verdict: true/mostly_true/mixed/mostly_false/false/unverified
-2. Confidence: 0-100
-3. Brief explanation
-4. Key issue if any
-
-Format: VERDICT|CONFIDENCE|EXPLANATION|ISSUE"""
-                
-                response = client.chat.completions.create(
-                    model="gpt-3.5-turbo",
-                    messages=[
-                        {"role": "system", "content": "You are a fact-checker. Be accurate and objective."},
-                        {"role": "user", "content": prompt}
-                    ],
-                    temperature=0.3,
-                    max_tokens=200
-                )
-                
-                # Parse response
-                result_text = response.choices[0].message.content.strip()
-                
-            except Exception:
-                # Fallback to old API format
-                import openai
-                openai.api_key = self.openai_api_key
-                
-                # Build context prompt
-                context_info = ""
-                if context:
-                    if context.get('speaker'):
-                        context_info += f"Speaker: {context['speaker']}\n"
-                    if context.get('date'):
-                        context_info += f"Date: {context['date']}\n"
-                    if context.get('topic'):
-                        context_info += f"Topic: {context['topic']}\n"
-                
-                prompt = f"""Analyze this factual claim for accuracy. Be objective and cite-based.
-
-{context_info}
-Claim: "{claim}"
-
-Provide:
-1. Verdict: true/mostly_true/mixed/mostly_false/false/unverified
-2. Confidence: 0-100
-3. Brief explanation
-4. Key issue if any
-
-Format: VERDICT|CONFIDENCE|EXPLANATION|ISSUE"""
-                
-                response = openai.ChatCompletion.create(
-                    model="gpt-3.5-turbo",
-                    messages=[
-                        {"role": "system", "content": "You are a fact-checker. Be accurate and objective."},
-                        {"role": "user", "content": prompt}
-                    ],
-                    temperature=0.3,
-                    max_tokens=200
-                )
-                
-                # Parse response
-                result_text = response.choices[0].message.content.strip()
+    def _extract_temporal_context(self, claim: str) -> Dict:
+        """Extract temporal context from claim"""
+        temporal_info = {}
+        
+        # Check for year references
+        year_match = re.search(r'\b(20\d{2})\b', claim)
+        if year_match:
+            year = int(year_match.group(1))
+            temporal_info['year'] = year
             
-            # Parse the result regardless of which API version was used
-            parts = result_text.split('|')
+            # Check if referring to partial year
+            current_year = datetime.now().year
+            if year == current_year:
+                temporal_info['partial_year'] = True
+                temporal_info['current_date'] = datetime.now().strftime('%B %d, %Y')
             
-            if len(parts) >= 3:
-                return {
-                    'verdict': self._normalize_verdict(parts[0].strip()),
-                    'confidence': int(parts[1].strip()),
-                    'explanation': parts[2].strip(),
-                    'sources': ['AI Analysis'],
-                    'key_issue': parts[3].strip() if len(parts) > 3 else None
-                }
-                
-        except Exception as e:
-            logger.error(f"AI checking error: {str(e)}")
+            # Check for specific time references
+            if re.search(r'(so far|thus far|to date|as of|through)', claim, re.IGNORECASE):
+                temporal_info['partial_period'] = True
         
-        return None
-    
-    def _check_claim_comprehensive(self, claim: str) -> Dict:
-        """Comprehensive claim checking with multiple methods"""
-        result = {
-            'claim': claim,
-            'verdict': 'unverified',
-            'confidence': 0,
-            'explanation': '',
-            'sources': [],
-            'api_response': False
-        }
+        # Check for relative time references
+        if re.search(r'(last|previous|past) (year|month|week)', claim, re.IGNORECASE):
+            temporal_info['relative_time'] = True
         
-        # Extract temporal context
-        temporal_info = self._extract_temporal_context(claim)
-        
-        # Try Google Fact Check API first
-        if self.google_api_key:
-            google_result = self._check_google_factcheck(claim)
-            if google_result.get('found'):
-                result.update(google_result)
-                return result
-        
-        # Try pattern-based checking
-        pattern_result = self._check_patterns(claim)
-        if pattern_result:
-            result.update(pattern_result)
-            return result
-        
-        # Try AI-based checking if available
-        if self.openai_api_key:
-            ai_result = self._check_with_ai(claim, {'temporal': temporal_info})
-            if ai_result:
-                result.update(ai_result)
-                return result
-        
-        # Default response
-        result['explanation'] = 'Unable to verify this claim with available sources'
-        if temporal_info.get('partial_year'):
-            result['temporal_note'] = f"Note: {temporal_info['year']} data may be incomplete"
-        
-        return result
-    
-    def _ensure_consistency(self, results: List[Dict], claim_groups: Dict[str, List[str]]) -> List[Dict]:
-        """Ensure similar claims get consistent verdicts"""
-        # Map claims to their results
-        claim_to_result = {r['claim']: r for r in results}
-        
-        # Check each group
-        for group_key, similar_claims in claim_groups.items():
-            if len(similar_claims) <= 1:
-                continue
-            
-            # Get all results for this group
-            group_results = [claim_to_result.get(c) for c in similar_claims if c in claim_to_result]
-            
-            if len(group_results) <= 1:
-                continue
-            
-            # Check if verdicts are inconsistent
-            verdicts = [r['verdict'] for r in group_results if r]
-            if len(set(verdicts)) > 1:
-                # Inconsistent verdicts for similar claims
-                logger.warning(f"Inconsistent verdicts for similar claims: {verdicts}")
-                
-                # Reconcile verdicts
-                reconciled_verdict = self._reconcile_verdicts(group_results)
-                
-                # Update all results in group
-                for result in group_results:
-                    if result:
-                        result['verdict'] = reconciled_verdict
-                        result['consistency_note'] = "Verdict adjusted for consistency with similar claims"
-        
-        return results
-    
-    def _reconcile_verdicts(self, results: List[Dict]) -> str:
-        """Reconcile different verdicts for similar claims"""
-        verdicts = [r['verdict'] for r in results if r]
-        confidences = [r.get('confidence', 50) for r in results if r]
-        
-        # If any are unclear, all should be unclear
-        if 'unclear' in verdicts:
-            return 'unclear'
-        
-        # If mix of true/false, use mixed
-        if ('true' in verdicts or 'mostly_true' in verdicts) and \
-           ('false' in verdicts or 'mostly_false' in verdicts):
-            return 'mixed'
-        
-        # Otherwise, use highest confidence verdict
-        if confidences:
-            max_conf_idx = confidences.index(max(confidences))
-            return verdicts[max_conf_idx]
-        
-        return 'unverified'
+        return temporal_info
 
 # Main FactChecker class
 class FactChecker(EnhancedFactChecker):
