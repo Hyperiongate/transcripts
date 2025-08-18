@@ -287,11 +287,14 @@ function updateProgress(percent) {
 
 // Poll job status
 async function pollJobStatus() {
-    const maxAttempts = 60; // 5 minutes max
+    const maxAttempts = 90; // 3 minutes max (90 * 2 seconds)
     let attempts = 0;
     
     pollInterval = setInterval(async () => {
+        attempts++;
+        
         try {
+            console.log(`Polling attempt ${attempts}/${maxAttempts} for job ${currentJobId}`);
             const response = await fetch(`/api/status/${currentJobId}`);
             const result = await response.json();
             
@@ -303,33 +306,46 @@ async function pollJobStatus() {
                 switch (result.status) {
                     case 'processing':
                         updateProgressMessage('Processing transcript...');
+                        console.log('Status: processing, Progress:', result.progress);
                         break;
                     case 'extracting':
                         updateProgressMessage('Extracting claims...');
+                        console.log('Status: extracting, Progress:', result.progress);
                         break;
                     case 'checking':
                         updateProgressMessage('Fact-checking claims...');
+                        console.log('Status: checking, Progress:', result.progress, 'Claims:', result.total_claims);
                         break;
                     case 'analyzing':
                         updateProgressMessage('Analyzing credibility...');
+                        console.log('Status: analyzing, Progress:', result.progress);
                         break;
                     case 'completed':
                         updateProgressMessage('Analysis complete!');
+                        console.log('Status: completed');
                         clearInterval(pollInterval);
                         await loadResults();
                         break;
                     case 'failed':
                         clearInterval(pollInterval);
                         hideProgress();
+                        console.error('Analysis failed:', result.error);
                         alert('Analysis failed: ' + (result.error || 'Unknown error'));
                         break;
+                    default:
+                        console.log('Unknown status:', result.status);
                 }
             } else {
-                attempts++;
+                console.error('Failed to get status:', result);
                 if (attempts >= maxAttempts) {
                     clearInterval(pollInterval);
                     hideProgress();
-                    alert('Analysis timed out. Please try again.');
+                    alert('Analysis timed out after 3 minutes. This might be due to:\n\n' +
+                          '1. API rate limits\n' +
+                          '2. Long transcript processing\n' + 
+                          '3. Server issues\n\n' +
+                          'Try a shorter transcript or check the server logs.');
+                }
                 }
             }
         } catch (error) {
