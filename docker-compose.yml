@@ -1,0 +1,45 @@
+version: '3.8'
+
+services:
+  # Main application
+  app:
+    build: .
+    ports:
+      - "5000:5000"
+    environment:
+      - MONGODB_URI=mongodb://mongo:27017/
+      - MONGODB_DB_NAME=factchecker
+      - REDIS_URL=redis://redis:6379/0
+      - PORT=5000
+    env_file:
+      - .env
+    depends_on:
+      - mongo
+      - redis
+    volumes:
+      - ./services:/app/services
+      - ./static:/app/static
+      - ./templates:/app/templates
+    command: gunicorn --bind 0.0.0.0:5000 --workers 1 --timeout 120 --reload app:app
+
+  # MongoDB
+  mongo:
+    image: mongo:7.0
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    environment:
+      - MONGO_INITDB_DATABASE=factchecker
+
+  # Redis
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+
+volumes:
+  mongo_data:
+  redis_data:
