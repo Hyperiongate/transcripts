@@ -152,7 +152,7 @@ async function startAnalysis() {
                 analyzeButton.disabled = false;
                 return;
             }
-            analysisData.content = text;
+            analysisData.transcript = text;
             
         } else if (activeTab === 'file') {
             const fileInput = document.getElementById('file-input');
@@ -162,36 +162,53 @@ async function startAnalysis() {
                 return;
             }
             
-            // For file upload, we need to use FormData
-            const formData = new FormData();
-            formData.append('file', fileInput.files[0]);
-            formData.append('type', 'file');
+            // For file upload, we need to read the file content first
+            const file = fileInput.files[0];
+            const reader = new FileReader();
             
-            try {
-                showProgress();
-                updateProgressMessage('Uploading file...');
+            reader.onload = async function(e) {
+                const fileContent = e.target.result;
                 
-                const response = await fetch('/api/analyze', {
-                    method: 'POST',
-                    body: formData
-                });
-                
-                const result = await response.json();
-                
-                if (result.success) {
-                    currentJobId = result.job_id;
-                    console.log('Analysis started with job ID:', currentJobId);
-                    pollJobStatus();
-                } else {
+                try {
+                    showProgress();
+                    updateProgressMessage('Processing file...');
+                    
+                    const response = await fetch('/api/analyze', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json'
+                        },
+                        body: JSON.stringify({
+                            transcript: fileContent,
+                            source: `File: ${file.name}`,
+                            type: 'file'
+                        })
+                    });
+                    
+                    const result = await response.json();
+                    
+                    if (result.success) {
+                        currentJobId = result.job_id;
+                        console.log('Analysis started with job ID:', currentJobId);
+                        pollJobStatus();
+                    } else {
+                        hideProgress();
+                        alert(result.error || 'Analysis failed.');
+                    }
+                } catch (error) {
                     hideProgress();
-                    alert(result.error || 'Analysis failed.');
+                    alert('Error: ' + error.message);
+                } finally {
+                    analyzeButton.disabled = false;
                 }
-            } catch (error) {
-                hideProgress();
-                alert('Error: ' + error.message);
-            } finally {
+            };
+            
+            reader.onerror = function() {
+                alert('Error reading file');
                 analyzeButton.disabled = false;
-            }
+            };
+            
+            reader.readAsText(file);
             return;
         }
         
@@ -437,12 +454,8 @@ async function exportResults(format) {
     }
     
     try {
-        const response = await fetch(`/api/export/${currentJobId}`, {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ format: format })
+        const response = await fetch(`/api/export/${currentJobId}/${format}`, {
+            method: 'GET'
         });
         
         if (response.ok) {
