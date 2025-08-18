@@ -11,11 +11,21 @@ from collections import defaultdict
 
 logger = logging.getLogger(__name__)
 
-class ClaimExtractor:  # CHANGED FROM ClaimsExtractor TO ClaimExtractor
+class ClaimExtractor:
     """Advanced claims extraction with AI-powered filtering"""
     
     def __init__(self, openai_api_key: str = None):
         self.openai_api_key = openai_api_key
+        
+        # Initialize OpenAI client if available
+        self.openai_client = None
+        if self.openai_api_key:
+            try:
+                from openai import OpenAI
+                self.openai_client = OpenAI(api_key=self.openai_api_key)
+                logger.info("OpenAI client initialized for claims extraction")
+            except Exception as e:
+                logger.error(f"Failed to initialize OpenAI client: {e}")
         
         # Load spaCy model
         try:
@@ -23,6 +33,10 @@ class ClaimExtractor:  # CHANGED FROM ClaimsExtractor TO ClaimExtractor
         except:
             logger.warning("spaCy model not loaded. Some features may be limited.")
             self.nlp = None
+        
+        # Configuration
+        self.use_gpt4 = True  # Use GPT-4 for better extraction
+        self.use_ai_extraction = True  # Use AI as primary extraction method
         
         # Enhanced conversational patterns
         self.conversational_patterns = [
@@ -51,7 +65,7 @@ class ClaimExtractor:  # CHANGED FROM ClaimsExtractor TO ClaimExtractor
             r"^(i\s+see|i\s+understand|got\s+it|makes\s+sense)",
         ]
         
-        # Factual indicators (enhanced)
+        # Factual indicators
         self.factual_indicators = {
             'statistical': [
                 r'\b\d+(?:,\d+)*(?:\.\d+)?\s*(?:percent|%)',
@@ -103,6 +117,111 @@ class ClaimExtractor:  # CHANGED FROM ClaimsExtractor TO ClaimExtractor
         if not transcript:
             return []
         
+        # Use AI extraction if available and enabled
+        if self.openai_client and self.use_ai_extraction:
+            return self._extract_claims_with_ai(transcript, max_claims)
+        else:
+            # Fallback to pattern-based extraction
+            return self._extract_claims_pattern_based(transcript, max_claims)
+    
+    def _extract_claims_with_ai(self, transcript: str, max_claims: int) -> List[Dict]:
+        """Extract claims using GPT-4"""
+        try:
+            model = "gpt-4-1106-preview" if self.use_gpt4 else "gpt-3.5-turbo"
+            
+            # Split transcript into chunks if too long
+            max_chars = 8000  # Leave room for prompt
+            chunks = []
+            if len(transcript) > max_chars:
+                words = transcript.split()
+                current_chunk = []
+                current_length = 0
+                
+                for word in words:
+                    current_length += len(word) + 1
+                    if current_length > max_chars:
+                        chunks.append(' '.join(current_chunk))
+                        current_chunk = [word]
+                        current_length = len(word)
+                    else:
+                        current_chunk.append(word)
+                
+                if current_chunk:
+                    chunks.append(' '.join(current_chunk))
+            else:
+                chunks = [transcript]
+            
+            all_claims = []
+            
+            for i, chunk in enumerate(chunks):
+                logger.info(f"Processing chunk {i+1}/{len(chunks)} with AI")
+                
+                response = self.openai_client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": """You are an expert at extracting verifiable factual claims from transcripts.
+                        
+Extract ONLY statements that:
+- Make specific factual assertions that can be verified
+- Include statistics, numbers, or measurable claims
+- Reference historical events or specific incidents
+- Make claims about policies, laws, or regulations
+- Assert cause-and-effect relationships
+- Compare or rank things
+
+DO NOT extract:
+- Opinions or beliefs
+- Vague generalizations
+- Greetings or pleasantries
+- Questions
+- Future predictions or promises
+- Personal anecdotes without factual claims"""},
+                        {"role": "user", "content": f"""Extract all verifiable factual claims from this transcript.
+
+Return a JSON array where each item has:
+{{
+    "claim": "the exact claim text",
+    "context": "brief context if needed",
+    "confidence": 0-100 (how likely this is a verifiable claim),
+    "category": "statistics/historical/policy/comparison/other"
+}}
+
+Transcript:
+{chunk}
+
+Extract up to {max_claims // len(chunks)} claims from this section."""}
+                    ],
+                    temperature=0.3,
+                    max_tokens=4000
+                )
+                
+                # Parse response
+                try:
+                    claims_data = json.loads(response.choices[0].message.content)
+                    if isinstance(claims_data, list):
+                        for claim_info in claims_data:
+                            if isinstance(claim_info, dict) and 'claim' in claim_info:
+                                all_claims.append({
+                                    'text': claim_info['claim'],
+                                    'context': claim_info.get('context', ''),
+                                    'confidence': claim_info.get('confidence', 80),
+                                    'category': claim_info.get('category', 'other'),
+                                    'ai_extracted': True
+                                })
+                except:
+                    logger.error("Failed to parse AI response for claims")
+            
+            # Sort by confidence and limit
+            all_claims.sort(key=lambda x: x.get('confidence', 0), reverse=True)
+            return all_claims[:max_claims]
+            
+        except Exception as e:
+            logger.error(f"AI claims extraction error: {e}")
+            # Fallback to pattern-based
+            return self._extract_claims_pattern_based(transcript, max_claims)
+    
+    def _extract_claims_pattern_based(self, transcript: str, max_claims: int) -> List[Dict]:
+        """Original pattern-based extraction as fallback"""
         # Step 1: Split into sentences
         sentences = self._split_into_sentences(transcript)
         
@@ -121,18 +240,15 @@ class ClaimExtractor:  # CHANGED FROM ClaimsExtractor TO ClaimExtractor
                     'text': claim,
                     'score': score,
                     'indicators': self._get_claim_indicators(claim),
-                    'word_count': len(claim.split())
+                    'word_count': len(claim.split()),
+                    'ai_extracted': False
                 })
         
-        # Step 4: AI filtering for ambiguous cases (if available)
-        if self.openai_api_key and len(scored_claims) > 10:
-            scored_claims = self._ai_filter_claims(scored_claims)
-        
-        # Step 5: Sort by score and take top claims
+        # Step 4: Sort by score and take top claims
         scored_claims.sort(key=lambda x: x['score'], reverse=True)
         top_claims = scored_claims[:max_claims]
         
-        # Step 6: Final cleanup
+        # Step 5: Final cleanup
         final_claims = []
         for claim_data in top_claims:
             cleaned = self._clean_claim(claim_data['text'])
@@ -144,14 +260,40 @@ class ClaimExtractor:  # CHANGED FROM ClaimsExtractor TO ClaimExtractor
         return final_claims
     
     def extract_context(self, transcript: str) -> Tuple[List[str], List[str]]:
-        """Extract speakers and topics from transcript"""
+        """Extract speakers and topics from transcript using AI if available"""
+        if self.openai_client:
+            try:
+                response = self.openai_client.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {"role": "system", "content": "Extract speakers and main topics from transcripts."},
+                        {"role": "user", "content": f"""From this transcript, extract:
+1. All speaker names mentioned
+2. Main topics discussed
+
+Transcript excerpt:
+{transcript[:2000]}
+
+Return as JSON: {{"speakers": [...], "topics": [...]}}"""}
+                    ],
+                    temperature=0.3,
+                    max_tokens=200
+                )
+                
+                try:
+                    data = json.loads(response.choices[0].message.content)
+                    return data.get('speakers', []), data.get('topics', [])
+                except:
+                    pass
+            except:
+                pass
+        
+        # Fallback to pattern-based extraction
         speakers = []
         topics = []
         
-        # Clean transcript
-        lines = transcript.split('\n')
-        
         # Look for speaker patterns
+        lines = transcript.split('\n')
         speaker_patterns = [
             r'^([A-Z][A-Z\s\.]+):',  # ALL CAPS:
             r'^\[([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\]',  # [Speaker Name]
@@ -299,43 +441,3 @@ class ClaimExtractor:  # CHANGED FROM ClaimsExtractor TO ClaimExtractor
             claim = claim[0].upper() + claim[1:]
         
         return claim
-    
-    def _ai_filter_claims(self, claims: List[Dict]) -> List[Dict]:
-        """Use AI to filter ambiguous claims - placeholder for now"""
-        # This would use OpenAI API to further filter claims
-        # For now, just return as-is
-        return claims
-    
-    def prioritize_claims(self, claims: List[Dict]) -> List[str]:
-        """Prioritize claims for fact-checking based on importance"""
-        # Add priority scoring
-        for claim in claims:
-            priority = claim['score']
-            
-            # Boost priority for statistical claims
-            if 'statistical' in claim['indicators']:
-                priority += 2
-            
-            # Boost priority for cited sources
-            if 'attribution' in claim['indicators']:
-                priority += 1
-            
-            # Boost priority for comparisons and superlatives
-            if 'comparative' in claim['indicators']:
-                priority += 1
-            
-            # Boost priority for temporal claims (2025, etc)
-            if 'temporal' in claim['indicators']:
-                priority += 1
-            
-            # Reduce priority for very long claims
-            if claim['word_count'] > 50:
-                priority -= 1
-            
-            claim['priority'] = priority
-        
-        # Sort by priority
-        sorted_claims = sorted(claims, key=lambda x: x['priority'], reverse=True)
-        
-        # Return just the claim text strings for fact checking
-        return [claim['text'] for claim in sorted_claims]
