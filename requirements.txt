@@ -8,14 +8,15 @@ pymongo==4.5.0
 redis==5.0.0
 
 # NLP and Text Processing
-spacy==3.6.1
+spacy==3.7.2
 nltk==3.8.1
 textstat==0.7.3
 
 # API integrations
 google-api-python-client==2.97.0
-openai==0.28.0
+openai==1.3.0
 requests==2.31.0
+youtube-transcript-api==0.6.1
 
 # PDF Generation
 reportlab==4.0.4
