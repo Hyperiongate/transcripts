@@ -91,18 +91,28 @@ function getDemoNotes() {
 
 // Enhanced display function with all improvements
 window.displayResults = function(results) {
+    // Check if basic display elements exist
+    const credibilityValue = document.getElementById('credibility-value');
+    const credibilityLabel = document.getElementById('credibility-label');
+    const credibilityPointer = document.getElementById('credibility-pointer');
+    const analysisSummary = document.getElementById('analysis-summary');
+    
+    if (!credibilityValue || !credibilityLabel || !credibilityPointer || !analysisSummary) {
+        console.error('Required display elements not found');
+        return;
+    }
+    
     // First call the basic display to set up core elements
     const score = results.credibility_score || 0;
-    document.getElementById('credibility-value').textContent = Math.round(score);
-    document.getElementById('credibility-label').textContent = getCredibilityLabel(score);
+    credibilityValue.textContent = Math.round(score);
+    credibilityLabel.textContent = getCredibilityLabel(score);
     
     // Update credibility meter pointer
-    const pointer = document.getElementById('credibility-pointer');
     const position = (score / 100) * 100;
-    pointer.style.left = `calc(${position}% - 3px)`;
+    credibilityPointer.style.left = `calc(${position}% - 3px)`;
     
     // Update summary
-    document.getElementById('analysis-summary').textContent = results.summary || 'Analysis complete.';
+    analysisSummary.textContent = results.conversational_summary || results.summary || 'Analysis complete.';
     
     // Display speaker info if available
     if (results.speaker) {
