@@ -1,44 +1,55 @@
-// Transcript Fact Checker - Main JavaScript
-
 // Global variables
+let currentMethod = 'text';
 let currentJobId = null;
-let pollInterval = null;
+let pollingInterval = null;
 
-// Initialize on page load
+// Initialize when DOM is ready
 document.addEventListener('DOMContentLoaded', function() {
-    initializeTabs();
-    initializeFileUpload();
-    initializeTextInput();
+    // Initialize tab switching
+    initTabs();
+    
+    // Initialize file upload
+    initFileUpload();
+    
+    // Initialize character counter
+    initCharacterCounter();
+    
+    // Initialize dropdowns
+    initDropdowns();
 });
 
-// Tab functionality
-function initializeTabs() {
-    const tabs = document.querySelectorAll('.tab-button');
-    const panels = document.querySelectorAll('.input-panel');
-    
-    tabs.forEach(tab => {
-        tab.addEventListener('click', () => {
-            // Remove active class from all
-            tabs.forEach(t => t.classList.remove('active'));
-            panels.forEach(p => p.classList.remove('active'));
-            
-            // Add active class to clicked tab and corresponding panel
-            tab.classList.add('active');
-            const tabName = tab.getAttribute('data-tab');
-            document.getElementById(`${tabName}-panel`).classList.add('active');
+// Initialize tabs
+function initTabs() {
+    const tabButtons = document.querySelectorAll('.tab-button');
+    tabButtons.forEach(button => {
+        button.addEventListener('click', function() {
+            const tab = this.dataset.tab;
+            switchTab(tab);
         });
     });
 }
 
-// File upload functionality
-function initializeFileUpload() {
+// Switch between input tabs
+function switchTab(tab) {
+    currentMethod = tab;
+    
+    // Update tab buttons
+    document.querySelectorAll('.tab-button').forEach(btn => {
+        btn.classList.remove('active');
+    });
+    document.querySelector(`[data-tab="${tab}"]`).classList.add('active');
+    
+    // Update panels
+    document.querySelectorAll('.input-panel').forEach(panel => {
+        panel.classList.remove('active');
+    });
+    document.getElementById(`${tab}-panel`).classList.add('active');
+}
+
+// Initialize file upload
+function initFileUpload() {
     const dropZone = document.getElementById('file-drop-zone');
     const fileInput = document.getElementById('file-input');
-    
-    if (!dropZone || !fileInput) {
-        console.warn('File upload elements not found');
-        return;
-    }
     
     // Click to upload
     dropZone.addEventListener('click', () => fileInput.click());
@@ -59,341 +70,407 @@ function initializeFileUpload() {
         
         const files = e.dataTransfer.files;
         if (files.length > 0) {
-            handleFileSelect(files[0]);
+            handleFile(files[0]);
         }
     });
     
     // File input change
     fileInput.addEventListener('change', (e) => {
         if (e.target.files.length > 0) {
-            handleFileSelect(e.target.files[0]);
+            handleFile(e.target.files[0]);
         }
-    });
-}
-
-// Text input character counter
-function initializeTextInput() {
-    const textInput = document.getElementById('text-input');
-    const charCount = document.getElementById('char-count');
-    
-    if (!textInput || !charCount) {
-        console.warn('Text input elements not found');
-        return;
-    }
-    
-    textInput.addEventListener('input', () => {
-        charCount.textContent = textInput.value.length;
     });
 }
 
 // Handle file selection
-function handleFileSelect(file) {
-    const allowedTypes = ['.txt', '.srt', '.vtt'];
-    const fileExt = '.' + file.name.split('.').pop().toLowerCase();
+function handleFile(file) {
+    // Validate file
+    const validTypes = ['.txt', '.srt', '.vtt'];
+    const fileExtension = '.' + file.name.split('.').pop().toLowerCase();
     
-    if (!allowedTypes.includes(fileExt)) {
-        alert('Please upload a TXT, SRT, or VTT file.');
+    if (!validTypes.includes(fileExtension)) {
+        showError('Please upload a valid file type (TXT, SRT, or VTT)');
         return;
     }
     
-    if (file.size > 10 * 1024 * 1024) {
-        alert('File size must be less than 10MB.');
+    if (file.size > 10 * 1024 * 1024) { // 10MB
+        showError('File size must be less than 10MB');
         return;
     }
     
-    // Show file info
+    // Update UI
+    document.getElementById('file-drop-zone').style.display = 'none';
     document.getElementById('file-info').style.display = 'flex';
     document.getElementById('file-name').textContent = file.name;
-    document.getElementById('file-drop-zone').style.display = 'none';
     
     // Store file reference
-    const fileInput = document.getElementById('file-input');
-    const dataTransfer = new DataTransfer();
-    dataTransfer.items.add(file);
-    fileInput.files = dataTransfer.files;
+    document.getElementById('file-input').files = [file];
 }
 
-// Remove selected file
+// Remove file
 function removeFile() {
     document.getElementById('file-input').value = '';
+    document.getElementById('file-drop-zone').style.display = 'flex';
     document.getElementById('file-info').style.display = 'none';
-    document.getElementById('file-drop-zone').style.display = 'block';
+}
+
+// Initialize character counter
+function initCharacterCounter() {
+    const textInput = document.getElementById('text-input');
+    const charCount = document.getElementById('char-count');
+    
+    textInput.addEventListener('input', () => {
+        charCount.textContent = textInput.value.length.toLocaleString();
+    });
+}
+
+// Initialize dropdowns
+function initDropdowns() {
+    // Dropdown functionality is handled by toggleDropdown function
+}
+
+// Toggle dropdown
+function toggleDropdown(dropdownId) {
+    const dropdown = document.getElementById(dropdownId);
+    const arrow = document.getElementById(dropdownId.replace('-dropdown', '-arrow'));
+    
+    if (dropdown.style.display === 'block') {
+        dropdown.style.display = 'none';
+        arrow.classList.remove('rotate');
+    } else {
+        // Close other dropdowns
+        document.querySelectorAll('.dropdown-content').forEach(d => {
+            d.style.display = 'none';
+        });
+        document.querySelectorAll('.dropdown-arrow').forEach(a => {
+            a.classList.remove('rotate');
+        });
+        
+        // Open this dropdown
+        dropdown.style.display = 'block';
+        arrow.classList.add('rotate');
+    }
 }
 
 // Start analysis
 async function startAnalysis() {
-    console.log('startAnalysis function called');
-    
-    // Disable button to prevent double submission
-    const analyzeButton = document.getElementById('analyze-button');
-    if (!analyzeButton) {
-        console.error('Analyze button not found');
-        return;
+    // Clear any existing polling
+    if (pollingInterval) {
+        clearInterval(pollingInterval);
+        pollingInterval = null;
     }
-    analyzeButton.disabled = true;
+    
+    let transcript = '';
+    let source = '';
     
     try {
-        // Get active tab
-        const activeTab = document.querySelector('.tab-button.active').getAttribute('data-tab');
-        
-        let analysisData = {
-            type: activeTab
-        };
-        
-        // Validate and prepare data based on input type
-        if (activeTab === 'text') {
-            const text = document.getElementById('text-input').value.trim();
-            if (!text) {
-                alert('Please enter some text to analyze.');
-                analyzeButton.disabled = false;
-                return;
-            }
-            if (text.length < 50) {
-                alert('Please enter at least 50 characters of text.');
-                analyzeButton.disabled = false;
-                return;
-            }
-            if (text.length > 50000) {
-                alert('Text is too long. Maximum 50,000 characters allowed.');
-                analyzeButton.disabled = false;
-                return;
-            }
-            analysisData.transcript = text;
-            analysisData.source = 'Direct Input';
+        // Get transcript based on method
+        if (currentMethod === 'text') {
+            transcript = document.getElementById('text-input').value.trim();
+            source = 'Direct Input';
             
-        } else if (activeTab === 'file') {
+            if (!transcript) {
+                showError('Please enter a transcript to analyze');
+                return;
+            }
+        } else if (currentMethod === 'file') {
             const fileInput = document.getElementById('file-input');
-            if (!fileInput.files.length) {
-                alert('Please select a file to analyze.');
-                analyzeButton.disabled = false;
+            if (!fileInput.files || fileInput.files.length === 0) {
+                showError('Please select a file to analyze');
                 return;
             }
             
-            // For file upload, we need to read the file content first
             const file = fileInput.files[0];
-            const reader = new FileReader();
-            
-            reader.onload = async function(e) {
-                const fileContent = e.target.result;
-                
-                try {
-                    showProgress();
-                    updateProgressMessage('Processing file...');
-                    
-                    const response = await fetch('/api/analyze', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json'
-                        },
-                        body: JSON.stringify({
-                            transcript: fileContent,
-                            source: `File: ${file.name}`,
-                            type: 'file'
-                        })
-                    });
-                    
-                    const result = await response.json();
-                    
-                    if (result.success) {
-                        currentJobId = result.job_id;
-                        console.log('Analysis started with job ID:', currentJobId);
-                        pollJobStatus();
-                    } else {
-                        hideProgress();
-                        alert(result.error || 'Analysis failed.');
-                    }
-                } catch (error) {
-                    hideProgress();
-                    alert('Error: ' + error.message);
-                } finally {
-                    analyzeButton.disabled = false;
-                }
-            };
-            
-            reader.onerror = function() {
-                alert('Error reading file');
-                analyzeButton.disabled = false;
-            };
-            
-            reader.readAsText(file);
+            transcript = await readFile(file);
+            source = `File: ${file.name}`;
+        }
+        
+        // Validate transcript
+        if (!transcript || transcript.length < 50) {
+            showError('Transcript is too short. Please provide more content to analyze.');
             return;
         }
         
-        // For text input
-        try {
-            showProgress();
-            updateProgressMessage('Processing text...');
-            
-            const response = await fetch('/api/analyze', {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(analysisData)
-            });
-            
-            const result = await response.json();
-            
-            if (result.success) {
-                currentJobId = result.job_id;
-                console.log('Analysis started with job ID:', currentJobId);
-                console.log('Source:', result.source);
-                pollJobStatus();
-            } else {
-                hideProgress();
-                alert(result.error || 'Analysis failed.');
-            }
-        } catch (error) {
-            hideProgress();
-            alert('Error: ' + error.message);
+        if (transcript.length > 50000) {
+            showError('Transcript is too long. Maximum 50,000 characters allowed.');
+            return;
         }
         
+        // Disable analyze button
+        const analyzeButton = document.getElementById('analyze-button');
+        analyzeButton.disabled = true;
+        
+        // Send to API
+        await analyzeTranscript(transcript, source);
+        
     } catch (error) {
-        console.error('Analysis error:', error);
-        alert('An error occurred. Please try again.');
-    } finally {
-        analyzeButton.disabled = false;
+        console.error('Error:', error);
+        showError('An error occurred while processing your request');
+        // Re-enable analyze button
+        document.getElementById('analyze-button').disabled = false;
     }
 }
 
-// Show progress section
-function showProgress() {
-    document.getElementById('input-section').style.display = 'none';
-    document.getElementById('progress-section').style.display = 'block';
-    document.getElementById('results-section').style.display = 'none';
-}
-
-// Hide progress section
-function hideProgress() {
-    document.getElementById('progress-section').style.display = 'none';
-    document.getElementById('input-section').style.display = 'block';
-}
-
-// Update progress message
-function updateProgressMessage(message) {
-    document.getElementById('progress-text').textContent = message;
-}
-
-// Update progress bar
-function updateProgress(percent) {
-    document.getElementById('progress-fill').style.width = percent + '%';
-    
-    // Update step indicators
-    const steps = ['step-1', 'step-2', 'step-3', 'step-4'];
-    const stepPercent = 100 / steps.length;
-    
-    steps.forEach((stepId, index) => {
-        const step = document.getElementById(stepId);
-        if (percent >= (index + 1) * stepPercent) {
-            step.classList.add('active');
-        } else {
-            step.classList.remove('active');
-        }
+// Read file
+async function readFile(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = e => resolve(e.target.result);
+        reader.onerror = reject;
+        reader.readAsText(file);
     });
 }
 
+// Analyze transcript
+async function analyzeTranscript(transcript, source) {
+    // Show progress section, hide others
+    document.getElementById('input-section').style.display = 'none';
+    document.getElementById('progress-section').style.display = 'block';
+    document.getElementById('results-section').style.display = 'none';
+    
+    // Reset progress
+    updateProgress(0, 'Initializing analysis...');
+    updateProgressSteps(1);
+    
+    try {
+        // Send analysis request
+        const response = await fetch('/api/analyze', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                transcript: transcript,
+                source: source
+            })
+        });
+        
+        const data = await response.json();
+        
+        if (!response.ok) {
+            throw new Error(data.error || 'Analysis failed');
+        }
+        
+        if (!data.success) {
+            throw new Error(data.error || 'Analysis failed');
+        }
+        
+        // Store current job ID
+        currentJobId = data.job_id;
+        
+        // Start polling for results
+        pollJobStatus(data.job_id);
+        
+    } catch (error) {
+        console.error('Analysis error:', error);
+        showError(error.message || 'Failed to analyze transcript');
+        resetAnalysis();
+    }
+}
+
 // Poll job status
-async function pollJobStatus() {
+async function pollJobStatus(jobId) {
     const maxAttempts = 60; // 5 minutes max
     let attempts = 0;
     
-    pollInterval = setInterval(async () => {
+    pollingInterval = setInterval(async () => {
         try {
-            const response = await fetch(`/api/status/${currentJobId}`);
-            const result = await response.json();
+            const response = await fetch(`/api/status/${jobId}`);
+            const data = await response.json();
             
-            if (result.success) {
-                // Update progress
-                updateProgress(result.progress || 0);
-                
-                // Update message based on status
-                switch (result.status) {
-                    case 'processing':
-                        updateProgressMessage('Processing transcript...');
-                        break;
-                    case 'extracting':
-                        updateProgressMessage('Extracting claims...');
-                        break;
-                    case 'checking':
-                        updateProgressMessage('Fact-checking claims...');
-                        break;
-                    case 'analyzing':
-                        updateProgressMessage('Analyzing credibility...');
-                        break;
-                    case 'completed':
-                        updateProgressMessage('Analysis complete!');
-                        clearInterval(pollInterval);
-                        await loadResults();
-                        break;
-                    case 'failed':
-                        clearInterval(pollInterval);
-                        hideProgress();
-                        alert('Analysis failed: ' + (result.error || 'Unknown error'));
-                        break;
-                }
-            } else {
-                attempts++;
-                if (attempts >= maxAttempts) {
-                    clearInterval(pollInterval);
-                    hideProgress();
-                    alert('Analysis timed out. Please try again.');
-                }
+            if (!response.ok || !data.success) {
+                throw new Error('Failed to get job status');
             }
+            
+            // Update progress
+            const progress = data.progress || 0;
+            updateProgress(progress, getProgressText(progress));
+            updateProgressSteps(getProgressStep(progress));
+            
+            if (data.status === 'completed') {
+                clearInterval(pollingInterval);
+                pollingInterval = null;
+                await loadResults(jobId);
+            } else if (data.status === 'failed') {
+                clearInterval(pollingInterval);
+                pollingInterval = null;
+                throw new Error(data.error || 'Analysis failed');
+            }
+            
+            attempts++;
+            if (attempts >= maxAttempts) {
+                clearInterval(pollingInterval);
+                pollingInterval = null;
+                throw new Error('Analysis timed out');
+            }
+            
         } catch (error) {
-            console.error('Poll error:', error);
-            clearInterval(pollInterval);
-            hideProgress();
-            alert('Error checking status. Please refresh the page.');
+            clearInterval(pollingInterval);
+            pollingInterval = null;
+            console.error('Polling error:', error);
+            showError(error.message || 'Failed to get analysis status');
+            resetAnalysis();
         }
-    }, 2000); // Poll every 2 seconds
+    }, 5000); // Poll every 5 seconds
 }
 
-// Load and display results
-async function loadResults() {
+// Update progress
+function updateProgress(percent, text) {
+    const progressFill = document.getElementById('progress-fill');
+    const progressText = document.getElementById('progress-text');
+    
+    progressFill.style.width = percent + '%';
+    progressText.textContent = text;
+}
+
+// Get progress text
+function getProgressText(progress) {
+    if (progress < 20) return 'Processing transcript...';
+    if (progress < 40) return 'Extracting claims...';
+    if (progress < 60) return 'Fact-checking claims...';
+    if (progress < 80) return 'Analyzing credibility...';
+    if (progress < 100) return 'Finalizing results...';
+    return 'Analysis complete!';
+}
+
+// Get progress step
+function getProgressStep(progress) {
+    if (progress < 20) return 1;
+    if (progress < 40) return 2;
+    if (progress < 60) return 3;
+    if (progress < 80) return 4;
+    return 5;
+}
+
+// Update progress steps
+function updateProgressSteps(activeStep) {
+    for (let i = 1; i <= 5; i++) {
+        const step = document.getElementById(`step-${i}`);
+        if (step) {
+            if (i <= activeStep) {
+                step.classList.add('active');
+            } else {
+                step.classList.remove('active');
+            }
+        }
+    }
+}
+
+// Load results
+async function loadResults(jobId) {
     try {
-        const response = await fetch(`/api/results/${currentJobId}`);
-        const result = await response.json();
+        const response = await fetch(`/api/results/${jobId}`);
+        const results = await response.json();
         
-        if (result.success && result.data) {
-            displayResults(result.data);
-        } else {
+        if (!response.ok || !results.success) {
             throw new Error('Failed to load results');
         }
+        
+        // Display results
+        displayResults(results);
+        
+        // Show results section
+        document.getElementById('progress-section').style.display = 'none';
+        document.getElementById('results-section').style.display = 'block';
+        
+        // Set up export buttons
+        setupExportButtons(jobId);
+        
     } catch (error) {
-        console.error('Load results error:', error);
-        alert('Error loading results. Please refresh the page.');
+        console.error('Results error:', error);
+        showError('Failed to load analysis results');
+        resetAnalysis();
     }
 }
 
 // Display results
-function displayResults(data) {
-    // Hide progress, show results
-    document.getElementById('progress-section').style.display = 'none';
-    document.getElementById('results-section').style.display = 'block';
-    
+function displayResults(results) {
     // Update credibility score
-    const score = data.credibility_score || 0;
-    document.getElementById('credibility-value').textContent = Math.round(score);
-    document.getElementById('credibility-label').textContent = getCredibilityLabel(score);
+    const score = results.credibility_score || 0;
+    const credibilityValue = document.getElementById('credibility-value');
+    const credibilityLabel = document.getElementById('credibility-label');
+    const meterPointer = document.querySelector('.meter-pointer');
     
-    // Update credibility meter pointer
-    const pointer = document.getElementById('credibility-pointer');
-    const position = (score / 100) * 100; // Percentage position
-    pointer.style.left = `calc(${position}% - 3px)`; // Center the pointer
+    credibilityValue.textContent = Math.round(score);
+    credibilityLabel.textContent = getCredibilityLabel(score);
     
-    // Update summary
-    document.getElementById('analysis-summary').textContent = data.conversational_summary || data.summary || 'Analysis complete.';
+    // Position meter pointer
+    if (meterPointer) {
+        meterPointer.style.left = `${score}%`;
+    }
     
-    // Update statistics - the backend returns these directly, not in a statistics object
-    document.getElementById('total-claims').textContent = data.total_claims || 0;
+    // Update stats
+    updateStats(results);
     
-    // Calculate verified, false, and unverified from fact_checks
+    // Display summary
+    const summaryContainer = document.getElementById('analysis-summary');
+    summaryContainer.innerHTML = '';
+    
+    // Add speaker context if available
+    if (results.speaker_context && results.speaker_context.speaker) {
+        const contextHtml = window.generateSpeakerContextHTML ? 
+            window.generateSpeakerContextHTML(results.speaker_context) : 
+            generateBasicSpeakerContext(results.speaker_context);
+        summaryContainer.innerHTML += contextHtml;
+    }
+    
+    // Add conversational summary
+    if (results.conversational_summary) {
+        summaryContainer.innerHTML += `
+            <div class="conversational-summary">
+                <h4>Summary:</h4>
+                <p>${results.conversational_summary}</p>
+            </div>
+        `;
+    }
+    
+    // Display fact checks
+    if (window.displayEnhancedFactChecks) {
+        window.updateEnhancedStats(results);
+        window.displayEnhancedFactChecks(results.fact_checks || []);
+    } else {
+        displayFactChecks(results.fact_checks || []);
+    }
+}
+
+// Generate basic speaker context (fallback)
+function generateBasicSpeakerContext(context) {
+    let html = '<div class="speaker-context-section">';
+    html += `<h4>About ${context.speaker}:</h4>`;
+    
+    if (context.criminal_record) {
+        html += `<div class="alert alert-danger">
+            <strong>⚖️ Criminal Record:</strong> ${context.criminal_record}
+        </div>`;
+    }
+    
+    if (context.fraud_history) {
+        html += `<div class="alert alert-warning">
+            <strong>💰 Fraud History:</strong> ${context.fraud_history}
+        </div>`;
+    }
+    
+    html += '</div><hr>';
+    return html;
+}
+
+// Get credibility label
+function getCredibilityLabel(score) {
+    if (score >= 80) return 'Highly Credible';
+    if (score >= 60) return 'Generally Credible';
+    if (score >= 40) return 'Mixed Credibility';
+    if (score >= 20) return 'Low Credibility';
+    return 'Very Low Credibility';
+}
+
+// Update stats
+function updateStats(results) {
     let verifiedCount = 0;
     let falseCount = 0;
     let unverifiedCount = 0;
     
-    if (data.fact_checks && Array.isArray(data.fact_checks)) {
-        data.fact_checks.forEach(check => {
+    if (results.fact_checks && Array.isArray(results.fact_checks)) {
+        results.fact_checks.forEach(check => {
             const verdict = (check.verdict || 'unverified').toLowerCase();
             if (verdict === 'true' || verdict === 'mostly_true') {
                 verifiedCount++;
@@ -405,35 +482,21 @@ function displayResults(data) {
         });
     }
     
+    const totalClaims = results.fact_checks ? results.fact_checks.length : 0;
+    
+    document.getElementById('total-claims').textContent = totalClaims;
     document.getElementById('verified-claims').textContent = verifiedCount;
     document.getElementById('false-claims').textContent = falseCount;
     document.getElementById('unverified-claims').textContent = unverifiedCount;
-    
-    // Use enhanced display function if available, otherwise use basic display
-    if (typeof window.displayResults === 'function' && window.displayResults !== displayResults) {
-        // Call enhanced displayResults from enhanced.js
-        window.displayResults(data);
-    } else {
-        // Display fact checks with basic functionality
-        displayFactChecks(data.fact_checks || []);
-    }
 }
 
-// Get credibility label based on score
-function getCredibilityLabel(score) {
-    if (score >= 80) return 'Highly Credible';
-    if (score >= 60) return 'Moderately Credible';
-    if (score >= 40) return 'Low Credibility';
-    return 'Very Low Credibility';
-}
-
-// Display individual fact checks
+// Display fact checks
 function displayFactChecks(factChecks) {
     const container = document.getElementById('fact-check-list');
     container.innerHTML = '';
     
-    if (factChecks.length === 0) {
-        container.innerHTML = '<p>No claims found to fact-check.</p>';
+    if (!factChecks || factChecks.length === 0) {
+        container.innerHTML = '<p>No fact checks available.</p>';
         return;
     }
     
@@ -443,133 +506,103 @@ function displayFactChecks(factChecks) {
         
         const verdict = check.verdict || 'unverified';
         const verdictClass = getVerdictClass(verdict);
-        const verdictIcon = getVerdictIcon(verdict);
-        const verdictLabel = formatVerdict(verdict);
         
         item.innerHTML = `
             <div class="fact-check-header">
-                <span class="fact-check-number">#${index + 1}</span>
-                <span class="fact-check-verdict ${verdictClass}">
-                    <i class="fas ${verdictIcon}"></i>
-                    ${verdictLabel}
-                </span>
-            </div>
-            <div class="fact-check-claim">
-                <strong>Claim:</strong> ${check.claim}
+                <div class="fact-check-claim">${check.claim}</div>
+                <div class="fact-check-verdict ${verdictClass}">${verdict}</div>
             </div>
             <div class="fact-check-details">
-                <p><strong>Explanation:</strong> ${check.explanation || 'No explanation available.'}</p>
-                ${check.confidence ? `<p><strong>Confidence:</strong> ${check.confidence}%</p>` : ''}
-            </div>
-            ${check.source ? `
-                <div class="fact-check-source">
-                    <strong>Source:</strong> 
-                    ${check.source_url ? `<a href="${check.source_url}" target="_blank">${check.source}</a>` : check.source}
+                <p>${check.explanation || 'No explanation available'}</p>
+                <div class="fact-check-meta">
+                    <span>Confidence: ${check.confidence || 0}%</span>
+                    <span>Source: ${check.source || 'Unknown'}</span>
                 </div>
-            ` : ''}
+            </div>
         `;
         
         container.appendChild(item);
     });
 }
 
-// Get verdict class for styling
+// Get verdict class
 function getVerdictClass(verdict) {
-    const v = (verdict || 'unverified').toLowerCase().replace(' ', '_');
-    // If enhanced.js is loaded, use its VERDICT_MAPPINGS
-    if (typeof VERDICT_MAPPINGS !== 'undefined') {
-        const mapping = VERDICT_MAPPINGS[v];
-        return mapping ? mapping.class : 'unverified';
-    }
-    // Otherwise use basic mapping
-    return v;
+    const verdictLower = verdict.toLowerCase();
+    if (verdictLower === 'true' || verdictLower === 'mostly_true') return 'verdict-true';
+    if (verdictLower === 'false' || verdictLower === 'mostly_false') return 'verdict-false';
+    if (verdictLower === 'mixed') return 'verdict-mixed';
+    return 'verdict-unverified';
 }
 
-// Get verdict icon
-function getVerdictIcon(verdict) {
-    const v = (verdict || 'unverified').toLowerCase().replace(' ', '_');
-    // If enhanced.js is loaded, use its VERDICT_MAPPINGS
-    if (typeof VERDICT_MAPPINGS !== 'undefined') {
-        const mapping = VERDICT_MAPPINGS[v];
-        return mapping ? mapping.icon : 'fa-question-circle';
-    }
-    // Otherwise use basic icons
-    if (v === 'true' || v === 'mostly_true') return 'fa-check-circle';
-    if (v === 'false' || v === 'mostly_false') return 'fa-times-circle';
-    return 'fa-question-circle';
-}
-
-// Format verdict for display
-function formatVerdict(verdict) {
-    if (!verdict) return 'Unverified';
-    
-    const v = verdict.toLowerCase().replace(' ', '_');
-    // If enhanced.js is loaded, use its VERDICT_MAPPINGS
-    if (typeof VERDICT_MAPPINGS !== 'undefined') {
-        const mapping = VERDICT_MAPPINGS[v];
-        return mapping ? mapping.label : verdict.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
-    }
-    // Otherwise use basic formatting
-    return verdict.replace('_', ' ').replace(/\b\w/g, l => l.toUpperCase());
-}
-
-// Export results
-async function exportResults(format) {
-    if (!currentJobId) {
-        alert('No results to export');
-        return;
-    }
-    
-    try {
-        const response = await fetch(`/api/export/${currentJobId}/${format}`, {
-            method: 'GET'
-        });
-        
-        if (response.ok) {
-            const blob = await response.blob();
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `fact-check-report-${new Date().toISOString().split('T')[0]}.${format}`;
-            document.body.appendChild(a);
-            a.click();
-            window.URL.revokeObjectURL(url);
-            document.body.removeChild(a);
-        } else {
-            const result = await response.json();
-            alert('Export failed: ' + (result.error || 'Unknown error'));
+// Setup export buttons
+function setupExportButtons(jobId) {
+    // Export button functionality
+    window.exportResults = function(format) {
+        if (!currentJobId) {
+            showError('No results to export');
+            return;
         }
-    } catch (error) {
-        alert('Export error: ' + error.message);
-    }
+        window.location.href = `/api/export/${currentJobId}/${format}`;
+    };
 }
 
-// Reset for new analysis
+// Reset analysis
 function resetAnalysis() {
+    // Clear any active polling
+    if (pollingInterval) {
+        clearInterval(pollingInterval);
+        pollingInterval = null;
+    }
+    
+    // Reset current job
     currentJobId = null;
     
-    // Clear inputs
+    // Show input section, hide others
+    document.getElementById('input-section').style.display = 'block';
+    document.getElementById('progress-section').style.display = 'none';
+    document.getElementById('results-section').style.display = 'none';
+    
+    // Clear form inputs
     document.getElementById('text-input').value = '';
     document.getElementById('char-count').textContent = '0';
     removeFile();
     
-    // Reset UI
-    document.getElementById('results-section').style.display = 'none';
-    document.getElementById('input-section').style.display = 'block';
+    // Re-enable analyze button
+    document.getElementById('analyze-button').disabled = false;
     
-    // Reset progress
-    document.getElementById('progress-fill').style.width = '0%';
-    document.getElementById('progress-text').textContent = 'Initializing...';
+    // Reset to text tab
+    switchTab('text');
     
-    // Reset step indicators
-    const steps = ['step-1', 'step-2', 'step-3', 'step-4'];
-    steps.forEach(stepId => {
-        document.getElementById(stepId).classList.remove('active');
-    });
-    
-    // Clear any intervals
-    if (pollInterval) {
-        clearInterval(pollInterval);
-        pollInterval = null;
-    }
+    // Scroll to top
+    window.scrollTo(0, 0);
 }
+
+// Show error message
+function showError(message) {
+    // Create error alert
+    const alertDiv = document.createElement('div');
+    alertDiv.className = 'alert alert-error';
+    alertDiv.innerHTML = `
+        <i class="fas fa-exclamation-circle"></i>
+        <span>${message}</span>
+    `;
+    
+    // Add to page
+    const container = document.querySelector('.container');
+    container.insertBefore(alertDiv, container.firstChild);
+    
+    // Remove after 5 seconds
+    setTimeout(() => {
+        alertDiv.remove();
+    }, 5000);
+    
+    // Also show in console
+    console.error('Error:', message);
+}
+
+// Make functions available globally
+window.startAnalysis = startAnalysis;
+window.displayResults = displayResults;
+window.resetAnalysis = resetAnalysis;
+window.removeFile = removeFile;
+window.toggleDropdown = toggleDropdown;
