@@ -174,7 +174,7 @@ class FactChecker:
         false_patterns = [
             ('million illegal', 'billion illegal'),  # Number inflation
             ('crime is down 90%', 'crime decreased 90%'),  # Extreme statistics
-            ('never said', 'didn't say'),  # Denial patterns
+            ('never said', "didn't say"),  # Denial patterns - fixed quote
         ]
         
         for pattern, alt in false_patterns:
