@@ -12,14 +12,6 @@ spacy==3.6.1
 nltk==3.8.1
 textstat==0.7.3
 
-# YouTube
-youtube-transcript-api==0.6.1
-yt-dlp==2023.7.6
-pydub==0.25.1
-
-# Speech Recognition (for YouTube audio fallback)
-SpeechRecognition==3.10.0
-
 # API integrations
 google-api-python-client==2.97.0
 openai==0.28.0
