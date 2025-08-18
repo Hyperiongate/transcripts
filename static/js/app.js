@@ -1,171 +1,107 @@
+// Fact Checker Application JavaScript
+
 // Global variables
-let currentMethod = 'text';
 let currentJobId = null;
-let pollingInterval = null;
 
-// Initialize when DOM is ready
 document.addEventListener('DOMContentLoaded', function() {
-    // Initialize tab switching
-    initTabs();
-    
-    // Initialize file upload
-    initFileUpload();
-    
-    // Initialize character counter
-    initCharacterCounter();
-    
-    // Initialize dropdowns
-    initDropdowns();
-});
-
-// Initialize tabs
-function initTabs() {
+    // Tab switching
     const tabButtons = document.querySelectorAll('.tab-button');
-    tabButtons.forEach(button => {
-        button.addEventListener('click', function() {
-            const tab = this.dataset.tab;
-            switchTab(tab);
+    const inputPanels = document.querySelectorAll('.input-panel');
+    
+    tabButtons.forEach(tab => {
+        tab.addEventListener('click', function() {
+            const targetTab = this.getAttribute('data-tab');
+            
+            // Update active states
+            tabButtons.forEach(t => t.classList.remove('active'));
+            inputPanels.forEach(p => p.classList.remove('active'));
+            
+            this.classList.add('active');
+            document.getElementById(`${targetTab}-panel`).classList.add('active');
         });
     });
-}
-
-// Switch between input tabs
-function switchTab(tab) {
-    currentMethod = tab;
     
-    // Update tab buttons
-    document.querySelectorAll('.tab-button').forEach(btn => {
-        btn.classList.remove('active');
-    });
-    document.querySelector(`[data-tab="${tab}"]`).classList.add('active');
-    
-    // Update panels
-    document.querySelectorAll('.input-panel').forEach(panel => {
-        panel.classList.remove('active');
-    });
-    document.getElementById(`${tab}-panel`).classList.add('active');
-}
-
-// Initialize file upload
-function initFileUpload() {
-    const dropZone = document.getElementById('file-drop-zone');
+    // File upload
     const fileInput = document.getElementById('file-input');
+    const fileDropZone = document.getElementById('file-drop-zone');
     
-    // Click to upload
-    dropZone.addEventListener('click', () => fileInput.click());
-    
-    // Drag and drop
-    dropZone.addEventListener('dragover', (e) => {
-        e.preventDefault();
-        dropZone.classList.add('dragover');
-    });
-    
-    dropZone.addEventListener('dragleave', () => {
-        dropZone.classList.remove('dragover');
-    });
-    
-    dropZone.addEventListener('drop', (e) => {
-        e.preventDefault();
-        dropZone.classList.remove('dragover');
+    if (fileDropZone) {
+        fileDropZone.addEventListener('click', () => fileInput.click());
         
-        const files = e.dataTransfer.files;
-        if (files.length > 0) {
-            handleFile(files[0]);
-        }
-    });
-    
-    // File input change
-    fileInput.addEventListener('change', (e) => {
-        if (e.target.files.length > 0) {
-            handleFile(e.target.files[0]);
-        }
-    });
-}
-
-// Handle file selection
-function handleFile(file) {
-    // Validate file
-    const validTypes = ['.txt', '.srt', '.vtt'];
-    const fileExtension = '.' + file.name.split('.').pop().toLowerCase();
-    
-    if (!validTypes.includes(fileExtension)) {
-        showError('Please upload a valid file type (TXT, SRT, or VTT)');
-        return;
+        fileDropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            fileDropZone.classList.add('dragover');
+        });
+        
+        fileDropZone.addEventListener('dragleave', () => {
+            fileDropZone.classList.remove('dragover');
+        });
+        
+        fileDropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            fileDropZone.classList.remove('dragover');
+            
+            if (e.dataTransfer.files.length > 0) {
+                fileInput.files = e.dataTransfer.files;
+                updateFileInfo(e.dataTransfer.files[0]);
+            }
+        });
+        
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                updateFileInfo(e.target.files[0]);
+            }
+        });
     }
     
-    if (file.size > 10 * 1024 * 1024) { // 10MB
-        showError('File size must be less than 10MB');
-        return;
-    }
-    
-    // Update UI
-    document.getElementById('file-drop-zone').style.display = 'none';
-    document.getElementById('file-info').style.display = 'flex';
-    document.getElementById('file-name').textContent = file.name;
-    
-    // Store file reference
-    document.getElementById('file-input').files = [file];
-}
-
-// Remove file
-function removeFile() {
-    document.getElementById('file-input').value = '';
-    document.getElementById('file-drop-zone').style.display = 'flex';
-    document.getElementById('file-info').style.display = 'none';
-}
-
-// Initialize character counter
-function initCharacterCounter() {
+    // Character counter
     const textInput = document.getElementById('text-input');
     const charCount = document.getElementById('char-count');
     
-    textInput.addEventListener('input', () => {
-        charCount.textContent = textInput.value.length.toLocaleString();
-    });
-}
+    if (textInput && charCount) {
+        textInput.addEventListener('input', function() {
+            charCount.textContent = this.value.length.toLocaleString();
+        });
+    }
+});
 
-// Initialize dropdowns
-function initDropdowns() {
-    // Dropdown functionality is handled by toggleDropdown function
-}
-
-// Toggle dropdown
-function toggleDropdown(dropdownId) {
-    const dropdown = document.getElementById(dropdownId);
-    const arrow = document.getElementById(dropdownId.replace('-dropdown', '-arrow'));
+function updateFileInfo(file) {
+    const fileInfo = document.getElementById('file-info');
+    const fileName = document.getElementById('file-name');
     
-    if (dropdown.style.display === 'block') {
-        dropdown.style.display = 'none';
-        arrow.classList.remove('rotate');
-    } else {
-        // Close other dropdowns
-        document.querySelectorAll('.dropdown-content').forEach(d => {
-            d.style.display = 'none';
-        });
-        document.querySelectorAll('.dropdown-arrow').forEach(a => {
-            a.classList.remove('rotate');
-        });
-        
-        // Open this dropdown
-        dropdown.style.display = 'block';
-        arrow.classList.add('rotate');
+    if (fileInfo && fileName) {
+        fileName.textContent = file.name;
+        fileInfo.style.display = 'flex';
     }
 }
 
-// Start analysis
+function removeFile() {
+    const fileInput = document.getElementById('file-input');
+    const fileInfo = document.getElementById('file-info');
+    
+    if (fileInput) fileInput.value = '';
+    if (fileInfo) fileInfo.style.display = 'none';
+}
+
+function formatFileSize(bytes) {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+}
+
 async function startAnalysis() {
-    // Clear any existing polling
-    if (pollingInterval) {
-        clearInterval(pollingInterval);
-        pollingInterval = null;
-    }
+    // Get the active input method
+    const activePanel = document.querySelector('.input-panel.active');
+    const method = activePanel.id.replace('-panel', '');
     
     let transcript = '';
     let source = '';
     
     try {
         // Get transcript based on method
-        if (currentMethod === 'text') {
+        if (method === 'text') {
             transcript = document.getElementById('text-input').value.trim();
             source = 'Direct Input';
             
@@ -173,7 +109,7 @@ async function startAnalysis() {
                 showError('Please enter a transcript to analyze');
                 return;
             }
-        } else if (currentMethod === 'file') {
+        } else if (method === 'file') {
             const fileInput = document.getElementById('file-input');
             if (!fileInput.files || fileInput.files.length === 0) {
                 showError('Please select a file to analyze');
@@ -191,27 +127,15 @@ async function startAnalysis() {
             return;
         }
         
-        if (transcript.length > 50000) {
-            showError('Transcript is too long. Maximum 50,000 characters allowed.');
-            return;
-        }
-        
-        // Disable analyze button
-        const analyzeButton = document.getElementById('analyze-button');
-        analyzeButton.disabled = true;
-        
         // Send to API
         await analyzeTranscript(transcript, source);
         
     } catch (error) {
         console.error('Error:', error);
         showError('An error occurred while processing your request');
-        // Re-enable analyze button
-        document.getElementById('analyze-button').disabled = false;
     }
 }
 
-// Read file
 async function readFile(file) {
     return new Promise((resolve, reject) => {
         const reader = new FileReader();
@@ -221,16 +145,14 @@ async function readFile(file) {
     });
 }
 
-// Analyze transcript
 async function analyzeTranscript(transcript, source) {
-    // Show progress section, hide others
+    // Show progress section
     document.getElementById('input-section').style.display = 'none';
     document.getElementById('progress-section').style.display = 'block';
     document.getElementById('results-section').style.display = 'none';
     
     // Reset progress
     updateProgress(0, 'Initializing analysis...');
-    updateProgressSteps(1);
     
     try {
         // Send analysis request
@@ -255,7 +177,7 @@ async function analyzeTranscript(transcript, source) {
             throw new Error(data.error || 'Analysis failed');
         }
         
-        // Store current job ID
+        // Store job ID
         currentJobId = data.job_id;
         
         // Start polling for results
@@ -264,16 +186,16 @@ async function analyzeTranscript(transcript, source) {
     } catch (error) {
         console.error('Analysis error:', error);
         showError(error.message || 'Failed to analyze transcript');
-        resetAnalysis();
+        document.getElementById('progress-section').style.display = 'none';
+        document.getElementById('input-section').style.display = 'block';
     }
 }
 
-// Poll job status
 async function pollJobStatus(jobId) {
     const maxAttempts = 60; // 5 minutes max
     let attempts = 0;
     
-    pollingInterval = setInterval(async () => {
+    const interval = setInterval(async () => {
         try {
             const response = await fetch(`/api/status/${jobId}`);
             const data = await response.json();
@@ -283,79 +205,55 @@ async function pollJobStatus(jobId) {
             }
             
             // Update progress
-            const progress = data.progress || 0;
-            updateProgress(progress, getProgressText(progress));
-            updateProgressSteps(getProgressStep(progress));
+            updateProgress(data.progress || 0, data.message || 'Processing...');
             
             if (data.status === 'completed') {
-                clearInterval(pollingInterval);
-                pollingInterval = null;
+                clearInterval(interval);
                 await loadResults(jobId);
             } else if (data.status === 'failed') {
-                clearInterval(pollingInterval);
-                pollingInterval = null;
+                clearInterval(interval);
                 throw new Error(data.error || 'Analysis failed');
             }
             
             attempts++;
             if (attempts >= maxAttempts) {
-                clearInterval(pollingInterval);
-                pollingInterval = null;
+                clearInterval(interval);
                 throw new Error('Analysis timed out');
             }
             
         } catch (error) {
-            clearInterval(pollingInterval);
-            pollingInterval = null;
+            clearInterval(interval);
             console.error('Polling error:', error);
             showError(error.message || 'Failed to get analysis status');
-            resetAnalysis();
+            document.getElementById('progress-section').style.display = 'none';
+            document.getElementById('input-section').style.display = 'block';
         }
     }, 5000); // Poll every 5 seconds
 }
 
-// Update progress
 function updateProgress(percent, text) {
     const progressFill = document.getElementById('progress-fill');
     const progressText = document.getElementById('progress-text');
     
     progressFill.style.width = percent + '%';
     progressText.textContent = text;
-}
-
-// Get progress text
-function getProgressText(progress) {
-    if (progress < 20) return 'Processing transcript...';
-    if (progress < 40) return 'Extracting claims...';
-    if (progress < 60) return 'Fact-checking claims...';
-    if (progress < 80) return 'Analyzing credibility...';
-    if (progress < 100) return 'Finalizing results...';
-    return 'Analysis complete!';
-}
-
-// Get progress step
-function getProgressStep(progress) {
-    if (progress < 25) return 1;
-    if (progress < 50) return 2;
-    if (progress < 75) return 3;
-    return 4;
-}
-
-// Update progress steps
-function updateProgressSteps(activeStep) {
-    for (let i = 1; i <= 4; i++) {
-        const step = document.getElementById(`step-${i}`);
+    
+    // Update step indicators
+    const steps = ['step-1', 'step-2', 'step-3', 'step-4'];
+    const stepThresholds = [20, 40, 60, 90];
+    
+    steps.forEach((stepId, index) => {
+        const step = document.getElementById(stepId);
         if (step) {
-            if (i <= activeStep) {
+            if (percent >= stepThresholds[index]) {
                 step.classList.add('active');
             } else {
                 step.classList.remove('active');
             }
         }
-    }
+    });
 }
 
-// Load results
 async function loadResults(jobId) {
     try {
         const response = await fetch(`/api/results/${jobId}`);
@@ -372,130 +270,77 @@ async function loadResults(jobId) {
         document.getElementById('progress-section').style.display = 'none';
         document.getElementById('results-section').style.display = 'block';
         
-        // Set up export buttons
-        setupExportButtons(jobId);
-        
     } catch (error) {
         console.error('Results error:', error);
         showError('Failed to load analysis results');
-        resetAnalysis();
+        document.getElementById('progress-section').style.display = 'none';
+        document.getElementById('input-section').style.display = 'block';
     }
 }
 
-// Display results
 function displayResults(results) {
     // Update credibility score
     const score = results.credibility_score || 0;
-    const credibilityValue = document.getElementById('credibility-value');
-    const credibilityLabel = document.getElementById('credibility-label');
-    const meterPointer = document.getElementById('credibility-pointer');
+    const pointer = document.getElementById('credibility-pointer');
+    const scoreValue = document.getElementById('credibility-value');
+    const scoreLabel = document.getElementById('credibility-label');
     
-    credibilityValue.textContent = Math.round(score);
-    credibilityLabel.textContent = getCredibilityLabel(score);
-    
-    // Position meter pointer
-    if (meterPointer) {
-        meterPointer.style.left = `${score}%`;
-    }
+    if (pointer) pointer.style.left = `${score}%`;
+    if (scoreValue) scoreValue.textContent = score;
+    if (scoreLabel) scoreLabel.textContent = results.credibility_label || 'Unknown';
     
     // Update stats
     updateStats(results);
     
     // Display summary
     const summaryContainer = document.getElementById('analysis-summary');
-    summaryContainer.innerHTML = '';
-    
-    // Add speaker context if available
-    if (results.speaker_context && results.speaker_context.speaker) {
-        const contextHtml = window.generateSpeakerContextHTML ? 
-            window.generateSpeakerContextHTML(results.speaker_context) : 
-            generateBasicSpeakerContext(results.speaker_context);
-        summaryContainer.innerHTML += contextHtml;
-    }
-    
-    // Add conversational summary
-    if (results.conversational_summary) {
-        summaryContainer.innerHTML += `
+    if (summaryContainer) {
+        let summaryHtml = '';
+        
+        // Add speaker context if available
+        if (results.speaker_context && results.speaker_context.speaker) {
+            summaryHtml = generateSpeakerContextHTML(results.speaker_context);
+        }
+        
+        // Add conversational summary
+        summaryHtml += `
             <div class="conversational-summary">
-                <h4>Summary:</h4>
-                <p>${results.conversational_summary}</p>
+                <p>We analyzed ${results.total_claims || 0} factual claims in this transcript. 
+                ${results.true_claims || 0} were verified as true, 
+                ${results.false_claims || 0} were found to be false, and 
+                ${results.unverified_claims || 0} could not be verified.</p>
             </div>
         `;
+        
+        summaryContainer.innerHTML = summaryHtml;
     }
     
     // Display fact checks
-    if (window.displayEnhancedFactChecks) {
-        window.updateEnhancedStats(results);
-        window.displayEnhancedFactChecks(results.fact_checks || []);
-    } else {
-        displayFactChecks(results.fact_checks || []);
-    }
+    displayFactChecks(results.fact_checks || []);
 }
 
-// Generate basic speaker context (fallback)
-function generateBasicSpeakerContext(context) {
-    let html = '<div class="speaker-context-section">';
-    html += `<h4>About ${context.speaker}:</h4>`;
-    
-    if (context.criminal_record) {
-        html += `<div class="alert alert-danger">
-            <strong>⚖️ Criminal Record:</strong> ${context.criminal_record}
-        </div>`;
-    }
-    
-    if (context.fraud_history) {
-        html += `<div class="alert alert-warning">
-            <strong>💰 Fraud History:</strong> ${context.fraud_history}
-        </div>`;
-    }
-    
-    html += '</div><hr>';
-    return html;
-}
-
-// Get credibility label
-function getCredibilityLabel(score) {
-    if (score >= 80) return 'Highly Credible';
-    if (score >= 60) return 'Generally Credible';
-    if (score >= 40) return 'Mixed Credibility';
-    if (score >= 20) return 'Low Credibility';
-    return 'Very Low Credibility';
-}
-
-// Update stats
 function updateStats(results) {
-    let verifiedCount = 0;
-    let falseCount = 0;
-    let unverifiedCount = 0;
+    const stats = {
+        'total-claims': results.total_claims || 0,
+        'verified-claims': results.true_claims || 0,
+        'false-claims': results.false_claims || 0,
+        'unverified-claims': results.unverified_claims || 0
+    };
     
-    if (results.fact_checks && Array.isArray(results.fact_checks)) {
-        results.fact_checks.forEach(check => {
-            const verdict = (check.verdict || 'unverified').toLowerCase();
-            if (verdict === 'true' || verdict === 'mostly_true') {
-                verifiedCount++;
-            } else if (verdict === 'false' || verdict === 'mostly_false') {
-                falseCount++;
-            } else {
-                unverifiedCount++;
-            }
-        });
+    for (const [id, value] of Object.entries(stats)) {
+        const element = document.getElementById(id);
+        if (element) element.textContent = value;
     }
-    
-    const totalClaims = results.fact_checks ? results.fact_checks.length : 0;
-    
-    document.getElementById('total-claims').textContent = totalClaims;
-    document.getElementById('verified-claims').textContent = verifiedCount;
-    document.getElementById('false-claims').textContent = falseCount;
-    document.getElementById('unverified-claims').textContent = unverifiedCount;
 }
 
-// Display fact checks
 function displayFactChecks(factChecks) {
     const container = document.getElementById('fact-check-list');
+    if (!container) return;
+    
     container.innerHTML = '';
     
-    if (!factChecks || factChecks.length === 0) {
-        container.innerHTML = '<p>No fact checks available.</p>';
+    if (factChecks.length === 0) {
+        container.innerHTML = '<p style="text-align: center; color: #6b7280;">No fact checks to display</p>';
         return;
     }
     
@@ -506,177 +351,297 @@ function displayFactChecks(factChecks) {
         
         item.className = `fact-check-item ${verdictClass}`;
         
-        item.innerHTML = `
-            <div class="fact-check-header" onclick="toggleFactCheck('fact-check-details-${index}')">
-                <div class="fact-check-claim">
-                    <i class="fas fa-chevron-right toggle-icon" id="fact-check-details-${index}-icon"></i>
-                    ${check.claim}
-                </div>
-                <div class="fact-check-verdict ${verdictClass}">
-                    <i class="fas ${getVerdictIcon(verdict)}"></i>
-                    ${getVerdictLabel(verdict)}
-                </div>
-            </div>
-            <div class="fact-check-details-wrapper" id="fact-check-details-${index}" style="display: none;">
-                <div class="fact-check-details">
+        // Use enhanced template if available
+        if (window.createFactCheckItem) {
+            item.innerHTML = window.createFactCheckItem(check, index);
+        } else {
+            // Basic template
+            item.innerHTML = `
+                <div style="padding: 20px;">
+                    <div class="fact-check-header">
+                        <div class="fact-check-claim">${check.claim}</div>
+                        <div class="fact-check-verdict ${verdictClass}">
+                            <i class="fas ${getVerdictIcon(verdict)}"></i>
+                            ${verdict.toUpperCase()}
+                        </div>
+                    </div>
                     ${check.explanation ? `
-                        <div class="explanation-section">
-                            <h4>Explanation</h4>
+                        <div class="fact-check-details">
                             <p>${check.explanation}</p>
-                        </div>
-                    ` : ''}
-                    ${check.confidence ? `
-                        <div class="confidence-section">
-                            <h4>Confidence Level</h4>
-                            <div class="confidence-bar">
-                                <div class="confidence-fill" style="width: ${check.confidence}%"></div>
-                            </div>
-                            <span class="confidence-text">${check.confidence}% confident</span>
-                        </div>
-                    ` : ''}
-                    ${check.source ? `
-                        <div class="sources-section">
-                            <h4>Source</h4>
-                            <p>${check.source}</p>
+                            ${check.sources && check.sources.length > 0 ? `
+                                <div class="fact-check-source">
+                                    <strong>Sources:</strong> ${check.sources.join(', ')}
+                                </div>
+                            ` : ''}
                         </div>
                     ` : ''}
                 </div>
-            </div>
-        `;
+            `;
+        }
         
         container.appendChild(item);
     });
 }
 
-// Get verdict icon
-function getVerdictIcon(verdict) {
-    const verdictLower = verdict.toLowerCase();
-    if (verdictLower === 'true' || verdictLower === 'mostly_true') return 'fa-check-circle';
-    if (verdictLower === 'false' || verdictLower === 'mostly_false') return 'fa-times-circle';
-    if (verdictLower === 'mixed') return 'fa-adjust';
-    if (verdictLower === 'misleading' || verdictLower === 'deceptive') return 'fa-exclamation-triangle';
-    if (verdictLower === 'lacks_context') return 'fa-info-circle';
-    if (verdictLower === 'unsubstantiated') return 'fa-question-circle';
-    return 'fa-question-circle';
-}
-
-// Get verdict label
-function getVerdictLabel(verdict) {
-    const verdictLower = verdict.toLowerCase();
-    const labelMap = {
-        'true': 'True',
-        'mostly_true': 'Mostly True',
-        'false': 'False',
-        'mostly_false': 'Mostly False',
-        'mixed': 'Mixed',
-        'misleading': 'Deceptive',
-        'deceptive': 'Deceptive',
-        'lacks_context': 'Lacks Context',
-        'unsubstantiated': 'Unsubstantiated',
-        'unverified': 'Unverified'
-    };
-    return labelMap[verdictLower] || 'Unverified';
-}
-
-// Toggle fact check details
-function toggleFactCheck(detailsId) {
-    const details = document.getElementById(detailsId);
-    const icon = document.getElementById(`${detailsId}-icon`);
-    
-    if (details.style.display === 'none') {
-        details.style.display = 'block';
-        icon.classList.remove('fa-chevron-right');
-        icon.classList.add('fa-chevron-down');
-    } else {
-        details.style.display = 'none';
-        icon.classList.remove('fa-chevron-down');
-        icon.classList.add('fa-chevron-right');
-    }
-}
-
-// Get verdict class
 function getVerdictClass(verdict) {
-    const verdictLower = verdict.toLowerCase();
-    if (verdictLower === 'true' || verdictLower === 'mostly_true') return 'true';
-    if (verdictLower === 'false' || verdictLower === 'mostly_false') return 'false';
-    if (verdictLower === 'mixed') return 'mixed';
-    if (verdictLower === 'misleading' || verdictLower === 'deceptive') return 'deceptive';
-    if (verdictLower === 'lacks_context') return 'lacks_context';
-    if (verdictLower === 'unsubstantiated') return 'unsubstantiated';
-    return 'unverified';
-}
-
-// Setup export buttons
-function setupExportButtons(jobId) {
-    // Export button functionality
-    window.exportResults = function(format) {
-        if (!currentJobId) {
-            showError('No results to export');
-            return;
-        }
-        window.location.href = `/api/export/${currentJobId}/${format}`;
+    const v = verdict.toLowerCase().replace(' ', '_');
+    const mapping = {
+        'true': 'true',
+        'mostly_true': 'true',
+        'false': 'false',
+        'mostly_false': 'false',
+        'misleading': 'false',
+        'deceptive': 'false',
+        'mixed': 'mixed',
+        'unverified': 'unverified',
+        'unsubstantiated': 'unverified',
+        'lacks_context': 'unverified'
     };
+    return mapping[v] || 'unverified';
 }
 
-// Reset analysis
-function resetAnalysis() {
-    // Clear any active polling
-    if (pollingInterval) {
-        clearInterval(pollingInterval);
-        pollingInterval = null;
+function getVerdictIcon(verdict) {
+    const v = verdict.toLowerCase().replace(' ', '_');
+    const mapping = {
+        'true': 'fa-check-circle',
+        'mostly_true': 'fa-check-circle',
+        'false': 'fa-times-circle',
+        'mostly_false': 'fa-times-circle',
+        'misleading': 'fa-exclamation-triangle',
+        'deceptive': 'fa-exclamation-triangle',
+        'mixed': 'fa-adjust',
+        'unverified': 'fa-question-circle',
+        'unsubstantiated': 'fa-question-circle',
+        'lacks_context': 'fa-info-circle'
+    };
+    return mapping[v] || 'fa-question-circle';
+}
+
+function generateSpeakerContextHTML(context) {
+    if (!context || !context.speaker) {
+        return '';
     }
     
-    // Reset current job
-    currentJobId = null;
+    let html = '<div class="speaker-context-section">';
+    html += `<h4>About ${context.speaker}:</h4>`;
     
-    // Show input section, hide others
-    document.getElementById('input-section').style.display = 'block';
-    document.getElementById('progress-section').style.display = 'none';
+    // Criminal record
+    if (context.criminal_record) {
+        html += `<div class="alert alert-danger">
+            <i class="fas fa-gavel"></i>
+            <strong>Criminal Record:</strong> ${context.criminal_record}
+        </div>`;
+    }
+    
+    // Fraud history
+    if (context.fraud_history) {
+        html += `<div class="alert alert-warning">
+            <i class="fas fa-dollar-sign"></i>
+            <strong>Fraud History:</strong> ${context.fraud_history}
+        </div>`;
+    }
+    
+    // Fact-checking history
+    if (context.fact_check_history) {
+        const alertClass = context.fact_check_history.toLowerCase().includes('false') ? 
+            'alert-warning' : 'alert-info';
+        html += `<div class="alert ${alertClass}">
+            <i class="fas fa-chart-line"></i>
+            <strong>Fact-Check History:</strong> ${context.fact_check_history}
+        </div>`;
+    }
+    
+    // Credibility notes
+    if (context.credibility_notes) {
+        html += `<div class="alert alert-info">
+            <i class="fas fa-info-circle"></i>
+            <strong>Credibility Assessment:</strong> ${context.credibility_notes}
+        </div>`;
+    }
+    
+    html += '</div>';
+    return html;
+}
+
+async function exportResults(format) {
+    if (!currentJobId) {
+        showError('No results to export');
+        return;
+    }
+    
+    showLoader('Generating PDF...');
+    
+    try {
+        const response = await fetch(`/api/export/${currentJobId}/${format}`);
+        
+        if (response.ok) {
+            // Create blob from response
+            const blob = await response.blob();
+            
+            // Create download link
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.style.display = 'none';
+            a.href = url;
+            a.download = `fact-check-report-${currentJobId}.pdf`;
+            
+            // Trigger download
+            document.body.appendChild(a);
+            a.click();
+            
+            // Cleanup
+            window.URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+            
+            showSuccess('PDF downloaded successfully!');
+        } else {
+            const error = await response.json();
+            showError(error.error || 'Failed to generate PDF');
+        }
+    } catch (error) {
+        console.error('Export error:', error);
+        showError('Failed to export results');
+    } finally {
+        hideLoader();
+    }
+}
+
+function resetAnalysis() {
+    // Hide results, show input
     document.getElementById('results-section').style.display = 'none';
+    document.getElementById('input-section').style.display = 'block';
     
-    // Clear form inputs
+    // Reset form
+    resetForm();
+    
+    // Clear job ID
+    currentJobId = null;
+}
+
+function resetForm() {
+    // Clear text input
     document.getElementById('text-input').value = '';
     document.getElementById('char-count').textContent = '0';
-    removeFile();
     
-    // Re-enable analyze button
-    document.getElementById('analyze-button').disabled = false;
+    // Clear file input
+    document.getElementById('file-input').value = '';
+    document.getElementById('file-info').style.display = 'none';
+    document.getElementById('file-name').textContent = '';
     
-    // Reset to text tab
-    switchTab('text');
-    
-    // Scroll to top
-    window.scrollTo(0, 0);
+    // Reset to text input tab
+    document.querySelectorAll('.tab-button').forEach(btn => {
+        btn.classList.remove('active');
+    });
+    document.querySelectorAll('.input-panel').forEach(panel => {
+        panel.classList.remove('active');
+    });
+    document.querySelector('[data-tab="text"]').classList.add('active');
+    document.getElementById('text-panel').classList.add('active');
 }
 
-// Show error message
+// UI Helper functions
+function showLoader(message) {
+    const loader = document.createElement('div');
+    loader.id = 'export-loader';
+    loader.style.cssText = `
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.5);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        z-index: 9999;
+    `;
+    loader.innerHTML = `
+        <div style="background: white; padding: 30px; border-radius: 8px; text-align: center;">
+            <div style="margin-bottom: 15px;">${message}</div>
+            <div class="spinner" style="width: 40px; height: 40px; border: 4px solid #f3f4f6; border-top-color: #3b82f6; border-radius: 50%; animation: spin 1s linear infinite; margin: 0 auto;"></div>
+        </div>
+        <style>
+            @keyframes spin {
+                to { transform: rotate(360deg); }
+            }
+        </style>
+    `;
+    document.body.appendChild(loader);
+}
+
+function hideLoader() {
+    const loader = document.getElementById('export-loader');
+    if (loader) {
+        loader.remove();
+    }
+}
+
+function showSuccess(message) {
+    showNotification(message, 'success');
+}
+
 function showError(message) {
-    // Create error alert
-    const alertDiv = document.createElement('div');
-    alertDiv.className = 'alert alert-error';
-    alertDiv.innerHTML = `
-        <i class="fas fa-exclamation-circle"></i>
-        <span>${message}</span>
+    showNotification(message, 'error');
+}
+
+function showNotification(message, type = 'info') {
+    const notification = document.createElement('div');
+    notification.className = `notification notification-${type}`;
+    notification.style.cssText = `
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        padding: 16px 24px;
+        background: ${type === 'success' ? '#10b981' : type === 'error' ? '#ef4444' : '#3b82f6'};
+        color: white;
+        border-radius: 8px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        z-index: 10000;
+        animation: slideIn 0.3s ease;
     `;
     
-    // Add to page
-    const container = document.querySelector('.container');
-    container.insertBefore(alertDiv, container.firstChild);
+    const icon = type === 'success' ? 'fa-check-circle' : type === 'error' ? 'fa-times-circle' : 'fa-info-circle';
+    notification.innerHTML = `
+        <i class="fas ${icon}"></i>
+        <span>${message}</span>
+        <style>
+            @keyframes slideIn {
+                from {
+                    transform: translateX(100%);
+                    opacity: 0;
+                }
+                to {
+                    transform: translateX(0);
+                    opacity: 1;
+                }
+            }
+        </style>
+    `;
     
-    // Remove after 5 seconds
+    document.body.appendChild(notification);
+    
     setTimeout(() => {
-        alertDiv.remove();
-    }, 5000);
+        notification.style.animation = 'slideOut 0.3s ease';
+        notification.style.animationFillMode = 'forwards';
+        setTimeout(() => notification.remove(), 300);
+    }, 3000);
     
-    // Also show in console
-    console.error('Error:', message);
+    // Add slide out animation
+    const style = document.createElement('style');
+    style.textContent = `
+        @keyframes slideOut {
+            from {
+                transform: translateX(0);
+                opacity: 1;
+            }
+            to {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+        }
+    `;
+    document.head.appendChild(style);
 }
-
-// Make functions available globally
-window.startAnalysis = startAnalysis;
-window.displayResults = displayResults;
-window.resetAnalysis = resetAnalysis;
-window.removeFile = removeFile;
-window.toggleDropdown = toggleDropdown;
-window.exportResults = exportResults;
-window.toggleFactCheck = toggleFactCheck;
