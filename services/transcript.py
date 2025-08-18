@@ -5,7 +5,6 @@ Handles cleaning and preprocessing of transcripts
 import re
 import logging
 from typing import List, Dict, Optional
-from youtube_transcript_api import YouTubeTranscriptApi
 
 logger = logging.getLogger(__name__)
 
@@ -13,36 +12,12 @@ class TranscriptProcessor:
     """Process and clean transcripts from various sources"""
     
     def __init__(self):
-        self.youtube_regex = re.compile(
-            r'(?:https?://)?(?:www\.)?(?:youtube\.com/watch\?v=|youtu\.be/|youtube\.com/embed/)([a-zA-Z0-9_-]{11})'
-        )
+        pass
     
     def process(self, input_text: str) -> str:
-        """Process input text or URL and return clean transcript"""
-        # Check if it's a YouTube URL
-        youtube_match = self.youtube_regex.search(input_text)
-        if youtube_match:
-            video_id = youtube_match.group(1)
-            return self.get_youtube_transcript(video_id)
-        
-        # Otherwise, treat as direct transcript
+        """Process input text and return clean transcript"""
+        # Treat all input as direct transcript
         return self.clean_transcript(input_text)
-    
-    def get_youtube_transcript(self, video_id: str) -> str:
-        """Fetch transcript from YouTube video"""
-        try:
-            # Get transcript
-            transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
-            
-            # Combine all segments
-            full_text = ' '.join(segment['text'] for segment in transcript_list)
-            
-            # Clean the transcript
-            return self.clean_transcript(full_text)
-            
-        except Exception as e:
-            logger.error(f"Failed to fetch YouTube transcript: {str(e)}")
-            raise ValueError(f"Could not fetch YouTube transcript: {str(e)}")
     
     def clean_transcript(self, text: str) -> str:
         """Clean and normalize transcript text"""
