@@ -1,0 +1,43 @@
+services:
+  # Main web service
+  - type: web
+    name: transcript-factchecker
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11
+      - key: PORT
+        value: 5000
+      - key: MONGODB_URI
+        fromDatabase:
+          name: factchecker-mongodb
+          property: connectionString
+      - key: MONGODB_DB_NAME
+        value: factchecker
+      - key: REDIS_URL
+        fromService:
+          name: factchecker-redis
+          type: redis
+          property: connectionString
+      - key: GOOGLE_FACTCHECK_API_KEY
+        sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: SECRET_KEY
+        generateValue: true
+    autoDeploy: false
+
+  # Redis service
+  - type: redis
+    name: factchecker-redis
+    ipAllowList: []
+    plan: starter
+    maxmemoryPolicy: allkeys-lru
+
+databases:
+  # MongoDB database
+  - name: factchecker-mongodb
+    databaseName: factchecker
+    user: factchecker
