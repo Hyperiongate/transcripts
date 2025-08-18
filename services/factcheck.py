@@ -300,20 +300,22 @@ class EnhancedFactChecker:
             if not self.openai_api_key:
                 return None
                 
-            import openai
-            openai.api_key = self.openai_api_key
-            
-            # Build context prompt
-            context_info = ""
-            if context:
-                if context.get('speaker'):
-                    context_info += f"Speaker: {context['speaker']}\n"
-                if context.get('date'):
-                    context_info += f"Date: {context['date']}\n"
-                if context.get('topic'):
-                    context_info += f"Topic: {context['topic']}\n"
-            
-            prompt = f"""Analyze this factual claim for accuracy. Be objective and cite-based.
+            # Try new OpenAI API format first
+            try:
+                from openai import OpenAI
+                client = OpenAI(api_key=self.openai_api_key)
+                
+                # Build context prompt
+                context_info = ""
+                if context:
+                    if context.get('speaker'):
+                        context_info += f"Speaker: {context['speaker']}\n"
+                    if context.get('date'):
+                        context_info += f"Date: {context['date']}\n"
+                    if context.get('topic'):
+                        context_info += f"Topic: {context['topic']}\n"
+                
+                prompt = f"""Analyze this factual claim for accuracy. Be objective and cite-based.
 
 {context_info}
 Claim: "{claim}"
@@ -325,19 +327,62 @@ Provide:
 4. Key issue if any
 
 Format: VERDICT|CONFIDENCE|EXPLANATION|ISSUE"""
+                
+                response = client.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {"role": "system", "content": "You are a fact-checker. Be accurate and objective."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.3,
+                    max_tokens=200
+                )
+                
+                # Parse response
+                result_text = response.choices[0].message.content.strip()
+                
+            except Exception:
+                # Fallback to old API format
+                import openai
+                openai.api_key = self.openai_api_key
+                
+                # Build context prompt
+                context_info = ""
+                if context:
+                    if context.get('speaker'):
+                        context_info += f"Speaker: {context['speaker']}\n"
+                    if context.get('date'):
+                        context_info += f"Date: {context['date']}\n"
+                    if context.get('topic'):
+                        context_info += f"Topic: {context['topic']}\n"
+                
+                prompt = f"""Analyze this factual claim for accuracy. Be objective and cite-based.
+
+{context_info}
+Claim: "{claim}"
+
+Provide:
+1. Verdict: true/mostly_true/mixed/mostly_false/false/unverified
+2. Confidence: 0-100
+3. Brief explanation
+4. Key issue if any
+
+Format: VERDICT|CONFIDENCE|EXPLANATION|ISSUE"""
+                
+                response = openai.ChatCompletion.create(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {"role": "system", "content": "You are a fact-checker. Be accurate and objective."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.3,
+                    max_tokens=200
+                )
+                
+                # Parse response
+                result_text = response.choices[0].message.content.strip()
             
-            response = openai.ChatCompletion.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": "You are a fact-checker. Be accurate and objective."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.3,
-                max_tokens=200
-            )
-            
-            # Parse response
-            result_text = response.choices[0].message.content.strip()
+            # Parse the result regardless of which API version was used
             parts = result_text.split('|')
             
             if len(parts) >= 3:
