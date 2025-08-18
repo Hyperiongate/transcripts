@@ -23,7 +23,6 @@ import io
 from services.transcript import TranscriptProcessor
 from services.claims import ClaimExtractor
 from services.factcheck import FactChecker
-from services.youtube_audio_transcriber import YouTubeAudioTranscriber
 from config import Config
 
 # Load environment variables
@@ -51,7 +50,6 @@ redis_client = redis.from_url(Config.REDIS_URL)
 transcript_processor = TranscriptProcessor()
 claim_extractor = ClaimExtractor()
 fact_checker = FactChecker()
-youtube_transcriber = YouTubeAudioTranscriber()
 
 # Enhanced speaker database with current information
 SPEAKER_DATABASE = {
