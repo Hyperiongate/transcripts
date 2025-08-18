@@ -19,9 +19,9 @@ from reportlab.lib.units import inch
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
 import io
 
-# Import services - FIXED: ClaimsExtractor not ClaimExtractor
+# Import services
 from services.transcript import TranscriptProcessor
-from services.claims import ClaimsExtractor
+from services.claims import ClaimExtractor
 from services.factcheck import FactChecker
 from config import Config
 
@@ -48,7 +48,7 @@ redis_client = redis.from_url(Config.REDIS_URL)
 
 # Initialize services
 transcript_processor = TranscriptProcessor()
-claim_extractor = ClaimsExtractor(openai_api_key=Config.OPENAI_API_KEY)  # FIXED: ClaimsExtractor
+claim_extractor = ClaimExtractor(openai_api_key=Config.OPENAI_API_KEY)
 fact_checker = FactChecker(Config)  # Pass Config to FactChecker
 
 # Enhanced speaker database with current information
