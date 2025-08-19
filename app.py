@@ -18,6 +18,9 @@ from reportlab.lib.enums import TA_CENTER, TA_LEFT
 import io
 import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import multiprocessing
+from functools import partial
 
 # Import services
 from services.transcript import TranscriptProcessor
@@ -47,6 +50,9 @@ redis_client = None
 # In-memory storage as fallback
 in_memory_jobs = {}
 in_memory_results = {}
+
+# Create a thread pool for background processing
+executor = ThreadPoolExecutor(max_workers=4)
 
 # Try to connect to MongoDB if configured
 if Config.MONGODB_URI:
@@ -177,12 +183,57 @@ def update_job_progress(job_id, progress, message):
         'updated_at': datetime.now().isoformat()
     })
 
-def process_transcript_async(job_id, transcript, source, metadata):
-    """Process transcript in background thread"""
+def check_single_claim(claim, index, total, job_id, metadata):
+    """Check a single claim and update progress"""
+    try:
+        # Update progress
+        progress = 45 + int((index / total) * 45)  # 45% to 90%
+        update_job_progress(job_id, progress, f'Checking claim {index+1} of {total}')
+        
+        # Create context for this claim
+        claim_context = {
+            'metadata': metadata,
+            'claim_index': index,
+            'total_claims': total
+        }
+        
+        # Check the claim with a shorter timeout
+        fact_check_results = fact_checker.check_claims([claim], context=claim_context)
+        
+        if fact_check_results:
+            return fact_check_results[0]
+        else:
+            return {
+                'claim': claim,
+                'verdict': 'unverified',
+                'confidence': 0,
+                'explanation': 'Unable to verify this claim',
+                'sources': []
+            }
+    except Exception as e:
+        logger.error(f"Error checking claim {index+1}: {str(e)}")
+        return {
+            'claim': claim,
+            'verdict': 'error',
+            'confidence': 0,
+            'explanation': f'Error during fact-check: {str(e)}',
+            'sources': []
+        }
+
+def process_transcript_robust(job_id, transcript, source, metadata):
+    """Process transcript with robust error handling and progress updates"""
     try:
         # Step 3: Extract claims (30-40%)
         update_job_progress(job_id, 30, 'Extracting factual claims...')
-        claims_data = claim_extractor.extract_claims(transcript, max_claims=Config.MAX_CLAIMS_PER_TRANSCRIPT)
+        
+        # Use a timeout for claim extraction
+        try:
+            claims_data = claim_extractor.extract_claims(transcript, max_claims=Config.MAX_CLAIMS_PER_TRANSCRIPT)
+        except Exception as e:
+            logger.error(f"Claim extraction error: {str(e)}")
+            # Fallback to basic extraction
+            sentences = transcript.split('.')
+            claims_data = [{'text': s.strip()} for s in sentences if len(s.strip()) > 50][:20]
         
         # Extract just the claim text for fact checking
         if not claims_data:
@@ -212,47 +263,37 @@ def process_transcript_async(job_id, transcript, source, metadata):
             update_job(job_id, results)
             return
         
-        # Step 4: Fact check claims (40-90%)
+        # Step 4: Fact check claims in smaller batches
         update_job_progress(job_id, 45, f'Starting fact-check of {len(claims)} claims...')
         fact_checks = []
         
-        # Process claims with progress updates
-        for i, claim in enumerate(claims):
-            # Calculate progress
-            progress = 45 + int((i / len(claims)) * 45)  # 45% to 90%
-            update_job_progress(job_id, progress, f'Checking claim {i+1} of {len(claims)}')
+        # Process claims in batches of 5
+        batch_size = 5
+        for i in range(0, len(claims), batch_size):
+            batch = claims[i:i+batch_size]
+            batch_start = i
             
-            # Check individual claim
-            try:
-                # Create a mini context for this claim
-                claim_context = {
-                    'metadata': metadata,
-                    'claim_index': i,
-                    'total_claims': len(claims)
-                }
-                
-                # Check the claim
-                fact_check_results = fact_checker.check_claims([claim], context=claim_context)
-                if fact_check_results:
-                    fact_checks.extend(fact_check_results)
-                else:
-                    # Fallback result if checking fails
+            # Update progress for this batch
+            batch_progress = 45 + int((i / len(claims)) * 45)
+            update_job_progress(job_id, batch_progress, f'Checking claims {i+1} to {min(i+batch_size, len(claims))}')
+            
+            # Check each claim in the batch
+            for j, claim in enumerate(batch):
+                try:
+                    result = check_single_claim(claim, batch_start + j, len(claims), job_id, metadata)
+                    fact_checks.append(result)
+                    
+                    # Small delay to prevent API rate limiting
+                    time.sleep(0.5)
+                except Exception as e:
+                    logger.error(f"Error in batch processing: {str(e)}")
                     fact_checks.append({
                         'claim': claim,
-                        'verdict': 'unverified',
+                        'verdict': 'error',
                         'confidence': 0,
-                        'explanation': 'Unable to verify this claim',
+                        'explanation': 'Processing error',
                         'sources': []
                     })
-            except Exception as e:
-                logger.error(f"Error checking claim {i+1}: {str(e)}")
-                fact_checks.append({
-                    'claim': claim,
-                    'verdict': 'error',
-                    'confidence': 0,
-                    'explanation': f'Error during fact-check: {str(e)}',
-                    'sources': []
-                })
         
         # Step 5: Calculate credibility score (90-95%)
         update_job_progress(job_id, 90, 'Calculating credibility score...')
@@ -297,7 +338,7 @@ def process_transcript_async(job_id, transcript, source, metadata):
         update_job_progress(job_id, 100, 'Analysis complete!')
         
     except Exception as e:
-        logger.error(f"Processing error: {str(e)}")
+        logger.error(f"Processing error for job {job_id}: {str(e)}")
         update_job_progress(job_id, -1, f'Error: {str(e)}')
         update_job(job_id, {'status': 'failed', 'error': str(e)})
 
@@ -354,7 +395,7 @@ def analyze():
         # Store job
         store_job(job_id, job_data)
         
-        # Process initial steps synchronously for immediate feedback
+        # Process initial steps
         try:
             # Step 1: Process transcript (10%)
             update_job_progress(job_id, 10, 'Processing transcript...')
@@ -364,13 +405,20 @@ def analyze():
             update_job_progress(job_id, 20, 'Extracting metadata...')
             metadata = transcript_processor.extract_metadata(processed_transcript)
             
-            # Start async processing for the rest
-            thread = threading.Thread(
-                target=process_transcript_async,
-                args=(job_id, processed_transcript, source, metadata)
+            # Submit to thread pool for processing
+            future = executor.submit(
+                process_transcript_robust,
+                job_id,
+                processed_transcript,
+                source,
+                metadata
             )
-            thread.daemon = True
-            thread.start()
+            
+            # Store the future reference (optional, for tracking)
+            if hasattr(app, 'active_jobs'):
+                app.active_jobs[job_id] = future
+            else:
+                app.active_jobs = {job_id: future}
             
             # Return immediately with job ID
             return jsonify({
@@ -396,6 +444,13 @@ def get_status(job_id):
         job = get_job(job_id)
         if not job:
             return jsonify({'success': False, 'error': 'Job not found'}), 404
+        
+        # Check if job is still active
+        if hasattr(app, 'active_jobs') and job_id in app.active_jobs:
+            future = app.active_jobs[job_id]
+            if future.done():
+                # Clean up completed job
+                del app.active_jobs[job_id]
         
         # Always return current progress
         return jsonify({
@@ -560,10 +615,25 @@ def calculate_credibility_score(fact_checks):
         'unverified_claims': unverified_count
     }
 
+# Cleanup function
+def cleanup_old_jobs():
+    """Clean up old jobs from memory"""
+    if hasattr(app, 'active_jobs'):
+        completed = []
+        for job_id, future in app.active_jobs.items():
+            if future.done():
+                completed.append(job_id)
+        for job_id in completed:
+            del app.active_jobs[job_id]
+
 if __name__ == '__main__':
     # Validate configuration on startup
     warnings = Config.validate()
     for warning in warnings:
         logger.warning(warning)
+    
+    # Start cleanup thread
+    cleanup_thread = threading.Thread(target=lambda: cleanup_old_jobs(), daemon=True)
+    cleanup_thread.start()
     
     app.run(debug=Config.DEBUG, host='0.0.0.0', port=Config.PORT)
