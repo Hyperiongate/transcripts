@@ -377,6 +377,40 @@ def check_status(job_id):
         **job
     })
 
+@app.route('/api/results/<job_id>')
+def get_results(job_id):
+    """Get analysis results"""
+    try:
+        results = get_job(job_id)
+        if not results:
+            return jsonify({'success': False, 'error': 'Results not found'}), 404
+        
+        if results.get('status') != 'completed':
+            return jsonify({'success': False, 'error': 'Analysis not completed'}), 400
+        
+        # Format the response for the frontend
+        return jsonify({
+            'success': True,
+            'job_id': job_id,
+            'credibility_score': results.get('credibility_score', {}).get('score', 0),
+            'credibility_label': results.get('credibility_score', {}).get('label', 'Unknown'),
+            'total_claims': results.get('total_claims', 0),
+            'true_claims': results.get('credibility_score', {}).get('true_claims', 0),
+            'false_claims': results.get('credibility_score', {}).get('false_claims', 0),
+            'unverified_claims': results.get('credibility_score', {}).get('unverified_claims', 0),
+            'fact_checks': results.get('fact_checks', []),
+            'metadata': results.get('metadata', {}),
+            'speakers': results.get('speakers', []),
+            'topics': results.get('topics', []),
+            'speaker_context': results.get('speaker_context', {}),
+            'source': results.get('source', 'Unknown'),
+            'processing_time': results.get('processing_time', 0),
+            'completed_at': results.get('completed_at', '')
+        })
+    except Exception as e:
+        logger.error(f"Results retrieval error: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
+
 @app.route('/api/export/<job_id>/<format>')
 def export_results(job_id, format):
     """Export results in different formats"""
@@ -542,13 +576,17 @@ def export_results(job_id, format):
                 as_attachment=True,
                 download_name=f'fact_check_report_{job_id}.pdf'
             )
-            
         else:
             return jsonify({'error': 'Invalid format'}), 400
             
     except Exception as e:
         logger.error(f"Export error: {str(e)}")
         return jsonify({'error': 'Export failed'}), 500
+
+@app.route('/api/export/<job_id>/pdf')
+def export_pdf(job_id):
+    """Direct PDF export endpoint for backward compatibility"""
+    return export_results(job_id, 'pdf')
 
 # Helper functions for analysis
 def calculate_credibility_score(fact_checks: List[Dict]) -> Dict:
