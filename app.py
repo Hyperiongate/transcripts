@@ -106,35 +106,33 @@ SPEAKER_DATABASE = {
     },
     'joe biden': {
         'full_name': 'Joseph R. Biden Jr.',
-        'role': '46th President of the United States',
+        'role': '46th President of the United States (2021-2025)',
         'party': 'Democrat',
         'criminal_record': None,
         'fraud_history': None,
-        'fact_check_history': 'Occasional misstatements and gaffes',
-        'credibility_notes': 'Generally factual with some exaggerations'
+        'fact_check_history': 'Generally accurate with occasional misstatements',
+        'credibility_notes': 'Former President'
     },
     'kamala harris': {
         'full_name': 'Kamala D. Harris',
-        'role': 'Former Vice President of the United States',
+        'role': 'Former Vice President of the United States (2021-2025)',
         'party': 'Democrat',
         'criminal_record': None,
         'fraud_history': None,
-        'fact_check_history': 'Generally accurate with some misleading claims',
-        'credibility_notes': 'Former VP (2021-2025)'
+        'fact_check_history': 'Generally accurate',
+        'credibility_notes': 'Former Vice President'
     }
 }
 
-# Storage helper functions
+# Helper functions
 def store_job(job_id: str, job_data: dict):
-    """Store job data"""
+    """Store job in database or memory"""
     try:
         if jobs_collection:
-            job_data['_id'] = job_id
-            jobs_collection.insert_one(job_data)
+            jobs_collection.insert_one({'_id': job_id, **job_data})
         else:
             in_memory_jobs[job_id] = job_data
         
-        # Also store in Redis for fast access
         if redis_client:
             redis_client.setex(f"job:{job_id}", 3600, json.dumps(job_data))
     except Exception as e:
@@ -142,9 +140,9 @@ def store_job(job_id: str, job_data: dict):
         in_memory_jobs[job_id] = job_data
 
 def get_job(job_id: str) -> dict:
-    """Retrieve job data"""
+    """Get job from database or memory"""
     try:
-        # Try Redis first
+        # Try Redis first for speed
         if redis_client:
             cached = redis_client.get(f"job:{job_id}")
             if cached:
@@ -157,22 +155,25 @@ def get_job(job_id: str) -> dict:
                 job.pop('_id', None)
                 return job
         
-        # Fallback to in-memory
+        # Fallback to memory
         return in_memory_jobs.get(job_id)
     except Exception as e:
-        logger.error(f"Error retrieving job: {e}")
+        logger.error(f"Error getting job: {e}")
         return in_memory_jobs.get(job_id)
 
 def update_job(job_id: str, updates: dict):
-    """Update job data"""
+    """Update job in database or memory"""
     try:
         if jobs_collection:
-            jobs_collection.update_one({'_id': job_id}, {'$set': updates})
+            jobs_collection.update_one(
+                {'_id': job_id},
+                {'$set': updates}
+            )
         else:
             if job_id in in_memory_jobs:
                 in_memory_jobs[job_id].update(updates)
         
-        # Update Redis cache
+        # Update cache
         if redis_client:
             job_data = get_job(job_id)
             if job_data:
@@ -362,187 +363,208 @@ def process_transcript_async(job_id: str, transcript: str, source: str):
         update_job(job_id, {'status': 'failed', 'error': str(e)})
 
 @app.route('/api/status/<job_id>')
-def get_status(job_id):
-    """Get job status"""
-    try:
-        job = get_job(job_id)
-        if not job:
-            return jsonify({'success': False, 'error': 'Job not found'}), 404
-        
-        return jsonify({
-            'success': True,
-            'status': job.get('status'),
-            'progress': job.get('progress', 0),
-            'message': job.get('message', ''),
-            'error': job.get('error')
-        })
-    except Exception as e:
-        logger.error(f"Status check error: {str(e)}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+def check_status(job_id):
+    """Check job status"""
+    job = get_job(job_id)
+    
+    if not job:
+        return jsonify({'success': False, 'error': 'Job not found'}), 404
+    
+    return jsonify({
+        'success': True,
+        'job_id': job_id,
+        **job
+    })
 
-@app.route('/api/results/<job_id>')
-def get_results(job_id):
-    """Get analysis results"""
+@app.route('/api/export/<job_id>/<format>')
+def export_results(job_id, format):
+    """Export results in different formats"""
+    job = get_job(job_id)
+    
+    if not job or job.get('status') != 'completed':
+        return jsonify({'error': 'Results not available'}), 404
+    
     try:
-        results = get_job(job_id)
-        if not results:
-            return jsonify({'success': False, 'error': 'Results not found'}), 404
-        
-        if results.get('status') != 'completed':
-            return jsonify({'success': False, 'error': 'Analysis not completed'}), 400
-        
-        # Ensure all required fields
-        results['success'] = True
-        results['job_id'] = job_id
-        
-        return jsonify(results)
-    except Exception as e:
-        logger.error(f"Results retrieval error: {str(e)}")
-        return jsonify({'success': False, 'error': str(e)}), 500
-
-@app.route('/api/export/<job_id>/pdf')
-def export_pdf(job_id):
-    """Export fact-check results as PDF"""
-    try:
-        # Get job results
-        results = get_job(job_id)
-        if not results or results['status'] != 'completed':
-            return jsonify({'success': False, 'error': 'Results not available'}), 404
-        
-        # Create PDF
-        buffer = io.BytesIO()
-        doc = SimpleDocTemplate(buffer, pagesize=letter)
-        elements = []
-        
-        # Styles
-        styles = getSampleStyleSheet()
-        title_style = ParagraphStyle(
-            'CustomTitle',
-            parent=styles['Heading1'],
-            fontSize=24,
-            textColor=colors.HexColor('#1a202c'),
-            spaceAfter=30,
-            alignment=TA_CENTER
-        )
-        
-        # Title
-        elements.append(Paragraph("Transcript Fact Check Report", title_style))
-        elements.append(Spacer(1, 0.5*inch))
-        
-        # Summary info
-        summary_data = [
-            ['Report Generated:', datetime.now().strftime('%Y-%m-%d %H:%M')],
-            ['Source:', results.get('source', 'Unknown')],
-            ['Total Claims:', str(results.get('total_claims', 0))],
-            ['Processing Time:', f"{results.get('processing_time', 0):.1f} seconds"]
-        ]
-        
-        summary_table = Table(summary_data, colWidths=[2*inch, 4*inch])
-        summary_table.setStyle(TableStyle([
-            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, -1), 10),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
-        ]))
-        
-        elements.append(summary_table)
-        elements.append(Spacer(1, 0.3*inch))
-        
-        # Credibility Score
-        score_data = results.get('credibility_score', {})
-        score_para = Paragraph(
-            f"<b>Overall Credibility Score: {score_data.get('score', 0)}%</b> - {score_data.get('label', 'Unknown')}",
-            styles['Heading2']
-        )
-        elements.append(score_para)
-        elements.append(Spacer(1, 0.2*inch))
-        
-        # Score breakdown
-        breakdown_data = [
-            ['Metric', 'Count'],
-            ['True Claims', str(score_data.get('true_claims', 0))],
-            ['False Claims', str(score_data.get('false_claims', 0))],
-            ['Unverified Claims', str(score_data.get('unverified_claims', 0))]
-        ]
-        
-        breakdown_table = Table(breakdown_data, colWidths=[2*inch, 1*inch])
-        breakdown_table.setStyle(TableStyle([
-            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, -1), 10),
-            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
-            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
-        ]))
-        
-        elements.append(breakdown_table)
-        elements.append(PageBreak())
-        
-        # Detailed fact checks
-        elements.append(Paragraph("Detailed Fact Check Results", styles['Heading2']))
-        elements.append(Spacer(1, 0.2*inch))
-        
-        for i, fc in enumerate(results.get('fact_checks', []), 1):
-            # Claim
-            claim_text = fc.get('claim', 'No claim text')
-            elements.append(Paragraph(f"<b>Claim {i}:</b> {claim_text}", styles['Normal']))
-            elements.append(Spacer(1, 0.1*inch))
+        if format == 'json':
+            # JSON export
+            return jsonify({
+                'transcript_source': job.get('source', 'Unknown'),
+                'analysis_date': job.get('completed_at', datetime.now().isoformat()),
+                'credibility_score': job.get('credibility_score', {}),
+                'fact_checks': job.get('fact_checks', []),
+                'metadata': job.get('metadata', {}),
+                'processing_time': job.get('processing_time', 0)
+            })
             
-            # Verdict
-            verdict_color = {
-                'true': colors.green,
-                'mostly_true': colors.lightgreen,
-                'mixed': colors.orange,
-                'mostly_false': colors.orangered,
-                'false': colors.red,
-                'unverified': colors.grey
-            }.get(fc.get('verdict', 'unverified'), colors.grey)
+        elif format == 'txt':
+            # Text export
+            output = []
+            output.append("TRANSCRIPT FACT CHECK REPORT")
+            output.append("=" * 50)
+            output.append(f"Date: {job.get('completed_at', datetime.now().isoformat())}")
+            output.append(f"Source: {job.get('source', 'Unknown')}")
+            output.append(f"Processing Time: {job.get('processing_time', 0):.1f} seconds")
+            output.append("")
             
-            verdict_para = Paragraph(
-                f"<b>Verdict:</b> <font color='{verdict_color}'>{fc.get('verdict', 'unverified').replace('_', ' ').title()}</font>",
-                styles['Normal']
+            # Credibility Score
+            score = job.get('credibility_score', {})
+            output.append(f"OVERALL CREDIBILITY: {score.get('label', 'Unknown')} ({score.get('score', 0)}%)")
+            output.append(f"True Claims: {score.get('true_claims', 0)}")
+            output.append(f"False Claims: {score.get('false_claims', 0)}")
+            output.append(f"Unverified: {score.get('unverified_claims', 0)}")
+            output.append("")
+            
+            # Fact Checks
+            output.append("FACT CHECK DETAILS:")
+            output.append("-" * 50)
+            
+            for i, fc in enumerate(job.get('fact_checks', []), 1):
+                output.append(f"\n{i}. CLAIM: {fc.get('claim', 'N/A')}")
+                output.append(f"   VERDICT: {fc.get('verdict', 'Unknown').upper()}")
+                if fc.get('explanation'):
+                    output.append(f"   EXPLANATION: {fc.get('explanation')}")
+                if fc.get('sources'):
+                    output.append(f"   SOURCES: {', '.join(fc.get('sources', []))}")
+            
+            response = io.BytesIO()
+            response.write('\n'.join(output).encode('utf-8'))
+            response.seek(0)
+            
+            return send_file(
+                response,
+                mimetype='text/plain',
+                as_attachment=True,
+                download_name=f'fact_check_report_{job_id}.txt'
             )
-            elements.append(verdict_para)
             
-            # Explanation
-            if fc.get('explanation'):
-                elements.append(Paragraph(f"<b>Explanation:</b> {fc.get('explanation')}", styles['Normal']))
+        elif format == 'pdf':
+            # PDF export
+            buffer = io.BytesIO()
+            doc = SimpleDocTemplate(buffer, pagesize=letter)
+            story = []
+            styles = getSampleStyleSheet()
             
-            # Sources
-            if fc.get('sources'):
-                sources_text = ", ".join(fc.get('sources', []))
-                elements.append(Paragraph(f"<b>Sources:</b> {sources_text}", styles['Normal']))
+            # Title
+            title_style = ParagraphStyle(
+                'CustomTitle',
+                parent=styles['Heading1'],
+                fontSize=24,
+                textColor=colors.HexColor('#1a73e8'),
+                spaceAfter=30,
+                alignment=TA_CENTER
+            )
+            story.append(Paragraph("Transcript Fact Check Report", title_style))
+            story.append(Spacer(1, 20))
             
-            elements.append(Spacer(1, 0.3*inch))
-        
-        # Build PDF
-        doc.build(elements)
-        buffer.seek(0)
-        
-        return send_file(
-            buffer,
-            mimetype='application/pdf',
-            as_attachment=True,
-            download_name=f'fact-check-report-{job_id}.pdf'
-        )
-        
+            # Metadata
+            info_style = styles['Normal']
+            story.append(Paragraph(f"<b>Date:</b> {job.get('completed_at', 'N/A')}", info_style))
+            story.append(Paragraph(f"<b>Source:</b> {job.get('source', 'Unknown')}", info_style))
+            story.append(Paragraph(f"<b>Processing Time:</b> {job.get('processing_time', 0):.1f} seconds", info_style))
+            story.append(Spacer(1, 20))
+            
+            # Credibility Score
+            score = job.get('credibility_score', {})
+            score_style = ParagraphStyle(
+                'ScoreStyle',
+                parent=styles['Heading2'],
+                fontSize=18,
+                textColor=colors.HexColor('#34a853'),
+                spaceAfter=10
+            )
+            story.append(Paragraph(f"Overall Credibility: {score.get('label', 'Unknown')} ({score.get('score', 0)}%)", score_style))
+            
+            # Score table
+            score_data = [
+                ['Metric', 'Count'],
+                ['True Claims', score.get('true_claims', 0)],
+                ['False Claims', score.get('false_claims', 0)],
+                ['Unverified Claims', score.get('unverified_claims', 0)]
+            ]
+            
+            score_table = Table(score_data, colWidths=[200, 100])
+            score_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 12),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+                ('GRID', (0, 0), (-1, -1), 1, colors.black)
+            ]))
+            story.append(score_table)
+            story.append(Spacer(1, 30))
+            
+            # Fact Checks
+            story.append(Paragraph("Fact Check Details", styles['Heading2']))
+            story.append(Spacer(1, 10))
+            
+            for i, fc in enumerate(job.get('fact_checks', []), 1):
+                claim_style = ParagraphStyle(
+                    'ClaimStyle',
+                    parent=styles['Normal'],
+                    fontSize=11,
+                    leftIndent=20,
+                    rightIndent=20,
+                    spaceAfter=5
+                )
+                
+                # Determine color based on verdict
+                verdict = fc.get('verdict', 'unknown').lower()
+                if verdict in ['true', 'correct', 'accurate']:
+                    verdict_color = '#34a853'
+                elif verdict in ['false', 'incorrect', 'inaccurate']:
+                    verdict_color = '#ea4335'
+                else:
+                    verdict_color = '#fbbc04'
+                
+                story.append(Paragraph(f"<b>{i}. Claim:</b> {fc.get('claim', 'N/A')}", claim_style))
+                story.append(Paragraph(f"<b>Verdict:</b> <font color='{verdict_color}'>{fc.get('verdict', 'Unknown').upper()}</font>", claim_style))
+                
+                if fc.get('explanation'):
+                    story.append(Paragraph(f"<b>Explanation:</b> {fc.get('explanation')}", claim_style))
+                
+                if fc.get('sources'):
+                    sources_text = ', '.join(fc.get('sources', []))
+                    story.append(Paragraph(f"<b>Sources:</b> {sources_text}", claim_style))
+                
+                story.append(Spacer(1, 15))
+            
+            # Build PDF
+            doc.build(story)
+            buffer.seek(0)
+            
+            return send_file(
+                buffer,
+                mimetype='application/pdf',
+                as_attachment=True,
+                download_name=f'fact_check_report_{job_id}.pdf'
+            )
+            
+        else:
+            return jsonify({'error': 'Invalid format'}), 400
+            
     except Exception as e:
-        logger.error(f"PDF export error: {str(e)}")
-        return jsonify({'success': False, 'error': str(e)}), 500
+        logger.error(f"Export error: {str(e)}")
+        return jsonify({'error': 'Export failed'}), 500
 
-def calculate_credibility_score(fact_checks):
-    """Calculate overall credibility score from fact checks"""
+# Helper functions for analysis
+def calculate_credibility_score(fact_checks: List[Dict]) -> Dict:
+    """Calculate overall credibility score"""
     if not fact_checks:
         return {
-            'score': 100,
-            'label': 'No Claims to Verify',
+            'score': 0,
+            'label': 'No claims verified',
             'true_claims': 0,
             'false_claims': 0,
             'unverified_claims': 0
         }
     
-    true_count = sum(1 for fc in fact_checks if fc.get('verdict', '').lower() in ['true', 'mostly true', 'mostly_true'])
-    false_count = sum(1 for fc in fact_checks if fc.get('verdict', '').lower() in ['false', 'mostly false', 'mostly_false', 'misleading', 'deceptive'])
-    mixed_count = sum(1 for fc in fact_checks if fc.get('verdict', '').lower() == 'mixed')
+    # Count verdicts
+    true_count = sum(1 for fc in fact_checks if fc.get('verdict', '').lower() in ['true', 'mostly true', 'correct', 'accurate'])
+    false_count = sum(1 for fc in fact_checks if fc.get('verdict', '').lower() in ['false', 'mostly false', 'incorrect', 'inaccurate'])
+    mixed_count = sum(1 for fc in fact_checks if fc.get('verdict', '').lower() in ['mixed', 'partially true', 'half true'] or fc.get('rating', '').lower() == 'mixed')
     unverified_count = sum(1 for fc in fact_checks if fc.get('verdict', '').lower() in ['unverified', 'unsubstantiated', 'lacks_context'])
     
     total = len(fact_checks)
@@ -609,4 +631,8 @@ if __name__ == '__main__':
     for warning in warnings:
         logger.warning(warning)
     
-    app.run(debug=Config.DEBUG, host='0.0.0.0', port=Config.PORT)
+    # Use environment variable PORT if available (for Render)
+    port = int(os.environ.get('PORT', Config.PORT))
+    
+    # Run the app
+    app.run(debug=Config.DEBUG, host='0.0.0.0', port=port)
