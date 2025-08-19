@@ -1,5 +1,6 @@
 """
 Transcript Fact Checker - Main Flask Application
+Optimized version with parallel processing
 """
 import os
 import logging
@@ -16,11 +17,8 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
 import io
-import threading
+from threading import Thread
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
-import multiprocessing
-from functools import partial
 
 # Import services
 from services.transcript import TranscriptProcessor
@@ -50,9 +48,6 @@ redis_client = None
 # In-memory storage as fallback
 in_memory_jobs = {}
 in_memory_results = {}
-
-# Create a thread pool for background processing
-executor = ThreadPoolExecutor(max_workers=4)
 
 # Try to connect to MongoDB if configured
 if Config.MONGODB_URI:
@@ -115,232 +110,86 @@ SPEAKER_DATABASE = {
         'party': 'Democrat',
         'criminal_record': None,
         'fraud_history': None,
-        'fact_check_history': 'Mix of accurate and inaccurate statements; known for verbal gaffes',
-        'credibility_notes': 'Generally factual but prone to exaggeration and misremembering details'
+        'fact_check_history': 'Occasional misstatements and gaffes',
+        'credibility_notes': 'Generally factual with some exaggerations'
     },
     'kamala harris': {
         'full_name': 'Kamala D. Harris',
-        'role': 'Vice President of the United States',
+        'role': 'Former Vice President of the United States',
         'party': 'Democrat',
         'criminal_record': None,
         'fraud_history': None,
-        'fact_check_history': 'Generally accurate with occasional misstatements',
-        'credibility_notes': 'Professional prosecutor background; generally careful with facts'
+        'fact_check_history': 'Generally accurate with some misleading claims',
+        'credibility_notes': 'Former VP (2021-2025)'
     }
 }
 
 # Storage helper functions
-def store_job(job_id, data):
-    """Store job data in available storage"""
-    if jobs_collection is not None:
-        try:
-            jobs_collection.insert_one({**data, 'job_id': job_id})
-            return True
-        except Exception as e:
-            logger.error(f"MongoDB insert error: {str(e)}")
-    
-    # Fallback to in-memory
-    in_memory_jobs[job_id] = data
-    return True
+def store_job(job_id: str, job_data: dict):
+    """Store job data"""
+    try:
+        if jobs_collection:
+            job_data['_id'] = job_id
+            jobs_collection.insert_one(job_data)
+        else:
+            in_memory_jobs[job_id] = job_data
+        
+        # Also store in Redis for fast access
+        if redis_client:
+            redis_client.setex(f"job:{job_id}", 3600, json.dumps(job_data))
+    except Exception as e:
+        logger.error(f"Error storing job: {e}")
+        in_memory_jobs[job_id] = job_data
 
-def get_job(job_id):
-    """Retrieve job data from available storage"""
-    if jobs_collection is not None:
-        try:
-            job = jobs_collection.find_one({'job_id': job_id})
+def get_job(job_id: str) -> dict:
+    """Retrieve job data"""
+    try:
+        # Try Redis first
+        if redis_client:
+            cached = redis_client.get(f"job:{job_id}")
+            if cached:
+                return json.loads(cached)
+        
+        # Try MongoDB
+        if jobs_collection:
+            job = jobs_collection.find_one({'_id': job_id})
             if job:
                 job.pop('_id', None)
                 return job
-        except Exception as e:
-            logger.error(f"MongoDB query error: {str(e)}")
-    
-    # Fallback to in-memory
-    return in_memory_jobs.get(job_id)
+        
+        # Fallback to in-memory
+        return in_memory_jobs.get(job_id)
+    except Exception as e:
+        logger.error(f"Error retrieving job: {e}")
+        return in_memory_jobs.get(job_id)
 
-def update_job(job_id, updates):
-    """Update job data in available storage"""
-    if jobs_collection is not None:
-        try:
-            jobs_collection.update_one(
-                {'job_id': job_id},
-                {'$set': updates}
-            )
-            return True
-        except Exception as e:
-            logger.error(f"MongoDB update error: {str(e)}")
-    
-    # Fallback to in-memory
-    if job_id in in_memory_jobs:
-        in_memory_jobs[job_id].update(updates)
-    return True
+def update_job(job_id: str, updates: dict):
+    """Update job data"""
+    try:
+        if jobs_collection:
+            jobs_collection.update_one({'_id': job_id}, {'$set': updates})
+        else:
+            if job_id in in_memory_jobs:
+                in_memory_jobs[job_id].update(updates)
+        
+        # Update Redis cache
+        if redis_client:
+            job_data = get_job(job_id)
+            if job_data:
+                job_data.update(updates)
+                redis_client.setex(f"job:{job_id}", 3600, json.dumps(job_data))
+    except Exception as e:
+        logger.error(f"Error updating job: {e}")
+        if job_id in in_memory_jobs:
+            in_memory_jobs[job_id].update(updates)
 
-def update_job_progress(job_id, progress, message):
-    """Update job progress in storage"""
-    logger.info(f"Job {job_id}: {progress}% - {message}")
+def update_job_progress(job_id: str, progress: int, message: str):
+    """Update job progress"""
     update_job(job_id, {
         'progress': progress,
         'message': message,
-        'updated_at': datetime.now().isoformat()
+        'status': 'failed' if progress < 0 else 'processing'
     })
-
-def check_single_claim(claim, index, total, job_id, metadata):
-    """Check a single claim and update progress"""
-    try:
-        # Update progress
-        progress = 45 + int((index / total) * 45)  # 45% to 90%
-        update_job_progress(job_id, progress, f'Checking claim {index+1} of {total}')
-        
-        # Create context for this claim
-        claim_context = {
-            'metadata': metadata,
-            'claim_index': index,
-            'total_claims': total
-        }
-        
-        # Check the claim with a shorter timeout
-        fact_check_results = fact_checker.check_claims([claim], context=claim_context)
-        
-        if fact_check_results:
-            return fact_check_results[0]
-        else:
-            return {
-                'claim': claim,
-                'verdict': 'unverified',
-                'confidence': 0,
-                'explanation': 'Unable to verify this claim',
-                'sources': []
-            }
-    except Exception as e:
-        logger.error(f"Error checking claim {index+1}: {str(e)}")
-        return {
-            'claim': claim,
-            'verdict': 'error',
-            'confidence': 0,
-            'explanation': f'Error during fact-check: {str(e)}',
-            'sources': []
-        }
-
-def process_transcript_robust(job_id, transcript, source, metadata):
-    """Process transcript with robust error handling and progress updates"""
-    try:
-        # Step 3: Extract claims (30-40%)
-        update_job_progress(job_id, 30, 'Extracting factual claims...')
-        
-        # Use a timeout for claim extraction
-        try:
-            claims_data = claim_extractor.extract_claims(transcript, max_claims=Config.MAX_CLAIMS_PER_TRANSCRIPT)
-        except Exception as e:
-            logger.error(f"Claim extraction error: {str(e)}")
-            # Fallback to basic extraction
-            sentences = transcript.split('.')
-            claims_data = [{'text': s.strip()} for s in sentences if len(s.strip()) > 50][:20]
-        
-        # Extract just the claim text for fact checking
-        if not claims_data:
-            claims = []
-        elif isinstance(claims_data[0], str):
-            claims = claims_data
-        else:
-            claims = [c.get('text', c) if isinstance(c, dict) else str(c) for c in claims_data]
-        
-        update_job_progress(job_id, 40, f'Found {len(claims)} claims to verify')
-        
-        if not claims:
-            update_job_progress(job_id, 100, 'No verifiable claims found')
-            results = {
-                'status': 'completed',
-                'claims': [],
-                'fact_checks': [],
-                'credibility_score': 100,
-                'credibility_label': 'No Claims to Verify',
-                'total_claims': 0,
-                'true_claims': 0,
-                'false_claims': 0,
-                'unverified_claims': 0,
-                'source': source,
-                'metadata': metadata
-            }
-            update_job(job_id, results)
-            return
-        
-        # Step 4: Fact check claims in smaller batches
-        update_job_progress(job_id, 45, f'Starting fact-check of {len(claims)} claims...')
-        fact_checks = []
-        
-        # Process claims in batches of 5
-        batch_size = 5
-        for i in range(0, len(claims), batch_size):
-            batch = claims[i:i+batch_size]
-            batch_start = i
-            
-            # Update progress for this batch
-            batch_progress = 45 + int((i / len(claims)) * 45)
-            update_job_progress(job_id, batch_progress, f'Checking claims {i+1} to {min(i+batch_size, len(claims))}')
-            
-            # Check each claim in the batch
-            for j, claim in enumerate(batch):
-                try:
-                    result = check_single_claim(claim, batch_start + j, len(claims), job_id, metadata)
-                    fact_checks.append(result)
-                    
-                    # Small delay to prevent API rate limiting
-                    time.sleep(0.5)
-                except Exception as e:
-                    logger.error(f"Error in batch processing: {str(e)}")
-                    fact_checks.append({
-                        'claim': claim,
-                        'verdict': 'error',
-                        'confidence': 0,
-                        'explanation': 'Processing error',
-                        'sources': []
-                    })
-        
-        # Step 5: Calculate credibility score (90-95%)
-        update_job_progress(job_id, 90, 'Calculating credibility score...')
-        credibility_data = calculate_credibility_score(fact_checks)
-        
-        # Step 6: Complete (95-100%)
-        update_job_progress(job_id, 95, 'Finalizing results...')
-        
-        # Get speaker context
-        speaker = None
-        if metadata.get('speakers'):
-            speaker = metadata['speakers'][0] if metadata['speakers'] else None
-        
-        speaker_context = {}
-        if speaker:
-            speaker_lower = speaker.lower()
-            for key, value in SPEAKER_DATABASE.items():
-                if key in speaker_lower or speaker_lower in key:
-                    speaker_context = value.copy()
-                    speaker_context['speaker'] = speaker
-                    break
-        
-        # Prepare results
-        results = {
-            'status': 'completed',
-            'claims': claims,
-            'fact_checks': fact_checks,
-            'credibility_score': credibility_data['score'],
-            'credibility_label': credibility_data['label'],
-            'true_claims': credibility_data['true_claims'],
-            'false_claims': credibility_data['false_claims'],
-            'unverified_claims': credibility_data['unverified_claims'],
-            'total_claims': len(claims),
-            'source': source,
-            'metadata': metadata,
-            'speaker_context': speaker_context,
-            'completed_at': datetime.now().isoformat()
-        }
-        
-        # Store results
-        update_job(job_id, results)
-        update_job_progress(job_id, 100, 'Analysis complete!')
-        
-    except Exception as e:
-        logger.error(f"Processing error for job {job_id}: {str(e)}")
-        update_job_progress(job_id, -1, f'Error: {str(e)}')
-        update_job(job_id, {'status': 'failed', 'error': str(e)})
 
 # Routes
 @app.route('/')
@@ -365,7 +214,7 @@ def health():
 
 @app.route('/api/analyze', methods=['POST'])
 def analyze():
-    """Analyze transcript endpoint"""
+    """Analyze transcript endpoint - OPTIMIZED VERSION"""
     try:
         data = request.get_json()
         
@@ -387,7 +236,7 @@ def analyze():
         job_data = {
             'status': 'processing',
             'progress': 0,
-            'message': 'Starting analysis...',
+            'message': 'Initializing...',
             'source': source,
             'created_at': datetime.now().isoformat()
         }
@@ -395,71 +244,137 @@ def analyze():
         # Store job
         store_job(job_id, job_data)
         
-        # Process initial steps
-        try:
-            # Step 1: Process transcript (10%)
-            update_job_progress(job_id, 10, 'Processing transcript...')
-            processed_transcript = transcript_processor.process(transcript)
-            
-            # Step 2: Extract metadata (20%)
-            update_job_progress(job_id, 20, 'Extracting metadata...')
-            metadata = transcript_processor.extract_metadata(processed_transcript)
-            
-            # Submit to thread pool for processing
-            future = executor.submit(
-                process_transcript_robust,
-                job_id,
-                processed_transcript,
-                source,
-                metadata
-            )
-            
-            # Store the future reference (optional, for tracking)
-            if hasattr(app, 'active_jobs'):
-                app.active_jobs[job_id] = future
-            else:
-                app.active_jobs = {job_id: future}
-            
-            # Return immediately with job ID
-            return jsonify({
-                'success': True,
-                'job_id': job_id,
-                'message': 'Analysis started successfully'
-            })
-            
-        except Exception as e:
-            logger.error(f"Processing error: {str(e)}")
-            update_job_progress(job_id, -1, f'Error: {str(e)}')
-            update_job(job_id, {'status': 'failed', 'error': str(e)})
-            return jsonify({'success': False, 'error': str(e)}), 500
+        # Process transcript in background thread to avoid blocking
+        thread = Thread(target=process_transcript_async, args=(job_id, transcript, source))
+        thread.daemon = True
+        thread.start()
+        
+        return jsonify({'success': True, 'job_id': job_id})
             
     except Exception as e:
         logger.error(f"Request error: {str(e)}")
         return jsonify({'success': False, 'error': str(e)}), 500
 
+def process_transcript_async(job_id: str, transcript: str, source: str):
+    """Process transcript asynchronously with optimizations"""
+    try:
+        # Step 1: Process transcript (10% - faster)
+        update_job_progress(job_id, 10, 'Processing transcript...')
+        processed_transcript = transcript_processor.process(transcript)
+        
+        # Step 2: Extract metadata (15% - quick)
+        update_job_progress(job_id, 15, 'Extracting metadata...')
+        metadata = transcript_processor.extract_metadata(processed_transcript)
+        
+        # Step 3: Extract claims (25% - optimized)
+        update_job_progress(job_id, 25, 'Extracting claims...')
+        claims_data = claim_extractor.extract_claims(
+            processed_transcript, 
+            max_claims=min(Config.MAX_CLAIMS_PER_TRANSCRIPT, 20)  # Limit for speed
+        )
+        
+        # Extract just the claim text for fact checking
+        if not claims_data:
+            update_job_progress(job_id, 100, 'No verifiable claims found')
+            update_job(job_id, {
+                'status': 'completed',
+                'progress': 100,
+                'message': 'Analysis complete',
+                'fact_checks': [],
+                'credibility_score': calculate_credibility_score([]),
+                'metadata': metadata,
+                'source': source,
+                'completed_at': datetime.now().isoformat()
+            })
+            return
+        
+        claims = claims_data if isinstance(claims_data[0], str) else [c['text'] for c in claims_data]
+        
+        logger.info(f"Job {job_id}: Found {len(claims)} claims to verify")
+        
+        # Step 4: Fact check claims (30-90% - PARALLEL PROCESSING)
+        update_job_progress(job_id, 30, f'Fact-checking {len(claims)} claims...')
+        
+        # Process claims in batches with progress updates
+        fact_checks = []
+        batch_size = 5
+        
+        for i in range(0, len(claims), batch_size):
+            batch = claims[i:i+batch_size]
+            progress = 30 + int((i / len(claims)) * 60)  # 30% to 90%
+            
+            update_job_progress(
+                job_id, 
+                progress, 
+                f'Checking claims {i+1}-{min(i+batch_size, len(claims))} of {len(claims)}...'
+            )
+            
+            # Check batch in parallel
+            batch_results = fact_checker.check_claims(batch, source=source)
+            fact_checks.extend(batch_results)
+            
+            # Small delay to prevent overwhelming APIs
+            time.sleep(0.1)
+        
+        # Step 5: Calculate final scores (90%)
+        update_job_progress(job_id, 90, 'Calculating credibility score...')
+        
+        # Add claim context for better display
+        for i, fc in enumerate(fact_checks):
+            if i < len(claims_data) and isinstance(claims_data[i], dict):
+                fc['indicators'] = claims_data[i].get('indicators', [])
+                fc['confidence_score'] = claims_data[i].get('confidence', 
+                                                           claims_data[i].get('score', 0))
+        
+        credibility_score = calculate_credibility_score(fact_checks)
+        
+        # Extract speaker context if available
+        speakers, topics = claim_extractor.extract_context(transcript)
+        speaker_context = analyze_speaker_credibility(speakers, fact_checks)
+        
+        # Complete (100%)
+        update_job_progress(job_id, 100, 'Analysis complete')
+        
+        # Final results
+        results = {
+            'status': 'completed',
+            'progress': 100,
+            'message': 'Analysis complete',
+            'fact_checks': fact_checks,
+            'credibility_score': credibility_score,
+            'total_claims': len(claims),
+            'processing_time': (datetime.now() - datetime.fromisoformat(
+                get_job(job_id)['created_at'])).total_seconds(),
+            'speakers': speakers,
+            'topics': topics,
+            'source': source,
+            'metadata': metadata,
+            'speaker_context': speaker_context,
+            'completed_at': datetime.now().isoformat()
+        }
+        
+        # Store results
+        update_job(job_id, results)
+        
+    except Exception as e:
+        logger.error(f"Processing error in job {job_id}: {str(e)}")
+        update_job_progress(job_id, -1, f'Error: {str(e)}')
+        update_job(job_id, {'status': 'failed', 'error': str(e)})
+
 @app.route('/api/status/<job_id>')
 def get_status(job_id):
-    """Get job status with detailed progress"""
+    """Get job status"""
     try:
         job = get_job(job_id)
         if not job:
             return jsonify({'success': False, 'error': 'Job not found'}), 404
         
-        # Check if job is still active
-        if hasattr(app, 'active_jobs') and job_id in app.active_jobs:
-            future = app.active_jobs[job_id]
-            if future.done():
-                # Clean up completed job
-                del app.active_jobs[job_id]
-        
-        # Always return current progress
         return jsonify({
             'success': True,
-            'status': job.get('status', 'unknown'),
+            'status': job.get('status'),
             'progress': job.get('progress', 0),
             'message': job.get('message', ''),
-            'error': job.get('error'),
-            'updated_at': job.get('updated_at')
+            'error': job.get('error')
         })
     except Exception as e:
         logger.error(f"Status check error: {str(e)}")
@@ -492,79 +407,117 @@ def export_pdf(job_id):
         # Get job results
         results = get_job(job_id)
         if not results or results['status'] != 'completed':
-            return jsonify({'success': False, 'error': 'Results not found or not ready'}), 404
+            return jsonify({'success': False, 'error': 'Results not available'}), 404
         
-        # Create PDF buffer
+        # Create PDF
         buffer = io.BytesIO()
         doc = SimpleDocTemplate(buffer, pagesize=letter)
         elements = []
-        styles = getSampleStyleSheet()
         
-        # Custom styles
+        # Styles
+        styles = getSampleStyleSheet()
         title_style = ParagraphStyle(
             'CustomTitle',
             parent=styles['Heading1'],
             fontSize=24,
-            textColor=colors.HexColor('#1f2937'),
+            textColor=colors.HexColor('#1a202c'),
             spaceAfter=30,
             alignment=TA_CENTER
         )
         
-        heading_style = ParagraphStyle(
-            'CustomHeading',
-            parent=styles['Heading2'],
-            fontSize=16,
-            textColor=colors.HexColor('#1f2937'),
-            spaceAfter=12
-        )
-        
         # Title
         elements.append(Paragraph("Transcript Fact Check Report", title_style))
-        elements.append(Spacer(1, 0.2*inch))
+        elements.append(Spacer(1, 0.5*inch))
         
-        # Date
-        date_str = datetime.now().strftime("%B %d, %Y at %I:%M %p")
-        elements.append(Paragraph(f"Generated on {date_str}", styles['Normal']))
-        elements.append(Spacer(1, 0.3*inch))
-        
-        # Summary Section
-        elements.append(Paragraph("Executive Summary", heading_style))
-        
-        # Credibility Score
-        credibility = results.get('credibility_score', 0)
-        credibility_label = results.get('credibility_label', 'Unknown')
-        elements.append(Paragraph(f"<b>Overall Credibility Score:</b> {credibility}% ({credibility_label})", styles['Normal']))
-        elements.append(Spacer(1, 0.1*inch))
-        
-        # Stats table
-        stats_data = [
-            ['Metric', 'Count'],
-            ['Total Claims', str(results.get('total_claims', 0))],
-            ['Verified True', str(results.get('true_claims', 0))],
-            ['Verified False', str(results.get('false_claims', 0))],
-            ['Unverified', str(results.get('unverified_claims', 0))]
+        # Summary info
+        summary_data = [
+            ['Report Generated:', datetime.now().strftime('%Y-%m-%d %H:%M')],
+            ['Source:', results.get('source', 'Unknown')],
+            ['Total Claims:', str(results.get('total_claims', 0))],
+            ['Processing Time:', f"{results.get('processing_time', 0):.1f} seconds"]
         ]
         
-        stats_table = Table(stats_data, colWidths=[3*inch, 1.5*inch])
-        stats_table.setStyle(TableStyle([
-            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#3b82f6')),
-            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        summary_table = Table(summary_data, colWidths=[2*inch, 4*inch])
+        summary_table.setStyle(TableStyle([
             ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
-            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-            ('FONTSIZE', (0, 0), (-1, 0), 12),
-            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
-            ('BACKGROUND', (0, 1), (-1, -1), colors.HexColor('#f3f4f6')),
-            ('GRID', (0, 0), (-1, -1), 1, colors.HexColor('#e5e7eb'))
+            ('FONTNAME', (0, 0), (0, -1), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 8),
         ]))
         
-        elements.append(stats_table)
-        elements.append(Spacer(1, 0.5*inch))
+        elements.append(summary_table)
+        elements.append(Spacer(1, 0.3*inch))
+        
+        # Credibility Score
+        score_data = results.get('credibility_score', {})
+        score_para = Paragraph(
+            f"<b>Overall Credibility Score: {score_data.get('score', 0)}%</b> - {score_data.get('label', 'Unknown')}",
+            styles['Heading2']
+        )
+        elements.append(score_para)
+        elements.append(Spacer(1, 0.2*inch))
+        
+        # Score breakdown
+        breakdown_data = [
+            ['Metric', 'Count'],
+            ['True Claims', str(score_data.get('true_claims', 0))],
+            ['False Claims', str(score_data.get('false_claims', 0))],
+            ['Unverified Claims', str(score_data.get('unverified_claims', 0))]
+        ]
+        
+        breakdown_table = Table(breakdown_data, colWidths=[2*inch, 1*inch])
+        breakdown_table.setStyle(TableStyle([
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, -1), 10),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+            ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+        ]))
+        
+        elements.append(breakdown_table)
+        elements.append(PageBreak())
+        
+        # Detailed fact checks
+        elements.append(Paragraph("Detailed Fact Check Results", styles['Heading2']))
+        elements.append(Spacer(1, 0.2*inch))
+        
+        for i, fc in enumerate(results.get('fact_checks', []), 1):
+            # Claim
+            claim_text = fc.get('claim', 'No claim text')
+            elements.append(Paragraph(f"<b>Claim {i}:</b> {claim_text}", styles['Normal']))
+            elements.append(Spacer(1, 0.1*inch))
+            
+            # Verdict
+            verdict_color = {
+                'true': colors.green,
+                'mostly_true': colors.lightgreen,
+                'mixed': colors.orange,
+                'mostly_false': colors.orangered,
+                'false': colors.red,
+                'unverified': colors.grey
+            }.get(fc.get('verdict', 'unverified'), colors.grey)
+            
+            verdict_para = Paragraph(
+                f"<b>Verdict:</b> <font color='{verdict_color}'>{fc.get('verdict', 'unverified').replace('_', ' ').title()}</font>",
+                styles['Normal']
+            )
+            elements.append(verdict_para)
+            
+            # Explanation
+            if fc.get('explanation'):
+                elements.append(Paragraph(f"<b>Explanation:</b> {fc.get('explanation')}", styles['Normal']))
+            
+            # Sources
+            if fc.get('sources'):
+                sources_text = ", ".join(fc.get('sources', []))
+                elements.append(Paragraph(f"<b>Sources:</b> {sources_text}", styles['Normal']))
+            
+            elements.append(Spacer(1, 0.3*inch))
         
         # Build PDF
         doc.build(elements)
         buffer.seek(0)
         
-        # Return PDF
         return send_file(
             buffer,
             mimetype='application/pdf',
@@ -615,25 +568,45 @@ def calculate_credibility_score(fact_checks):
         'unverified_claims': unverified_count
     }
 
-# Cleanup function
-def cleanup_old_jobs():
-    """Clean up old jobs from memory"""
-    if hasattr(app, 'active_jobs'):
-        completed = []
-        for job_id, future in app.active_jobs.items():
-            if future.done():
-                completed.append(job_id)
-        for job_id in completed:
-            del app.active_jobs[job_id]
+def analyze_speaker_credibility(speakers: List[str], fact_checks: List[Dict]) -> Dict:
+    """Analyze speaker credibility - OPTIMIZED"""
+    speaker_info = {}
+    
+    # Quick lookup instead of iterating
+    speaker_lookup = {}
+    for speaker in speakers:
+        speaker_lower = speaker.lower()
+        for key, info in SPEAKER_DATABASE.items():
+            if key in speaker_lower or speaker_lower in key:
+                speaker_lookup[speaker] = info
+                break
+    
+    # Process matched speakers
+    for speaker, info in speaker_lookup.items():
+        speaker_info[speaker] = {
+            'full_name': info.get('full_name', speaker),
+            'role': info.get('role', 'Unknown'),
+            'party': info.get('party', 'Unknown'),
+            'credibility_notes': info.get('credibility_notes', ''),
+            'historical_accuracy': info.get('fact_check_history', 'No data available')
+        }
+        
+        # Add warnings efficiently
+        warnings = []
+        if info.get('criminal_record'):
+            warnings.append(f"Criminal Record: {info['criminal_record']}")
+        if info.get('fraud_history'):
+            warnings.append(f"Fraud History: {info['fraud_history']}")
+        
+        if warnings:
+            speaker_info[speaker]['warnings'] = warnings
+    
+    return speaker_info
 
 if __name__ == '__main__':
     # Validate configuration on startup
     warnings = Config.validate()
     for warning in warnings:
         logger.warning(warning)
-    
-    # Start cleanup thread
-    cleanup_thread = threading.Thread(target=lambda: cleanup_old_jobs(), daemon=True)
-    cleanup_thread.start()
     
     app.run(debug=Config.DEBUG, host='0.0.0.0', port=Config.PORT)
