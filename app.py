@@ -16,6 +16,8 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.lib.enums import TA_CENTER, TA_LEFT
 import io
+import threading
+import time
 
 # Import services
 from services.transcript import TranscriptProcessor
@@ -168,11 +170,136 @@ def update_job(job_id, updates):
 
 def update_job_progress(job_id, progress, message):
     """Update job progress in storage"""
+    logger.info(f"Job {job_id}: {progress}% - {message}")
     update_job(job_id, {
         'progress': progress,
         'message': message,
         'updated_at': datetime.now().isoformat()
     })
+
+def process_transcript_async(job_id, transcript, source, metadata):
+    """Process transcript in background thread"""
+    try:
+        # Step 3: Extract claims (30-40%)
+        update_job_progress(job_id, 30, 'Extracting factual claims...')
+        claims_data = claim_extractor.extract_claims(transcript, max_claims=Config.MAX_CLAIMS_PER_TRANSCRIPT)
+        
+        # Extract just the claim text for fact checking
+        if not claims_data:
+            claims = []
+        elif isinstance(claims_data[0], str):
+            claims = claims_data
+        else:
+            claims = [c.get('text', c) if isinstance(c, dict) else str(c) for c in claims_data]
+        
+        update_job_progress(job_id, 40, f'Found {len(claims)} claims to verify')
+        
+        if not claims:
+            update_job_progress(job_id, 100, 'No verifiable claims found')
+            results = {
+                'status': 'completed',
+                'claims': [],
+                'fact_checks': [],
+                'credibility_score': 100,
+                'credibility_label': 'No Claims to Verify',
+                'total_claims': 0,
+                'true_claims': 0,
+                'false_claims': 0,
+                'unverified_claims': 0,
+                'source': source,
+                'metadata': metadata
+            }
+            update_job(job_id, results)
+            return
+        
+        # Step 4: Fact check claims (40-90%)
+        update_job_progress(job_id, 45, f'Starting fact-check of {len(claims)} claims...')
+        fact_checks = []
+        
+        # Process claims with progress updates
+        for i, claim in enumerate(claims):
+            # Calculate progress
+            progress = 45 + int((i / len(claims)) * 45)  # 45% to 90%
+            update_job_progress(job_id, progress, f'Checking claim {i+1} of {len(claims)}')
+            
+            # Check individual claim
+            try:
+                # Create a mini context for this claim
+                claim_context = {
+                    'metadata': metadata,
+                    'claim_index': i,
+                    'total_claims': len(claims)
+                }
+                
+                # Check the claim
+                fact_check_results = fact_checker.check_claims([claim], context=claim_context)
+                if fact_check_results:
+                    fact_checks.extend(fact_check_results)
+                else:
+                    # Fallback result if checking fails
+                    fact_checks.append({
+                        'claim': claim,
+                        'verdict': 'unverified',
+                        'confidence': 0,
+                        'explanation': 'Unable to verify this claim',
+                        'sources': []
+                    })
+            except Exception as e:
+                logger.error(f"Error checking claim {i+1}: {str(e)}")
+                fact_checks.append({
+                    'claim': claim,
+                    'verdict': 'error',
+                    'confidence': 0,
+                    'explanation': f'Error during fact-check: {str(e)}',
+                    'sources': []
+                })
+        
+        # Step 5: Calculate credibility score (90-95%)
+        update_job_progress(job_id, 90, 'Calculating credibility score...')
+        credibility_data = calculate_credibility_score(fact_checks)
+        
+        # Step 6: Complete (95-100%)
+        update_job_progress(job_id, 95, 'Finalizing results...')
+        
+        # Get speaker context
+        speaker = None
+        if metadata.get('speakers'):
+            speaker = metadata['speakers'][0] if metadata['speakers'] else None
+        
+        speaker_context = {}
+        if speaker:
+            speaker_lower = speaker.lower()
+            for key, value in SPEAKER_DATABASE.items():
+                if key in speaker_lower or speaker_lower in key:
+                    speaker_context = value.copy()
+                    speaker_context['speaker'] = speaker
+                    break
+        
+        # Prepare results
+        results = {
+            'status': 'completed',
+            'claims': claims,
+            'fact_checks': fact_checks,
+            'credibility_score': credibility_data['score'],
+            'credibility_label': credibility_data['label'],
+            'true_claims': credibility_data['true_claims'],
+            'false_claims': credibility_data['false_claims'],
+            'unverified_claims': credibility_data['unverified_claims'],
+            'total_claims': len(claims),
+            'source': source,
+            'metadata': metadata,
+            'speaker_context': speaker_context,
+            'completed_at': datetime.now().isoformat()
+        }
+        
+        # Store results
+        update_job(job_id, results)
+        update_job_progress(job_id, 100, 'Analysis complete!')
+        
+    except Exception as e:
+        logger.error(f"Processing error: {str(e)}")
+        update_job_progress(job_id, -1, f'Error: {str(e)}')
+        update_job(job_id, {'status': 'failed', 'error': str(e)})
 
 # Routes
 @app.route('/')
@@ -219,7 +346,7 @@ def analyze():
         job_data = {
             'status': 'processing',
             'progress': 0,
-            'message': 'Initializing...',
+            'message': 'Starting analysis...',
             'source': source,
             'created_at': datetime.now().isoformat()
         }
@@ -227,86 +354,30 @@ def analyze():
         # Store job
         store_job(job_id, job_data)
         
-        # Process transcript
+        # Process initial steps synchronously for immediate feedback
         try:
-            # Step 1: Process transcript (20%)
-            update_job_progress(job_id, 20, 'Processing transcript...')
+            # Step 1: Process transcript (10%)
+            update_job_progress(job_id, 10, 'Processing transcript...')
             processed_transcript = transcript_processor.process(transcript)
             
-            # Step 2: Extract metadata
+            # Step 2: Extract metadata (20%)
+            update_job_progress(job_id, 20, 'Extracting metadata...')
             metadata = transcript_processor.extract_metadata(processed_transcript)
             
-            # Step 3: Extract claims (40%)
-            update_job_progress(job_id, 40, 'Extracting claims...')
-            claims_data = claim_extractor.extract_claims(processed_transcript, max_claims=Config.MAX_CLAIMS_PER_TRANSCRIPT)
+            # Start async processing for the rest
+            thread = threading.Thread(
+                target=process_transcript_async,
+                args=(job_id, processed_transcript, source, metadata)
+            )
+            thread.daemon = True
+            thread.start()
             
-            # Extract just the claim text for fact checking
-            claims = claims_data if isinstance(claims_data[0], str) else [c['text'] for c in claims_data]
-            
-            if not claims:
-                update_job_progress(job_id, 100, 'No verifiable claims found')
-                results = {
-                    'status': 'completed',
-                    'claims': [],
-                    'fact_checks': [],
-                    'credibility_score': 100,
-                    'credibility_label': 'No Claims to Verify',
-                    'total_claims': 0,
-                    'true_claims': 0,
-                    'false_claims': 0,
-                    'unverified_claims': 0,
-                    'source': source,
-                    'metadata': metadata
-                }
-                update_job(job_id, results)
-                return jsonify({'success': True, 'job_id': job_id})
-            
-            # Step 4: Fact check claims (60-90%)
-            update_job_progress(job_id, 60, 'Fact-checking claims...')
-            fact_checks = fact_checker.check_claims(claims, context=metadata)
-            
-            # Step 5: Calculate credibility score (95%)
-            update_job_progress(job_id, 95, 'Calculating credibility score...')
-            credibility_data = calculate_credibility_score(fact_checks)
-            
-            # Step 6: Complete (100%)
-            update_job_progress(job_id, 100, 'Analysis complete')
-            
-            # Get speaker context
-            speaker = None
-            if metadata.get('speakers'):
-                speaker = metadata['speakers'][0] if metadata['speakers'] else None
-            
-            speaker_context = {}
-            if speaker:
-                speaker_lower = speaker.lower()
-                for key, value in SPEAKER_DATABASE.items():
-                    if key in speaker_lower or speaker_lower in key:
-                        speaker_context = value.copy()
-                        speaker_context['speaker'] = speaker
-                        break
-            
-            # Prepare results
-            results = {
-                'status': 'completed',
-                'claims': claims,
-                'fact_checks': fact_checks,
-                'credibility_score': credibility_data['score'],
-                'credibility_label': credibility_data['label'],
-                'true_claims': credibility_data['true_claims'],
-                'false_claims': credibility_data['false_claims'],
-                'unverified_claims': credibility_data['unverified_claims'],
-                'total_claims': len(claims),
-                'source': source,
-                'metadata': metadata,
-                'speaker_context': speaker_context,
-                'completed_at': datetime.now().isoformat()
-            }
-            
-            # Store results
-            update_job(job_id, results)
-            
-            return jsonify({'success': True, 'job_id': job_id})
+            # Return immediately with job ID
+            return jsonify({
+                'success': True,
+                'job_id': job_id,
+                'message': 'Analysis started successfully'
+            })
             
         except Exception as e:
             logger.error(f"Processing error: {str(e)}")
@@ -320,18 +391,20 @@ def analyze():
 
 @app.route('/api/status/<job_id>')
 def get_status(job_id):
-    """Get job status"""
+    """Get job status with detailed progress"""
     try:
         job = get_job(job_id)
         if not job:
             return jsonify({'success': False, 'error': 'Job not found'}), 404
         
+        # Always return current progress
         return jsonify({
             'success': True,
-            'status': job.get('status'),
+            'status': job.get('status', 'unknown'),
             'progress': job.get('progress', 0),
             'message': job.get('message', ''),
-            'error': job.get('error')
+            'error': job.get('error'),
+            'updated_at': job.get('updated_at')
         })
     except Exception as e:
         logger.error(f"Status check error: {str(e)}")
