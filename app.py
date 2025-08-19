@@ -6,6 +6,7 @@ import os
 import logging
 import uuid
 from datetime import datetime
+from typing import List, Dict, Optional, Tuple
 from flask import Flask, render_template, jsonify, request, send_file
 from flask_cors import CORS
 from dotenv import load_dotenv
