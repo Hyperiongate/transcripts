@@ -6,8 +6,6 @@ import re
 import logging
 import requests
 import json
-import asyncio
-import aiohttp
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, TimeoutError, as_completed
@@ -291,66 +289,4 @@ class FactChecker:
             'explanation': 'Error during fact-checking',
             'sources': [],
             'processing_time': 0
-        }
-    
-    # Async version for even better performance (optional)
-    async def check_claims_async(self, claims: List[str]) -> List[Dict]:
-        """Asynchronous claim checking for maximum performance"""
-        async with aiohttp.ClientSession() as session:
-            tasks = []
-            for claim in claims:
-                task = self._check_claim_async(session, claim)
-                tasks.append(task)
-            
-            results = await asyncio.gather(*tasks)
-            return results
-    
-    async def _check_claim_async(self, session: aiohttp.ClientSession, claim: str) -> Dict:
-        """Async single claim check"""
-        # Check cache first
-        cache_key = self._get_cache_key(claim)
-        if cache_key in self.cache:
-            return self.cache[cache_key]
-        
-        # Try Google API
-        if self.google_api_key:
-            url = "https://factchecktools.googleapis.com/v1alpha1/claims:search"
-            params = {
-                'key': self.google_api_key,
-                'query': claim[:200],
-                'pageSize': 5
-            }
-            
-            try:
-                async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=self.api_timeout)) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        if 'claims' in data and data['claims']:
-                            # Process first result
-                            claim_review = data['claims'][0]
-                            if claim_review.get('claimReview'):
-                                review = claim_review['claimReview'][0]
-                                
-                                result = {
-                                    'claim': claim,
-                                    'verdict': self._normalize_verdict(review.get('textualRating', 'unverified')),
-                                    'confidence': 85,
-                                    'explanation': review.get('title', ''),
-                                    'sources': [review.get('publisher', {}).get('name', 'Unknown')],
-                                    'url': review.get('url', '')
-                                }
-                                
-                                # Cache result
-                                self.cache[cache_key] = result
-                                return result
-            except:
-                pass
-        
-        # Fallback result
-        return {
-            'claim': claim,
-            'verdict': 'unverified',
-            'confidence': 0,
-            'explanation': 'Unable to verify',
-            'sources': []
         }
