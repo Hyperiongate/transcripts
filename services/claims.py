@@ -4,6 +4,7 @@ Intelligently extracts factual claims while filtering conversational content
 """
 import re
 import logging
+import json  # FIXED: Added missing import
 import requests
 from typing import List, Dict, Optional, Tuple
 import spacy
@@ -197,7 +198,19 @@ Extract up to {max_claims // len(chunks)} claims from this section."""}
                 
                 # Parse response
                 try:
-                    claims_data = json.loads(response.choices[0].message.content)
+                    content = response.choices[0].message.content
+                    # Try to extract JSON from the response
+                    if content.strip().startswith('['):
+                        claims_data = json.loads(content)
+                    else:
+                        # Try to find JSON array in the response
+                        json_match = re.search(r'\[.*\]', content, re.DOTALL)
+                        if json_match:
+                            claims_data = json.loads(json_match.group())
+                        else:
+                            logger.error(f"No JSON array found in AI response: {content[:200]}")
+                            continue
+                    
                     if isinstance(claims_data, list):
                         for claim_info in claims_data:
                             if isinstance(claim_info, dict) and 'claim' in claim_info:
@@ -208,8 +221,11 @@ Extract up to {max_claims // len(chunks)} claims from this section."""}
                                     'category': claim_info.get('category', 'other'),
                                     'ai_extracted': True
                                 })
-                except:
-                    logger.error("Failed to parse AI response for claims")
+                except json.JSONDecodeError as e:
+                    logger.error(f"Failed to parse AI response for claims: {e}")
+                    logger.error(f"Response content: {response.choices[0].message.content[:500]}")
+                except Exception as e:
+                    logger.error(f"Error processing AI response: {e}")
             
             # Sort by confidence and limit
             all_claims.sort(key=lambda x: x.get('confidence', 0), reverse=True)
@@ -281,7 +297,8 @@ Return as JSON: {{"speakers": [...], "topics": [...]}}"""}
                 )
                 
                 try:
-                    data = json.loads(response.choices[0].message.content)
+                    content = response.choices[0].message.content
+                    data = json.loads(content)
                     return data.get('speakers', []), data.get('topics', [])
                 except:
                     pass
