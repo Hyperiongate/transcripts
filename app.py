@@ -361,21 +361,50 @@ def process_transcript_async(job_id: str, transcript: str, source: str):
     except Exception as e:
         logger.error(f"Processing error in job {job_id}: {str(e)}")
         update_job_progress(job_id, -1, f'Error: {str(e)}')
-        update_job(job_id, {'status': 'failed', 'error': str(e)})
+        update_job(job_id, {'status': 'failed', 'error': str(e)})ror': str(e)})
 
 @app.route('/api/status/<job_id>')
 def check_status(job_id):
     """Check job status"""
-    job = get_job(job_id)
-    
-    if not job:
-        return jsonify({'success': False, 'error': 'Job not found'}), 404
-    
-    return jsonify({
-        'success': True,
-        'job_id': job_id,
-        **job
-    })
+    try:
+        job = get_job(job_id)
+        
+        if not job:
+            return jsonify({'success': False, 'error': 'Job not found'}), 404
+        
+        # If job is completed, return full details including credibility score
+        if job.get('status') == 'completed':
+            # Extract credibility score details for completed jobs
+            cred_score = job.get('credibility_score', {})
+            
+            return jsonify({
+                'success': True,
+                'job_id': job_id,
+                'status': job.get('status'),
+                'progress': job.get('progress', 100),
+                'message': job.get('message', 'Analysis complete'),
+                'credibility_score': cred_score.get('score', 0),
+                'credibility_label': cred_score.get('label', 'Unknown'),
+                'total_claims': job.get('total_claims', 0),
+                'true_claims': cred_score.get('true_claims', 0),
+                'false_claims': cred_score.get('false_claims', 0),
+                'unverified_claims': cred_score.get('unverified_claims', 0),
+                'error': job.get('error')
+            })
+        else:
+            # For processing jobs, return minimal info
+            return jsonify({
+                'success': True,
+                'job_id': job_id,
+                'status': job.get('status'),
+                'progress': job.get('progress', 0),
+                'message': job.get('message', ''),
+                'error': job.get('error')
+            })
+            
+    except Exception as e:
+        logger.error(f"Status check error for job {job_id}: {str(e)}")
+        return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/results/<job_id>')
 def get_results(job_id):
@@ -388,16 +417,19 @@ def get_results(job_id):
         if results.get('status') != 'completed':
             return jsonify({'success': False, 'error': 'Analysis not completed'}), 400
         
+        # Extract credibility score details
+        cred_score = results.get('credibility_score', {})
+        
         # Format the response for the frontend
-        return jsonify({
+        response_data = {
             'success': True,
             'job_id': job_id,
-            'credibility_score': results.get('credibility_score', {}).get('score', 0),
-            'credibility_label': results.get('credibility_score', {}).get('label', 'Unknown'),
+            'credibility_score': cred_score.get('score', 0),
+            'credibility_label': cred_score.get('label', 'Unknown'),
             'total_claims': results.get('total_claims', 0),
-            'true_claims': results.get('credibility_score', {}).get('true_claims', 0),
-            'false_claims': results.get('credibility_score', {}).get('false_claims', 0),
-            'unverified_claims': results.get('credibility_score', {}).get('unverified_claims', 0),
+            'true_claims': cred_score.get('true_claims', 0),
+            'false_claims': cred_score.get('false_claims', 0),
+            'unverified_claims': cred_score.get('unverified_claims', 0),
             'fact_checks': results.get('fact_checks', []),
             'metadata': results.get('metadata', {}),
             'speakers': results.get('speakers', []),
@@ -405,10 +437,20 @@ def get_results(job_id):
             'speaker_context': results.get('speaker_context', {}),
             'source': results.get('source', 'Unknown'),
             'processing_time': results.get('processing_time', 0),
-            'completed_at': results.get('completed_at', '')
-        })
+            'completed_at': results.get('completed_at', ''),
+            'status': results.get('status', 'completed'),
+            'message': results.get('message', 'Analysis complete')
+        }
+        
+        # Log for debugging
+        logger.info(f"Returning results for job {job_id}: credibility_score={response_data['credibility_score']}, total_claims={response_data['total_claims']}")
+        
+        return jsonify(response_data)
+        
     except Exception as e:
-        logger.error(f"Results retrieval error: {str(e)}")
+        logger.error(f"Results retrieval error for job {job_id}: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/export/<job_id>/<format>')
