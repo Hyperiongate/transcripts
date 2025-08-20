@@ -6,29 +6,27 @@ import os
 import logging
 import uuid
 from datetime import datetime
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict
 from flask import Flask, render_template, jsonify, request, send_file
 from flask_cors import CORS
 from dotenv import load_dotenv
 import json
 from reportlab.lib import colors
-from reportlab.lib.pagesizes import letter, A4
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, PageBreak
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
-from reportlab.lib.enums import TA_CENTER, TA_LEFT
+from reportlab.lib.enums import TA_CENTER
 import io
 from threading import Thread
 import time
+import traceback
 
-# Import services
-from services.transcript import TranscriptProcessor
-from services.claims import ClaimExtractor
-from services.factcheck import FactChecker
-from config import Config
-
-# Load environment variables
+# Load environment variables first
 load_dotenv()
+
+# Import configuration
+from config import Config
 
 # Initialize Flask app
 app = Flask(__name__)
@@ -36,7 +34,10 @@ app.config.from_object(Config)
 CORS(app)
 
 # Set up logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=getattr(logging, Config.LOG_LEVEL, logging.INFO),
+    format=Config.LOG_FORMAT
+)
 logger = logging.getLogger(__name__)
 
 # Database initialization with fallback
@@ -80,10 +81,23 @@ if Config.REDIS_URL:
 else:
     logger.info("Redis URL not configured. Using in-memory storage.")
 
-# Initialize services
-transcript_processor = TranscriptProcessor()
-claim_extractor = ClaimExtractor(openai_api_key=Config.OPENAI_API_KEY)
-fact_checker = FactChecker(Config)
+# Import services after configuration is loaded
+try:
+    from services.transcript import TranscriptProcessor
+    from services.claims import ClaimExtractor
+    from services.factcheck import FactChecker
+    
+    # Initialize services
+    transcript_processor = TranscriptProcessor()
+    claim_extractor = ClaimExtractor(openai_api_key=Config.OPENAI_API_KEY)
+    fact_checker = FactChecker(Config)
+    logger.info("Services initialized successfully")
+except ImportError as e:
+    logger.error(f"Failed to import services: {str(e)}")
+    logger.warning("Running in limited mode without services")
+    transcript_processor = None
+    claim_extractor = None
+    fact_checker = None
 
 # Enhanced speaker database
 SPEAKER_DATABASE = {
@@ -132,7 +146,7 @@ def store_job(job_id: str, job_data: dict):
         if jobs_collection:
             jobs_collection.insert_one({'_id': job_id, **job_data})
         else:
-            in_memory_jobs[job_id] = job_data.copy()  # Make a copy to avoid reference issues
+            in_memory_jobs[job_id] = job_data.copy()
             logger.info(f"Stored job {job_id} in memory with status: {job_data.get('status')}")
         
         if redis_client:
@@ -146,22 +160,28 @@ def get_job(job_id: str) -> dict:
     try:
         # Try Redis first for speed
         if redis_client:
-            cached = redis_client.get(f"job:{job_id}")
-            if cached:
-                return json.loads(cached)
+            try:
+                cached = redis_client.get(f"job:{job_id}")
+                if cached:
+                    return json.loads(cached)
+            except Exception as e:
+                logger.warning(f"Redis get failed: {e}")
         
         # Try MongoDB
         if jobs_collection:
-            job = jobs_collection.find_one({'_id': job_id})
-            if job:
-                job.pop('_id', None)
-                return job
+            try:
+                job = jobs_collection.find_one({'_id': job_id})
+                if job:
+                    job.pop('_id', None)
+                    return job
+            except Exception as e:
+                logger.warning(f"MongoDB get failed: {e}")
         
         # Fallback to memory
         job = in_memory_jobs.get(job_id)
         if job:
             logger.info(f"Retrieved job {job_id} from memory with status: {job.get('status')}")
-            return job.copy()  # Return a copy to avoid mutations
+            return job.copy()
         
         logger.warning(f"Job {job_id} not found in any storage")
         return None
@@ -173,13 +193,17 @@ def update_job(job_id: str, updates: dict):
     """Update job in database or memory"""
     try:
         if jobs_collection:
-            jobs_collection.update_one(
-                {'_id': job_id},
-                {'$set': updates}
-            )
+            try:
+                jobs_collection.update_one(
+                    {'_id': job_id},
+                    {'$set': updates}
+                )
+            except Exception as e:
+                logger.warning(f"MongoDB update failed: {e}")
+                if job_id in in_memory_jobs:
+                    in_memory_jobs[job_id].update(updates)
         else:
             if job_id in in_memory_jobs:
-                # For in-memory storage, do a deep update
                 in_memory_jobs[job_id].update(updates)
                 logger.info(f"Updated job {job_id} in memory with: {list(updates.keys())}")
             else:
@@ -187,10 +211,12 @@ def update_job(job_id: str, updates: dict):
         
         # Update cache if exists
         if redis_client:
-            job_data = get_job(job_id)
-            if job_data:
-                job_data.update(updates)
-                redis_client.setex(f"job:{job_id}", 3600, json.dumps(job_data))
+            try:
+                job_data = get_job(job_id)
+                if job_data:
+                    redis_client.setex(f"job:{job_id}", 3600, json.dumps(job_data))
+            except Exception as e:
+                logger.warning(f"Redis update failed: {e}")
     except Exception as e:
         logger.error(f"Error updating job {job_id}: {e}")
         if job_id in in_memory_jobs:
@@ -208,13 +234,18 @@ def update_job_progress(job_id: str, progress: int, message: str):
 @app.route('/')
 def index():
     """Render main page"""
-    return render_template('index.html')
+    try:
+        return render_template('index.html')
+    except Exception as e:
+        logger.error(f"Error rendering index: {e}")
+        return jsonify({'error': 'Failed to load page'}), 500
 
 @app.route('/health')
 def health():
     """Health check endpoint"""
     db_status = "connected" if mongo_client else "in-memory"
     redis_status = "connected" if redis_client else "in-memory"
+    services_status = "available" if all([transcript_processor, claim_extractor, fact_checker]) else "limited"
     
     return jsonify({
         'status': 'healthy',
@@ -222,14 +253,24 @@ def health():
         'storage': {
             'database': db_status,
             'cache': redis_status
-        }
+        },
+        'services': services_status
     })
 
 @app.route('/api/analyze', methods=['POST'])
 def analyze():
     """Analyze transcript endpoint - OPTIMIZED VERSION"""
     try:
+        # Check if services are available
+        if not all([transcript_processor, claim_extractor, fact_checker]):
+            return jsonify({
+                'success': False, 
+                'error': 'Services not available. Please check configuration.'
+            }), 503
+        
         data = request.get_json()
+        if not data:
+            return jsonify({'success': False, 'error': 'No data provided'}), 400
         
         # Validate input
         transcript = data.get('transcript', '').strip()
@@ -239,10 +280,13 @@ def analyze():
             return jsonify({'success': False, 'error': 'No transcript provided'}), 400
         
         if len(transcript) < 50:
-            return jsonify({'success': False, 'error': 'Transcript too short'}), 400
+            return jsonify({'success': False, 'error': 'Transcript too short (minimum 50 characters)'}), 400
         
         if len(transcript) > Config.MAX_TRANSCRIPT_LENGTH:
-            return jsonify({'success': False, 'error': 'Transcript too long'}), 400
+            return jsonify({
+                'success': False, 
+                'error': f'Transcript too long (maximum {Config.MAX_TRANSCRIPT_LENGTH} characters)'
+            }), 400
         
         # Create job
         job_id = str(uuid.uuid4())
@@ -283,7 +327,7 @@ def process_transcript_async(job_id: str, transcript: str, source: str):
         update_job_progress(job_id, 25, 'Extracting claims...')
         claims_data = claim_extractor.extract_claims(
             processed_transcript, 
-            max_claims=min(Config.MAX_CLAIMS_PER_TRANSCRIPT, 20)  # Limit for speed
+            max_claims=min(Config.MAX_CLAIMS_PER_TRANSCRIPT, 20)
         )
         
         # Extract just the claim text for fact checking
@@ -292,11 +336,15 @@ def process_transcript_async(job_id: str, transcript: str, source: str):
             update_job(job_id, {
                 'status': 'completed',
                 'progress': 100,
-                'message': 'Analysis complete',
+                'message': 'Analysis complete - no verifiable claims found',
                 'fact_checks': [],
                 'credibility_score': calculate_credibility_score([]),
                 'metadata': metadata,
                 'source': source,
+                'total_claims': 0,
+                'speakers': [],
+                'topics': [],
+                'speaker_context': {},
                 'completed_at': datetime.now().isoformat()
             })
             return
@@ -314,7 +362,7 @@ def process_transcript_async(job_id: str, transcript: str, source: str):
         
         for i in range(0, len(claims), batch_size):
             batch = claims[i:i+batch_size]
-            progress = 30 + int((i / len(claims)) * 60)  # 30% to 90%
+            progress = 30 + int((i / len(claims)) * 60)
             
             update_job_progress(
                 job_id, 
@@ -342,11 +390,24 @@ def process_transcript_async(job_id: str, transcript: str, source: str):
         credibility_score = calculate_credibility_score(fact_checks)
         
         # Extract speaker context if available
-        speakers, topics = claim_extractor.extract_context(transcript)
+        try:
+            speakers, topics = claim_extractor.extract_context(transcript)
+        except Exception as e:
+            logger.warning(f"Failed to extract context: {e}")
+            speakers, topics = [], []
+        
         speaker_context = analyze_speaker_credibility(speakers, fact_checks)
         
         # Complete (100%)
         update_job_progress(job_id, 100, 'Analysis complete')
+        
+        # Get creation time safely
+        job_creation = get_job(job_id)
+        if job_creation and 'created_at' in job_creation:
+            processing_time = (datetime.now() - datetime.fromisoformat(
+                job_creation['created_at'])).total_seconds()
+        else:
+            processing_time = 0
         
         # Final results
         results = {
@@ -356,8 +417,7 @@ def process_transcript_async(job_id: str, transcript: str, source: str):
             'fact_checks': fact_checks,
             'credibility_score': credibility_score,
             'total_claims': len(claims),
-            'processing_time': (datetime.now() - datetime.fromisoformat(
-                get_job(job_id)['created_at'])).total_seconds(),
+            'processing_time': processing_time,
             'speakers': speakers,
             'topics': topics,
             'source': source,
@@ -385,10 +445,9 @@ def process_transcript_async(job_id: str, transcript: str, source: str):
         
     except Exception as e:
         logger.error(f"Processing error in job {job_id}: {str(e)}")
-        import traceback
         logger.error(traceback.format_exc())
         update_job_progress(job_id, -1, f'Error: {str(e)}')
-        update_job(job_id, {'status': 'failed', 'error': str(e)})ror': str(e)})
+        update_job(job_id, {'status': 'failed', 'error': str(e)})
 
 @app.route('/api/status/<job_id>')
 def check_status(job_id):
@@ -416,6 +475,7 @@ def check_status(job_id):
                 'true_claims': cred_score.get('true_claims', 0),
                 'false_claims': cred_score.get('false_claims', 0),
                 'unverified_claims': cred_score.get('unverified_claims', 0),
+                'mixed_claims': cred_score.get('mixed_claims', 0),
                 'error': job.get('error')
             })
         else:
@@ -442,7 +502,11 @@ def get_results(job_id):
             return jsonify({'success': False, 'error': 'Results not found'}), 404
         
         if results.get('status') != 'completed':
-            return jsonify({'success': False, 'error': 'Analysis not completed'}), 400
+            return jsonify({
+                'success': False, 
+                'error': 'Analysis not completed',
+                'status': results.get('status', 'unknown')
+            }), 400
         
         # Extract credibility score details
         cred_score = results.get('credibility_score', {})
@@ -457,6 +521,7 @@ def get_results(job_id):
             'true_claims': cred_score.get('true_claims', 0),
             'false_claims': cred_score.get('false_claims', 0),
             'unverified_claims': cred_score.get('unverified_claims', 0),
+            'mixed_claims': cred_score.get('mixed_claims', 0),
             'fact_checks': results.get('fact_checks', []),
             'metadata': results.get('metadata', {}),
             'speakers': results.get('speakers', []),
@@ -476,19 +541,18 @@ def get_results(job_id):
         
     except Exception as e:
         logger.error(f"Results retrieval error for job {job_id}: {str(e)}")
-        import traceback
         logger.error(traceback.format_exc())
         return jsonify({'success': False, 'error': str(e)}), 500
 
 @app.route('/api/export/<job_id>/<format>')
 def export_results(job_id, format):
     """Export results in different formats"""
-    job = get_job(job_id)
-    
-    if not job or job.get('status') != 'completed':
-        return jsonify({'error': 'Results not available'}), 404
-    
     try:
+        job = get_job(job_id)
+        
+        if not job or job.get('status') != 'completed':
+            return jsonify({'error': 'Results not available'}), 404
+        
         if format == 'json':
             # JSON export
             return jsonify({
@@ -515,6 +579,7 @@ def export_results(job_id, format):
             output.append(f"OVERALL CREDIBILITY: {score.get('label', 'Unknown')} ({score.get('score', 0)}%)")
             output.append(f"True Claims: {score.get('true_claims', 0)}")
             output.append(f"False Claims: {score.get('false_claims', 0)}")
+            output.append(f"Mixed Claims: {score.get('mixed_claims', 0)}")
             output.append(f"Unverified: {score.get('unverified_claims', 0)}")
             output.append("")
             
@@ -581,9 +646,10 @@ def export_results(job_id, format):
             # Score table
             score_data = [
                 ['Metric', 'Count'],
-                ['True Claims', score.get('true_claims', 0)],
-                ['False Claims', score.get('false_claims', 0)],
-                ['Unverified Claims', score.get('unverified_claims', 0)]
+                ['True Claims', str(score.get('true_claims', 0))],
+                ['False Claims', str(score.get('false_claims', 0))],
+                ['Mixed Claims', str(score.get('mixed_claims', 0))],
+                ['Unverified Claims', str(score.get('unverified_claims', 0))]
             ]
             
             score_table = Table(score_data, colWidths=[200, 100])
@@ -616,52 +682,30 @@ def export_results(job_id, format):
                 
                 # Determine color based on verdict
                 verdict = fc.get('verdict', 'unknown').lower()
-                if verdict in ['true', 'correct', 'accurate']:
+                if verdict in ['true', 'correct', 'accurate', 'mostly true']:
                     verdict_color = '#34a853'
-                elif verdict in ['false', 'incorrect', 'inaccurate']:
+                elif verdict in ['false', 'incorrect', 'inaccurate', 'mostly false']:
                     verdict_color = '#ea4335'
+                elif verdict in ['mixed', 'partially true', 'half true']:
+                    verdict_color = '#ff9800'
                 else:
                     verdict_color = '#fbbc04'
                 
-                story.append(Paragraph(f"<b>{i}. Claim:</b> {fc.get('claim', 'N/A')}", claim_style))
+                # Escape HTML in claim text
+                claim_text = str(fc.get('claim', 'N/A')).replace('<', '&lt;').replace('>', '&gt;')
+                explanation_text = str(fc.get('explanation', '')).replace('<', '&lt;').replace('>', '&gt;')
+                
+                story.append(Paragraph(f"<b>{i}. Claim:</b> {claim_text}", claim_style))
                 story.append(Paragraph(f"<b>Verdict:</b> <font color='{verdict_color}'>{fc.get('verdict', 'Unknown').upper()}</font>", claim_style))
                 
-                if fc.get('explanation'):
-                    story.append(Paragraph(f"<b>Explanation:</b> {fc.get('explanation')}", claim_style))
+                if explanation_text:
+                    story.append(Paragraph(f"<b>Explanation:</b> {explanation_text}", claim_style))
                 
                 if fc.get('sources'):
-                    sources_text = ', '.join(fc.get('sources', []))
-                # Add the rest of the PDF export logic
-        for i, fc in enumerate(job.get('fact_checks', []), 1):
-            claim_style = ParagraphStyle(
-                'ClaimStyle',
-                parent=styles['Normal'],
-                fontSize=11,
-                leftIndent=20,
-                rightIndent=20,
-                spaceAfter=5
-            )
-            
-            # Determine color based on verdict
-            verdict = fc.get('verdict', 'unknown').lower()
-            if verdict in ['true', 'correct', 'accurate']:
-                verdict_color = '#34a853'
-            elif verdict in ['false', 'incorrect', 'inaccurate']:
-                verdict_color = '#ea4335'
-            else:
-                verdict_color = '#fbbc04'
-            
-            story.append(Paragraph(f"<b>{i}. Claim:</b> {fc.get('claim', 'N/A')}", claim_style))
-            story.append(Paragraph(f"<b>Verdict:</b> <font color='{verdict_color}'>{fc.get('verdict', 'Unknown').upper()}</font>", claim_style))
-            
-            if fc.get('explanation'):
-                story.append(Paragraph(f"<b>Explanation:</b> {fc.get('explanation')}", claim_style))
-            
-            if fc.get('sources'):
-                sources_text = ', '.join(fc.get('sources', []))
-                story.append(Paragraph(f"<b>Sources:</b> {sources_text}", claim_style))
-            
-            story.append(Spacer(1, 15))
+                    sources_text = ', '.join(str(s) for s in fc.get('sources', []))
+                    story.append(Paragraph(f"<b>Sources:</b> {sources_text}", claim_style))
+                
+                story.append(Spacer(1, 15))
             
             # Build PDF
             doc.build(story)
@@ -674,11 +718,12 @@ def export_results(job_id, format):
                 download_name=f'fact_check_report_{job_id}.pdf'
             )
         else:
-            return jsonify({'error': 'Invalid format'}), 400
+            return jsonify({'error': 'Invalid format. Use json, txt, or pdf'}), 400
             
     except Exception as e:
         logger.error(f"Export error: {str(e)}")
-        return jsonify({'error': 'Export failed'}), 500
+        logger.error(traceback.format_exc())
+        return jsonify({'error': 'Export failed', 'details': str(e)}), 500
 
 @app.route('/api/export/<job_id>/pdf')
 def export_pdf(job_id):
@@ -694,13 +739,14 @@ def calculate_credibility_score(fact_checks: List[Dict]) -> Dict:
             'label': 'No claims verified',
             'true_claims': 0,
             'false_claims': 0,
+            'mixed_claims': 0,
             'unverified_claims': 0
         }
     
     # Count verdicts
     true_count = sum(1 for fc in fact_checks if fc.get('verdict', '').lower() in ['true', 'mostly true', 'correct', 'accurate'])
     false_count = sum(1 for fc in fact_checks if fc.get('verdict', '').lower() in ['false', 'mostly false', 'incorrect', 'inaccurate'])
-    mixed_count = sum(1 for fc in fact_checks if fc.get('verdict', '').lower() in ['mixed', 'partially true', 'half true'] or fc.get('rating', '').lower() == 'mixed')
+    mixed_count = sum(1 for fc in fact_checks if fc.get('verdict', '').lower() in ['mixed', 'partially true', 'half true'])
     unverified_count = sum(1 for fc in fact_checks if fc.get('verdict', '').lower() in ['unverified', 'unsubstantiated', 'lacks_context'])
     
     total = len(fact_checks)
@@ -723,6 +769,7 @@ def calculate_credibility_score(fact_checks: List[Dict]) -> Dict:
         'label': label,
         'true_claims': true_count,
         'false_claims': false_count,
+        'mixed_claims': mixed_count,
         'unverified_claims': unverified_count
     }
 
@@ -733,6 +780,8 @@ def analyze_speaker_credibility(speakers: List[str], fact_checks: List[Dict]) ->
     # Quick lookup instead of iterating
     speaker_lookup = {}
     for speaker in speakers:
+        if not speaker:  # Skip empty speakers
+            continue
         speaker_lower = speaker.lower()
         for key, info in SPEAKER_DATABASE.items():
             if key in speaker_lower or speaker_lower in key:
@@ -800,14 +849,30 @@ def debug_job_details(job_id):
         'full_data': job
     })
 
+@app.errorhandler(404)
+def not_found(e):
+    """Handle 404 errors"""
+    return jsonify({'error': 'Not found'}), 404
+
+@app.errorhandler(500)
+def server_error(e):
+    """Handle 500 errors"""
+    logger.error(f"Server error: {str(e)}")
+    return jsonify({'error': 'Internal server error'}), 500
+
 if __name__ == '__main__':
     # Validate configuration on startup
     warnings = Config.validate()
     for warning in warnings:
         logger.warning(warning)
     
+    # Check if services are available
+    if not all([transcript_processor, claim_extractor, fact_checker]):
+        logger.error("WARNING: Running without services - limited functionality")
+    
     # Use environment variable PORT if available (for Render)
     port = int(os.environ.get('PORT', Config.PORT))
     
     # Run the app
+    logger.info(f"Starting app on port {port}")
     app.run(debug=Config.DEBUG, host='0.0.0.0', port=port)
