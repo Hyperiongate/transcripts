@@ -254,25 +254,89 @@ def health():
         'services': 'available'
     })
 
+@app.route('/api/test', methods=['GET', 'POST'])
+def test_api():
+    """Test endpoint to verify API is working"""
+    if request.method == 'GET':
+        return jsonify({
+            'success': True,
+            'message': 'API is working',
+            'method': 'GET'
+        })
+    else:
+        # POST test
+        try:
+            data = request.get_json()
+            return jsonify({
+                'success': True,
+                'message': 'POST received',
+                'received_data': data,
+                'content_type': request.content_type
+            })
+        except Exception as e:
+            return jsonify({
+                'success': False,
+                'error': str(e),
+                'content_type': request.content_type,
+                'data': request.data.decode('utf-8')[:200]
+            })
+
 @app.route('/api/analyze', methods=['POST'])
 def analyze():
-    """Analyze transcript endpoint - OPTIMIZED VERSION"""
+    """Analyze transcript endpoint - ENHANCED DEBUG VERSION"""
     try:
-        data = request.get_json()
+        # Log incoming request details
+        logger.info(f"Received POST to /api/analyze")
+        logger.info(f"Content-Type: {request.content_type}")
+        logger.info(f"Request data length: {len(request.data)}")
+        
+        # Check if request has JSON content type
+        if request.content_type and 'application/json' not in request.content_type:
+            logger.error(f"Invalid Content-Type: {request.content_type}")
+            return jsonify({
+                'success': False, 
+                'error': f'Invalid Content-Type: {request.content_type}. Expected application/json'
+            }), 400
+        
+        # Try to parse JSON data
+        try:
+            data = request.get_json(force=True)  # Force parsing even if content-type is wrong
+            logger.info(f"Parsed JSON data keys: {list(data.keys()) if data else 'None'}")
+        except Exception as json_error:
+            logger.error(f"JSON parsing error: {str(json_error)}")
+            logger.error(f"Raw data: {request.data[:200]}")
+            return jsonify({
+                'success': False, 
+                'error': f'Invalid JSON data: {str(json_error)}'
+            }), 400
+        
         if not data:
-            return jsonify({'success': False, 'error': 'No data provided'}), 400
+            logger.error("No JSON data in request body")
+            return jsonify({
+                'success': False, 
+                'error': 'No data provided. Please send JSON with transcript and source fields'
+            }), 400
         
         # Validate input
         transcript = data.get('transcript', '').strip()
         source = data.get('source', 'Direct Input')
         
+        logger.info(f"Transcript length: {len(transcript)}")
+        logger.info(f"Source: {source}")
+        
         if not transcript:
+            logger.error("No transcript in request data")
             return jsonify({'success': False, 'error': 'No transcript provided'}), 400
         
         if len(transcript) < 50:
-            return jsonify({'success': False, 'error': 'Transcript too short (minimum 50 characters)'}), 400
+            logger.error(f"Transcript too short: {len(transcript)} characters")
+            return jsonify({
+                'success': False, 
+                'error': f'Transcript too short ({len(transcript)} characters). Minimum 50 characters required.'
+            }), 400
         
         if len(transcript) > Config.MAX_TRANSCRIPT_LENGTH:
+            logger.error(f"Transcript too long: {len(transcript)} characters")
             return jsonify({
                 'success': False, 
                 'error': f'Transcript too long (maximum {Config.MAX_TRANSCRIPT_LENGTH} characters)'
@@ -288,6 +352,8 @@ def analyze():
             'created_at': datetime.now().isoformat()
         }
         
+        logger.info(f"Created job {job_id}")
+        
         # Store job
         store_job(job_id, job_data)
         
@@ -296,10 +362,13 @@ def analyze():
         thread.daemon = True
         thread.start()
         
+        logger.info(f"Started processing thread for job {job_id}")
+        
         return jsonify({'success': True, 'job_id': job_id})
             
     except Exception as e:
         logger.error(f"Request error: {str(e)}")
+        logger.error(traceback.format_exc())
         return jsonify({'success': False, 'error': str(e)}), 500
 
 def process_transcript_async(job_id: str, transcript: str, source: str):
