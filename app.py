@@ -132,13 +132,14 @@ def store_job(job_id: str, job_data: dict):
         if jobs_collection:
             jobs_collection.insert_one({'_id': job_id, **job_data})
         else:
-            in_memory_jobs[job_id] = job_data
+            in_memory_jobs[job_id] = job_data.copy()  # Make a copy to avoid reference issues
+            logger.info(f"Stored job {job_id} in memory with status: {job_data.get('status')}")
         
         if redis_client:
             redis_client.setex(f"job:{job_id}", 3600, json.dumps(job_data))
     except Exception as e:
         logger.error(f"Error storing job: {e}")
-        in_memory_jobs[job_id] = job_data
+        in_memory_jobs[job_id] = job_data.copy()
 
 def get_job(job_id: str) -> dict:
     """Get job from database or memory"""
@@ -157,10 +158,16 @@ def get_job(job_id: str) -> dict:
                 return job
         
         # Fallback to memory
-        return in_memory_jobs.get(job_id)
+        job = in_memory_jobs.get(job_id)
+        if job:
+            logger.info(f"Retrieved job {job_id} from memory with status: {job.get('status')}")
+            return job.copy()  # Return a copy to avoid mutations
+        
+        logger.warning(f"Job {job_id} not found in any storage")
+        return None
     except Exception as e:
-        logger.error(f"Error getting job: {e}")
-        return in_memory_jobs.get(job_id)
+        logger.error(f"Error getting job {job_id}: {e}")
+        return in_memory_jobs.get(job_id, {}).copy() if job_id in in_memory_jobs else None
 
 def update_job(job_id: str, updates: dict):
     """Update job in database or memory"""
@@ -172,16 +179,20 @@ def update_job(job_id: str, updates: dict):
             )
         else:
             if job_id in in_memory_jobs:
+                # For in-memory storage, do a deep update
                 in_memory_jobs[job_id].update(updates)
+                logger.info(f"Updated job {job_id} in memory with: {list(updates.keys())}")
+            else:
+                logger.error(f"Job {job_id} not found in memory for update")
         
-        # Update cache
+        # Update cache if exists
         if redis_client:
             job_data = get_job(job_id)
             if job_data:
                 job_data.update(updates)
                 redis_client.setex(f"job:{job_id}", 3600, json.dumps(job_data))
     except Exception as e:
-        logger.error(f"Error updating job: {e}")
+        logger.error(f"Error updating job {job_id}: {e}")
         if job_id in in_memory_jobs:
             in_memory_jobs[job_id].update(updates)
 
@@ -355,11 +366,27 @@ def process_transcript_async(job_id: str, transcript: str, source: str):
             'completed_at': datetime.now().isoformat()
         }
         
+        # Log what we're storing
+        logger.info(f"Storing final results for job {job_id}:")
+        logger.info(f"  - Status: {results['status']}")
+        logger.info(f"  - Total claims: {results['total_claims']}")
+        logger.info(f"  - Credibility score: {results['credibility_score']}")
+        logger.info(f"  - Fact checks count: {len(results['fact_checks'])}")
+        
         # Store results
         update_job(job_id, results)
         
+        # Verify storage
+        stored_job = get_job(job_id)
+        if stored_job:
+            logger.info(f"Verified job {job_id} stored with status: {stored_job.get('status')}")
+        else:
+            logger.error(f"Failed to verify storage of job {job_id}")
+        
     except Exception as e:
         logger.error(f"Processing error in job {job_id}: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
         update_job_progress(job_id, -1, f'Error: {str(e)}')
         update_job(job_id, {'status': 'failed', 'error': str(e)})ror': str(e)})
 
@@ -604,9 +631,37 @@ def export_results(job_id, format):
                 
                 if fc.get('sources'):
                     sources_text = ', '.join(fc.get('sources', []))
-                    story.append(Paragraph(f"<b>Sources:</b> {sources_text}", claim_style))
-                
-                story.append(Spacer(1, 15))
+                # Add the rest of the PDF export logic
+        for i, fc in enumerate(job.get('fact_checks', []), 1):
+            claim_style = ParagraphStyle(
+                'ClaimStyle',
+                parent=styles['Normal'],
+                fontSize=11,
+                leftIndent=20,
+                rightIndent=20,
+                spaceAfter=5
+            )
+            
+            # Determine color based on verdict
+            verdict = fc.get('verdict', 'unknown').lower()
+            if verdict in ['true', 'correct', 'accurate']:
+                verdict_color = '#34a853'
+            elif verdict in ['false', 'incorrect', 'inaccurate']:
+                verdict_color = '#ea4335'
+            else:
+                verdict_color = '#fbbc04'
+            
+            story.append(Paragraph(f"<b>{i}. Claim:</b> {fc.get('claim', 'N/A')}", claim_style))
+            story.append(Paragraph(f"<b>Verdict:</b> <font color='{verdict_color}'>{fc.get('verdict', 'Unknown').upper()}</font>", claim_style))
+            
+            if fc.get('explanation'):
+                story.append(Paragraph(f"<b>Explanation:</b> {fc.get('explanation')}", claim_style))
+            
+            if fc.get('sources'):
+                sources_text = ', '.join(fc.get('sources', []))
+                story.append(Paragraph(f"<b>Sources:</b> {sources_text}", claim_style))
+            
+            story.append(Spacer(1, 15))
             
             # Build PDF
             doc.build(story)
@@ -651,7 +706,7 @@ def calculate_credibility_score(fact_checks: List[Dict]) -> Dict:
     total = len(fact_checks)
     
     # Calculate weighted score
-    score = ((true_count * 100) + (mixed_count * 50) + (unverified_count * 30)) / total
+    score = ((true_count * 100) + (mixed_count * 50) + (unverified_count * 30)) / total if total > 0 else 0
     
     # Determine label
     if score >= 80:
@@ -705,6 +760,45 @@ def analyze_speaker_credibility(speakers: List[str], fact_checks: List[Dict]) ->
             speaker_info[speaker]['warnings'] = warnings
     
     return speaker_info
+
+@app.route('/api/debug/jobs')
+def debug_jobs():
+    """Debug endpoint to see all jobs in memory"""
+    if not Config.DEBUG:
+        return jsonify({'error': 'Debug mode not enabled'}), 403
+    
+    jobs_summary = {}
+    for job_id, job_data in in_memory_jobs.items():
+        jobs_summary[job_id] = {
+            'status': job_data.get('status'),
+            'progress': job_data.get('progress'),
+            'created_at': job_data.get('created_at'),
+            'completed_at': job_data.get('completed_at'),
+            'has_credibility_score': 'credibility_score' in job_data,
+            'has_fact_checks': 'fact_checks' in job_data and len(job_data.get('fact_checks', [])) > 0,
+            'total_claims': job_data.get('total_claims', 0)
+        }
+    
+    return jsonify({
+        'total_jobs': len(in_memory_jobs),
+        'jobs': jobs_summary,
+        'storage_type': 'in-memory'
+    })
+
+@app.route('/api/debug/job/<job_id>')
+def debug_job_details(job_id):
+    """Debug endpoint to see specific job details"""
+    if not Config.DEBUG:
+        return jsonify({'error': 'Debug mode not enabled'}), 403
+    
+    job = in_memory_jobs.get(job_id)
+    if not job:
+        return jsonify({'error': 'Job not found'}), 404
+    
+    return jsonify({
+        'job_id': job_id,
+        'full_data': job
+    })
 
 if __name__ == '__main__':
     # Validate configuration on startup
