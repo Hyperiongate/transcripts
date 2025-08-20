@@ -81,7 +81,7 @@ if Config.REDIS_URL:
 else:
     logger.info("Redis URL not configured. Using in-memory storage.")
 
-# Import services after configuration is loaded
+# Import services - REQUIRED for app to function
 try:
     from services.transcript import TranscriptProcessor
     from services.claims import ClaimExtractor
@@ -93,11 +93,9 @@ try:
     fact_checker = FactChecker(Config)
     logger.info("Services initialized successfully")
 except ImportError as e:
-    logger.error(f"Failed to import services: {str(e)}")
-    logger.warning("Running in limited mode without services")
-    transcript_processor = None
-    claim_extractor = None
-    fact_checker = None
+    logger.error(f"CRITICAL: Failed to import required services: {str(e)}")
+    logger.error("Please ensure services directory exists with transcript.py, claims.py, and factcheck.py")
+    raise SystemExit(f"Cannot start application without services: {str(e)}")
 
 # Enhanced speaker database
 SPEAKER_DATABASE = {
@@ -245,7 +243,6 @@ def health():
     """Health check endpoint"""
     db_status = "connected" if mongo_client else "in-memory"
     redis_status = "connected" if redis_client else "in-memory"
-    services_status = "available" if all([transcript_processor, claim_extractor, fact_checker]) else "limited"
     
     return jsonify({
         'status': 'healthy',
@@ -254,20 +251,13 @@ def health():
             'database': db_status,
             'cache': redis_status
         },
-        'services': services_status
+        'services': 'available'
     })
 
 @app.route('/api/analyze', methods=['POST'])
 def analyze():
     """Analyze transcript endpoint - OPTIMIZED VERSION"""
     try:
-        # Check if services are available
-        if not all([transcript_processor, claim_extractor, fact_checker]):
-            return jsonify({
-                'success': False, 
-                'error': 'Services not available. Please check configuration.'
-            }), 503
-        
         data = request.get_json()
         if not data:
             return jsonify({'success': False, 'error': 'No data provided'}), 400
@@ -865,10 +855,6 @@ if __name__ == '__main__':
     warnings = Config.validate()
     for warning in warnings:
         logger.warning(warning)
-    
-    # Check if services are available
-    if not all([transcript_processor, claim_extractor, fact_checker]):
-        logger.error("WARNING: Running without services - limited functionality")
     
     # Use environment variable PORT if available (for Render)
     port = int(os.environ.get('PORT', Config.PORT))
