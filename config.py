@@ -36,14 +36,14 @@ class Config:
     ENABLE_SOURCE_ANALYSIS = True
     ENABLE_COMPREHENSIVE_SUMMARY = True
     
-    # Application limits
-    MAX_TRANSCRIPT_LENGTH = 50000  # characters
+    # Application limits - INCREASED FOR LONGER TRANSCRIPTS
+    MAX_TRANSCRIPT_LENGTH = 500000  # Increased to 500k characters (~100 pages)
     MAX_CLAIMS_PER_TRANSCRIPT = 50  # maximum claims per analysis
     MAX_CLAIM_LENGTH = 500  # characters per claim
     
     # Timeouts
     FACT_CHECK_TIMEOUT = 10  # seconds per claim
-    TOTAL_ANALYSIS_TIMEOUT = 300  # 5 minutes total
+    TOTAL_ANALYSIS_TIMEOUT = 600  # 10 minutes total (increased from 5)
     API_TIMEOUT = 5  # seconds for external API calls
     REQUEST_TIMEOUT = 30  # seconds for HTTP requests
     
