@@ -1,10 +1,14 @@
 """
 Transcript Processing Service
-Handles cleaning and preprocessing of transcripts
+Handles cleaning and preprocessing of transcripts from various sources
 """
 import re
 import logging
+import os
 from typing import List, Dict, Optional
+import PyPDF2
+import docx
+from youtube_transcript_api import YouTubeTranscriptApi
 
 logger = logging.getLogger(__name__)
 
@@ -18,6 +22,114 @@ class TranscriptProcessor:
         """Process input text and return clean transcript"""
         # Treat all input as direct transcript
         return self.clean_transcript(input_text)
+    
+    def process_file(self, filepath: str) -> str:
+        """Process uploaded file and extract transcript"""
+        file_extension = filepath.lower().split('.')[-1]
+        
+        try:
+            if file_extension == 'txt':
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    content = f.read()
+            
+            elif file_extension == 'pdf':
+                content = self._extract_pdf_text(filepath)
+            
+            elif file_extension in ['docx', 'doc']:
+                content = self._extract_docx_text(filepath)
+            
+            elif file_extension in ['srt', 'vtt']:
+                content = self._extract_subtitle_text(filepath)
+            
+            else:
+                raise ValueError(f"Unsupported file type: {file_extension}")
+            
+            return self.clean_transcript(content)
+            
+        except Exception as e:
+            logger.error(f"Error processing file {filepath}: {str(e)}")
+            raise
+    
+    def process_youtube(self, url: str) -> str:
+        """Extract transcript from YouTube video"""
+        try:
+            # Extract video ID from URL
+            video_id = self._extract_youtube_id(url)
+            if not video_id:
+                raise ValueError("Invalid YouTube URL")
+            
+            # Get transcript
+            transcript_list = YouTubeTranscriptApi.get_transcript(video_id)
+            
+            # Combine transcript entries
+            text_parts = []
+            for entry in transcript_list:
+                text_parts.append(entry['text'])
+            
+            full_text = ' '.join(text_parts)
+            return self.clean_transcript(full_text)
+            
+        except Exception as e:
+            logger.error(f"Error extracting YouTube transcript: {str(e)}")
+            raise ValueError(f"Could not extract transcript from YouTube video: {str(e)}")
+    
+    def _extract_youtube_id(self, url: str) -> Optional[str]:
+        """Extract YouTube video ID from URL"""
+        patterns = [
+            r'(?:youtube\.com\/watch\?v=)([\w-]+)',
+            r'(?:youtube\.com\/embed\/)([\w-]+)',
+            r'(?:youtu\.be\/)([\w-]+)',
+            r'(?:youtube\.com\/v\/)([\w-]+)'
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, url)
+            if match:
+                return match.group(1)
+        
+        return None
+    
+    def _extract_pdf_text(self, filepath: str) -> str:
+        """Extract text from PDF file"""
+        text_parts = []
+        
+        with open(filepath, 'rb') as file:
+            pdf_reader = PyPDF2.PdfReader(file)
+            
+            for page_num in range(len(pdf_reader.pages)):
+                page = pdf_reader.pages[page_num]
+                text_parts.append(page.extract_text())
+        
+        return '\n'.join(text_parts)
+    
+    def _extract_docx_text(self, filepath: str) -> str:
+        """Extract text from DOCX file"""
+        doc = docx.Document(filepath)
+        text_parts = []
+        
+        for paragraph in doc.paragraphs:
+            if paragraph.text.strip():
+                text_parts.append(paragraph.text)
+        
+        return '\n'.join(text_parts)
+    
+    def _extract_subtitle_text(self, filepath: str) -> str:
+        """Extract text from subtitle files (SRT/VTT)"""
+        with open(filepath, 'r', encoding='utf-8') as f:
+            content = f.read()
+        
+        # Remove subtitle formatting
+        # Remove timestamps
+        content = re.sub(r'\d{2}:\d{2}:\d{2}[,\.]\d{3}\s*-->\s*\d{2}:\d{2}:\d{2}[,\.]\d{3}', '', content)
+        # Remove subtitle numbers
+        content = re.sub(r'^\d+\s*$', '', content, flags=re.MULTILINE)
+        # Remove VTT header
+        content = re.sub(r'^WEBVTT.*$', '', content, flags=re.MULTILINE)
+        
+        # Clean up extra newlines
+        content = re.sub(r'\n{3,}', '\n\n', content)
+        
+        return content
     
     def clean_transcript(self, text: str) -> str:
         """Clean and normalize transcript text"""
