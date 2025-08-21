@@ -89,6 +89,23 @@ class PDFExporter:
             fontName='Helvetica-Bold'
         ))
     
+    def export_to_pdf(self, results: dict) -> str:
+        """Export results to PDF and return the file path"""
+        # Generate output filename
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        job_id = results.get('job_id', 'unknown')
+        output_filename = f"fact_check_{job_id}_{timestamp}.pdf"
+        output_path = os.path.join('exports', output_filename)
+        
+        # Create exports directory if it doesn't exist
+        os.makedirs('exports', exist_ok=True)
+        
+        # Generate PDF
+        if self.generate_pdf(results, output_path):
+            return output_path
+        else:
+            raise Exception("Failed to generate PDF")
+    
     def generate_pdf(self, results: dict, output_path: str) -> bool:
         """Generate PDF report from fact check results"""
         try:
@@ -112,62 +129,68 @@ class PDFExporter:
             metadata = f"""
             <para align=center>
             <b>Generated:</b> {datetime.now().strftime('%B %d, %Y at %I:%M %p')}<br/>
-            <b>Source:</b> {results.get('source', 'Unknown')}<br/>
-            <b>Credibility Score:</b> {results.get('credibility_score', 0)}% ({results.get('credibility_label', 'Unknown')})
+            <b>Source:</b> {results.get('source_type', 'Unknown')}<br/>
+            <b>Total Claims:</b> {results.get('total_claims', 0)}<br/>
+            <b>Checked Claims:</b> {results.get('checked_claims', 0)}
             </para>
             """
             story.append(Paragraph(metadata, self.styles['Normal']))
             story.append(Spacer(1, 0.5*inch))
             
             # Enhanced Conversational Summary
-            if results.get('conversational_summary'):
+            if results.get('enhanced_summary'):
                 story.append(Paragraph("Executive Summary", self.styles['SectionHeader']))
-                story.append(Paragraph(results['conversational_summary'], self.styles['ExecutiveSummary']))
+                # Handle multi-line summary with proper formatting
+                summary_text = self._escape_html(results['enhanced_summary'])
+                summary_text = summary_text.replace('\n', '<br/>')
+                story.append(Paragraph(summary_text, self.styles['Normal']))
                 story.append(Spacer(1, 0.3*inch))
             elif results.get('summary'):
                 story.append(Paragraph("Executive Summary", self.styles['SectionHeader']))
-                story.append(Paragraph(results['summary'], self.styles['ExecutiveSummary']))
+                summary_text = self._escape_html(results['summary'])
+                summary_text = summary_text.replace('\n', '<br/>')
+                story.append(Paragraph(summary_text, self.styles['Normal']))
                 story.append(Spacer(1, 0.3*inch))
             
-            # Speaker Analysis (if available)
-            if results.get('speaker') and results.get('speaker_history'):
-                story.append(Paragraph("Speaker Analysis", self.styles['SectionHeader']))
-                speaker_info = results['speaker_history']
+            # Speaker Information
+            if results.get('speakers') and len(results['speakers']) > 0:
+                story.append(Paragraph("Speaker Information", self.styles['SectionHeader']))
                 
-                story.append(Paragraph(f"<b>Primary Speaker:</b> {results['speaker']}", self.styles['Normal']))
-                
-                if speaker_info.get('total_analyses', 0) > 1:
-                    story.append(Paragraph(f"<b>Analysis History:</b> We have analyzed content from this speaker {speaker_info['total_analyses']} times.", self.styles['Normal']))
-                    story.append(Paragraph(f"<b>Average Credibility:</b> {speaker_info['average_credibility']:.0f}%", self.styles['Normal']))
+                for speaker_name, speaker_info in results['speakers'].items():
+                    story.append(Paragraph(f"<b>{speaker_name}</b>", self.styles['Normal']))
                     
-                    if speaker_info.get('patterns'):
-                        story.append(Paragraph("<b>Historical Patterns:</b>", self.styles['Normal']))
-                        for pattern in speaker_info['patterns']:
-                            story.append(Paragraph(f"• {pattern}", self.styles['Normal']))
+                    if speaker_info.get('criminal_record'):
+                        story.append(Paragraph(f"Criminal Record: {speaker_info['criminal_record']}", self.styles['Normal']))
+                    if speaker_info.get('fraud_history'):
+                        story.append(Paragraph(f"Fraud History: {speaker_info['fraud_history']}", self.styles['Normal']))
+                    if speaker_info.get('fact_check_history'):
+                        history = speaker_info['fact_check_history']
+                        story.append(Paragraph(f"Past Fact Checks: {history.get('total_claims', 0)} claims, {history.get('accuracy_rate', 0):.1f}% accurate", self.styles['Normal']))
                     
-                    if speaker_info.get('total_false_claims', 0) > 0:
-                        story.append(Paragraph(
-                            f"<b>Track Record:</b> {speaker_info['total_false_claims']} false claims and "
-                            f"{speaker_info.get('total_misleading_claims', 0)} deliberately deceptive claims "
-                            f"across all analyses.",
-                            self.styles['Normal']
-                        ))
+                    story.append(Spacer(1, 0.2*inch))
                 
                 story.append(Spacer(1, 0.3*inch))
             
             # Statistics Overview
             story.append(Paragraph("Analysis Overview", self.styles['SectionHeader']))
             
+            # Count verdicts
+            verdict_counts = self._count_verdicts(results.get('fact_checks', []))
+            
             stats_data = [
                 ['Metric', 'Value'],
                 ['Total Claims Identified', str(results.get('total_claims', 0))],
                 ['Claims Fact-Checked', str(results.get('checked_claims', 0))],
-                ['Verified as True', str(sum(1 for fc in results.get('fact_checks', []) if fc.get('verdict') in ['true', 'mostly_true']))],
-                ['Found False', str(sum(1 for fc in results.get('fact_checks', []) if fc.get('verdict') in ['false', 'mostly_false']))],
-                ['Deliberately Deceptive', str(sum(1 for fc in results.get('fact_checks', []) if fc.get('verdict') in ['misleading', 'deceptive']))],
-                ['Lacks Context', str(sum(1 for fc in results.get('fact_checks', []) if fc.get('verdict') == 'lacks_context'))],
-                ['Unverified', str(sum(1 for fc in results.get('fact_checks', []) if fc.get('verdict') == 'unverified'))],
-                ['Overall Credibility', f"{results.get('credibility_score', 0)}%"]
+                ['True/Mostly True', str(verdict_counts.get('true', 0))],
+                ['Nearly True', str(verdict_counts.get('nearly_true', 0))],
+                ['Exaggeration', str(verdict_counts.get('exaggeration', 0))],
+                ['Misleading', str(verdict_counts.get('misleading', 0))],
+                ['Mostly False', str(verdict_counts.get('mostly_false', 0))],
+                ['False', str(verdict_counts.get('false', 0))],
+                ['Intentionally Deceptive', str(verdict_counts.get('intentionally_deceptive', 0))],
+                ['Needs Context', str(verdict_counts.get('needs_context', 0))],
+                ['Opinion', str(verdict_counts.get('opinion', 0))],
+                ['Unverified', str(verdict_counts.get('unverified', 0))]
             ]
             
             stats_table = Table(stats_data, colWidths=[3*inch, 1.5*inch])
@@ -183,15 +206,6 @@ class PDFExporter:
             ]))
             
             story.append(stats_table)
-            
-            # Add speakers and topics if available
-            if results.get('speakers') and len(results['speakers']) > 0:
-                story.append(Spacer(1, 0.2*inch))
-                story.append(Paragraph(f"<b>Speakers Identified:</b> {', '.join(results['speakers'][:5])}", self.styles['Normal']))
-            
-            if results.get('topics') and len(results['topics']) > 0:
-                story.append(Paragraph(f"<b>Key Topics:</b> {', '.join(results['topics'])}", self.styles['Normal']))
-            
             story.append(PageBreak())
             
             # Detailed Fact Checks
@@ -208,7 +222,7 @@ class PDFExporter:
                 # Verdict
                 verdict = fc.get('verdict', 'unverified')
                 verdict_style = self._get_verdict_style(verdict)
-                verdict_text = f"<b>Verdict:</b> {verdict.replace('_', ' ').upper()}"
+                verdict_text = f"<b>Verdict:</b> {verdict.replace('_', ' ').title()}"
                 story.append(Paragraph(verdict_text, verdict_style))
                 
                 # Confidence
@@ -219,30 +233,23 @@ class PDFExporter:
                 # Explanation
                 if fc.get('explanation'):
                     story.append(Paragraph("<b>Explanation:</b>", self.styles['Normal']))
-                    story.append(Paragraph(self._escape_html(fc['explanation']), self.styles['Normal']))
-                
-                # Context note if available
-                if fc.get('context_note'):
-                    story.append(Paragraph("<b>Context Resolution:</b>", self.styles['Normal']))
-                    story.append(Paragraph(self._escape_html(fc['context_note']), self.styles['Normal']))
+                    explanation_text = self._escape_html(fc['explanation'])
+                    story.append(Paragraph(explanation_text, self.styles['Normal']))
                 
                 # Sources
                 if fc.get('sources'):
                     sources_text = f"<b>Sources:</b> {', '.join(fc['sources'])}"
                     story.append(Paragraph(sources_text, self.styles['Normal']))
                 
+                # AI Analysis flag
+                if fc.get('ai_analysis_used'):
+                    story.append(Paragraph("<i>✓ AI-enhanced analysis</i>", self.styles['Normal']))
+                
                 story.append(Spacer(1, 0.3*inch))
                 
                 # Add page break every 3 claims to maintain readability
                 if i % 3 == 0 and i < len(results.get('fact_checks', [])):
                     story.append(PageBreak())
-            
-            # Add analysis notes if present
-            if results.get('analysis_notes') and len(results['analysis_notes']) > 0:
-                story.append(PageBreak())
-                story.append(Paragraph("Important Notes", self.styles['SectionHeader']))
-                for note in results['analysis_notes']:
-                    story.append(Paragraph(f"• {note}", self.styles['Normal']))
             
             # Build PDF
             doc.build(story)
@@ -252,14 +259,41 @@ class PDFExporter:
             logger.error(f"PDF generation error: {str(e)}")
             return False
     
+    def _count_verdicts(self, fact_checks: list) -> dict:
+        """Count verdicts by type"""
+        counts = {
+            'true': 0,
+            'mostly_true': 0,
+            'nearly_true': 0,
+            'exaggeration': 0,
+            'misleading': 0,
+            'mostly_false': 0,
+            'false': 0,
+            'intentionally_deceptive': 0,
+            'needs_context': 0,
+            'opinion': 0,
+            'unverified': 0
+        }
+        
+        for fc in fact_checks:
+            verdict = fc.get('verdict', 'unverified').lower()
+            if verdict in ['true', 'mostly_true']:
+                counts['true'] += 1
+            elif verdict in counts:
+                counts[verdict] += 1
+            else:
+                counts['unverified'] += 1
+        
+        return counts
+    
     def _get_verdict_style(self, verdict: str):
         """Get appropriate style for verdict"""
         verdict_lower = verdict.lower()
-        if verdict_lower in ['true', 'mostly_true']:
+        if verdict_lower in ['true', 'mostly_true', 'nearly_true']:
             return self.styles['VerdictTrue']
         elif verdict_lower in ['false', 'mostly_false']:
             return self.styles['VerdictFalse']
-        elif verdict_lower in ['misleading', 'deceptive']:
+        elif verdict_lower in ['misleading', 'intentionally_deceptive']:
             return self.styles['VerdictDeceptive']
         else:
             return self.styles['VerdictMixed']
@@ -268,7 +302,7 @@ class PDFExporter:
         """Escape HTML characters for ReportLab"""
         if not text:
             return ''
-        return (text
+        return (str(text)
             .replace('&', '&amp;')
             .replace('<', '&lt;')
             .replace('>', '&gt;')
