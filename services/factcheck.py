@@ -1,5 +1,5 @@
 """
-Enhanced Fact-Checking Service with Better Detection
+Enhanced Fact-Checking Service with Web Search Integration
 """
 import re
 import logging
@@ -8,6 +8,7 @@ import json
 from typing import Dict, List, Optional, Any
 from datetime import datetime
 import time
+from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
 
@@ -86,13 +87,15 @@ VERDICT_CATEGORIES = {
 }
 
 class FactChecker:
-    """Enhanced fact-checking service"""
+    """Enhanced fact-checking service with web search"""
     
     def __init__(self, config):
         self.config = config
         self.google_api_key = getattr(config, 'GOOGLE_FACTCHECK_API_KEY', None)
         self.openai_api_key = getattr(config, 'OPENAI_API_KEY', None)
         self.fred_api_key = getattr(config, 'FRED_API_KEY', None)
+        self.news_api_key = getattr(config, 'NEWS_API_KEY', None)
+        self.scraperapi_key = getattr(config, 'SCRAPERAPI_KEY', None)
         
         # Initialize OpenAI client if available
         self.openai_client = None
@@ -176,7 +179,12 @@ class FactChecker:
                 if google_result:
                     return google_result
             
-            # 5. Try pattern-based checking
+            # 5. Try web search for verification
+            web_result = self._check_with_web_search(claim)
+            if web_result and web_result['verdict'] != 'needs_context':
+                return web_result
+            
+            # 6. Try pattern-based checking
             pattern_result = self._check_common_patterns(claim)
             if pattern_result:
                 return pattern_result
@@ -184,12 +192,233 @@ class FactChecker:
             # If all else fails, provide a more informative "needs context" message
             return self._create_verdict(
                 'needs_context',
-                'Unable to verify this specific claim. It may be too recent, too specific, or require access to specialized databases.'
+                'Unable to verify this specific claim through available sources. It may be too recent or require specialized databases.'
             )
             
         except Exception as e:
             logger.error(f"Error checking claim: {e}")
             return self._create_verdict('needs_context', f'Error during fact-checking: {str(e)}')
+    
+    def _check_with_web_search(self, claim: str) -> Optional[Dict]:
+        """Check claim using web search APIs"""
+        try:
+            # First try News API if available
+            if self.news_api_key:
+                news_result = self._search_news_api(claim)
+                if news_result:
+                    return news_result
+            
+            # Try ScraperAPI if available
+            if self.scraperapi_key:
+                scraper_result = self._search_with_scraperapi(claim)
+                if scraper_result:
+                    return scraper_result
+            
+            # If we have OpenAI, use it to analyze web search necessity
+            if self.openai_client:
+                return self._ai_web_search_analysis(claim)
+                
+        except Exception as e:
+            logger.error(f"Web search error: {e}")
+        
+        return None
+    
+    def _search_news_api(self, claim: str) -> Optional[Dict]:
+        """Search for claim verification using News API"""
+        try:
+            # Extract key terms from claim
+            key_terms = self._extract_key_terms(claim)
+            search_query = ' '.join(key_terms[:5])
+            
+            url = "https://newsapi.org/v2/everything"
+            params = {
+                'apiKey': self.news_api_key,
+                'q': search_query,
+                'searchIn': 'title,description',
+                'sortBy': 'relevancy',
+                'pageSize': 10,
+                'language': 'en'
+            }
+            
+            response = requests.get(url, params=params, timeout=10)
+            
+            if response.status_code == 200:
+                data = response.json()
+                articles = data.get('articles', [])
+                
+                if articles:
+                    # Analyze articles for claim verification
+                    return self._analyze_news_articles(claim, articles)
+            
+        except Exception as e:
+            logger.error(f"News API error: {e}")
+        
+        return None
+    
+    def _analyze_news_articles(self, claim: str, articles: List[Dict]) -> Optional[Dict]:
+        """Analyze news articles to verify claim"""
+        try:
+            # Count relevant articles
+            relevant_count = 0
+            supporting_count = 0
+            contradicting_count = 0
+            
+            claim_lower = claim.lower()
+            key_terms = self._extract_key_terms(claim)
+            
+            for article in articles[:5]:  # Analyze top 5 articles
+                title = article.get('title', '').lower()
+                description = article.get('description', '').lower()
+                content = title + ' ' + description
+                
+                # Check relevance
+                term_matches = sum(1 for term in key_terms if term.lower() in content)
+                if term_matches >= 2:
+                    relevant_count += 1
+                    
+                    # Simple sentiment analysis
+                    if any(word in content for word in ['false', 'incorrect', 'misleading', 'debunked', 'wrong']):
+                        contradicting_count += 1
+                    elif any(word in content for word in ['true', 'correct', 'confirmed', 'verified', 'accurate']):
+                        supporting_count += 1
+            
+            if relevant_count >= 3:
+                if contradicting_count > supporting_count:
+                    return self._create_verdict(
+                        'mostly_false',
+                        f'Found {relevant_count} news articles, majority suggest this claim is incorrect',
+                        confidence=70,
+                        sources=['News API Analysis']
+                    )
+                elif supporting_count > contradicting_count:
+                    return self._create_verdict(
+                        'mostly_true',
+                        f'Found {relevant_count} news articles supporting this claim',
+                        confidence=70,
+                        sources=['News API Analysis']
+                    )
+                else:
+                    return self._create_verdict(
+                        'mixed',
+                        f'Found {relevant_count} news articles with mixed information about this claim',
+                        confidence=60,
+                        sources=['News API Analysis']
+                    )
+            
+        except Exception as e:
+            logger.error(f"Error analyzing news articles: {e}")
+        
+        return None
+    
+    def _search_with_scraperapi(self, claim: str) -> Optional[Dict]:
+        """Use ScraperAPI to search Google for claim verification"""
+        try:
+            search_query = quote(claim[:150])  # Limit query length
+            url = f"http://api.scraperapi.com?api_key={self.scraperapi_key}&url=https://www.google.com/search?q={search_query}"
+            
+            response = requests.get(url, timeout=15)
+            
+            if response.status_code == 200:
+                # Analyze Google search results
+                content = response.text.lower()
+                
+                # Look for fact-checking indicators
+                if 'fact check' in content:
+                    if 'false' in content or 'incorrect' in content:
+                        return self._create_verdict(
+                            'false',
+                            'Google search results indicate this claim has been fact-checked as false',
+                            confidence=75,
+                            sources=['Google Search']
+                        )
+                    elif 'true' in content or 'correct' in content:
+                        return self._create_verdict(
+                            'true',
+                            'Google search results indicate this claim has been verified as true',
+                            confidence=75,
+                            sources=['Google Search']
+                        )
+                
+        except Exception as e:
+            logger.error(f"ScraperAPI error: {e}")
+        
+        return None
+    
+    def _ai_web_search_analysis(self, claim: str) -> Optional[Dict]:
+        """Use AI to analyze if claim can be verified through web search"""
+        try:
+            prompt = f"""Analyze this claim and determine if it can be verified through web search:
+
+Claim: "{claim}"
+
+Consider:
+1. Is this a factual claim that can be verified through news sources?
+2. What type of sources would verify or debunk this claim?
+3. Is this claim about recent events that would be in news articles?
+
+If the claim CAN be verified through web search, respond with:
+SEARCHABLE: YES
+SEARCH_TERMS: [key terms to search]
+EXPECTED_SOURCES: [types of sources that would have this information]
+
+If it CANNOT be verified through general web search, respond with:
+SEARCHABLE: NO
+REASON: [why it cannot be verified through web search]"""
+
+            response = self.openai_client.chat.completions.create(
+                model='gpt-3.5-turbo',
+                messages=[
+                    {"role": "system", "content": "You are a fact-checking assistant."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.3,
+                max_tokens=200
+            )
+            
+            result = response.choices[0].message.content.strip()
+            
+            if 'SEARCHABLE: YES' in result:
+                return self._create_verdict(
+                    'mostly_true',
+                    'This claim appears to be verifiable through web sources. Manual verification recommended.',
+                    confidence=60,
+                    sources=['AI Analysis suggests web verification possible']
+                )
+            
+        except Exception as e:
+            logger.error(f"AI web search analysis error: {e}")
+        
+        return None
+    
+    def _extract_key_terms(self, claim: str) -> List[str]:
+        """Extract key search terms from claim"""
+        # Remove common stop words
+        stop_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for',
+                     'of', 'with', 'by', 'from', 'is', 'was', 'are', 'were', 'been', 'be',
+                     'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'should',
+                     'could', 'may', 'might', 'must', 'shall', 'can', 'said', 'says', 'told'}
+        
+        # Extract words
+        words = re.findall(r'\b\w+\b', claim)
+        key_terms = []
+        
+        # Prioritize: 1) Proper nouns, 2) Numbers, 3) Uncommon words
+        for word in words:
+            if word[0].isupper() and word.lower() not in stop_words:
+                key_terms.append(word)
+        
+        # Add numbers
+        numbers = re.findall(r'\b\d+\.?\d*\b', claim)
+        key_terms.extend(numbers)
+        
+        # Add remaining significant words
+        for word in words:
+            if (word.lower() not in stop_words and 
+                word not in key_terms and 
+                len(word) > 3):
+                key_terms.append(word)
+        
+        return key_terms[:10]  # Limit to 10 terms
     
     def _is_pure_opinion(self, claim: str) -> bool:
         """Check if a claim is purely opinion (be less aggressive)"""
@@ -421,7 +650,8 @@ EVIDENCE: [Key facts that support your verdict]"""
             'false': 'false',
             'needs_context': 'needs_context',
             'needs context': 'needs_context',
-            'opinion': 'opinion'
+            'opinion': 'opinion',
+            'mixed': 'misleading'
         }
         
         return mappings.get(verdict_lower, 'needs_context')
