@@ -15,11 +15,21 @@ class ClaimExtractor:
     def __init__(self, openai_api_key: str = None):
         self.openai_api_key = openai_api_key
         self.openai_client = None
+        self.use_gpt4 = False  # Will be set based on config
+        
         if openai_api_key:
             try:
                 from openai import OpenAI
                 self.openai_client = OpenAI(api_key=openai_api_key)
                 logger.info("OpenAI client initialized for claims extraction")
+                
+                # Check if GPT-4 is available/configured
+                try:
+                    from config import Config
+                    self.use_gpt4 = Config.USE_GPT4 if hasattr(Config, 'USE_GPT4') else False
+                except:
+                    self.use_gpt4 = False
+                    
             except Exception as e:
                 logger.error(f"Failed to initialize OpenAI: {e}")
     
@@ -39,9 +49,9 @@ class ClaimExtractor:
         # First, identify the speakers and context
         speakers, topics = self.extract_context(transcript)
         
-        # Use AI if available, otherwise use pattern matching
+        # Use enhanced AI if available, otherwise use pattern matching
         if self.openai_client:
-            claims = self._extract_claims_with_ai(transcript, speakers, max_claims)
+            claims = self._extract_claims_with_enhanced_ai(transcript, speakers, max_claims)
         else:
             claims = self._extract_claims_with_patterns(transcript, speakers)
         
@@ -127,102 +137,154 @@ class ClaimExtractor:
         
         return speakers, topics
     
-    def _extract_claims_with_ai(self, transcript: str, speakers: List[str], max_claims: int) -> List[Dict]:
-        """Use AI to extract claims"""
-        try:
-            # Prepare the prompt
-            speaker_context = f"The speakers in this transcript are: {', '.join(speakers)}. " if speakers else ""
-            
-            # Limit transcript length for API
-            max_chars = 8000
-            if len(transcript) > max_chars:
-                transcript_chunk = transcript[:max_chars] + "... [truncated]"
-            else:
-                transcript_chunk = transcript
-            
-            prompt = f"""
-            Extract verifiable factual claims from this transcript. 
-            {speaker_context}
-            
-            IMPORTANT: This may be from the Trump-Harris debate on September 10, 2024.
-            
-            For each claim, provide:
-            1. The COMPLETE claim (full sentences with context, not snippets)
-            2. Who said it (if identifiable)
-            3. Any important context
-            
-            Focus on claims about:
-            - Statistics, numbers, percentages
-            - Historical events or facts
-            - Policy positions or actions taken
-            - Comparisons or rankings
-            - Statements about what happened or didn't happen
-            - Promises or commitments
-            
-            DO NOT extract:
-            - Opinions or beliefs
-            - Future predictions
-            - Vague generalizations
-            - Personal attacks
-            
-            Format your response as a JSON array:
-            [
-                {{
-                    "text": "Complete claim with full context",
-                    "speaker": "Speaker name",
-                    "context": "Additional context if needed",
-                    "confidence": 0-100
-                }}
-            ]
-            
-            Transcript:
-            {transcript_chunk}
-            
-            Extract up to {max_claims} claims.
-            """
-            
-            response = self.openai_client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": "You are an expert at identifying factual claims in political transcripts. Extract complete claims with full context."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.3,
-                max_tokens=3000
-            )
-            
-            content = response.choices[0].message.content
-            
-            # Try to parse as JSON
-            try:
-                # Find JSON array in response
-                json_match = re.search(r'\[.*\]', content, re.DOTALL)
-                if json_match:
-                    claims_data = json.loads(json_match.group())
-                else:
-                    # Fallback: parse structured text
-                    return self._parse_structured_claims(content, speakers)
-                
-                claims = []
-                for claim_info in claims_data:
-                    if isinstance(claim_info, dict) and 'text' in claim_info:
-                        claims.append({
-                            'text': claim_info['text'],
-                            'speaker': claim_info.get('speaker', speakers[0] if speakers else 'Unknown'),
-                            'context': claim_info.get('context', ''),
-                            'confidence': claim_info.get('confidence', 80)
-                        })
-                
-                return claims
-                
-            except json.JSONDecodeError:
-                # Fallback to parsing structured text
-                return self._parse_structured_claims(content, speakers)
-            
-        except Exception as e:
-            logger.error(f"AI claim extraction error: {str(e)}")
-            # Fall back to pattern matching
+    def _extract_claims_with_enhanced_ai(self, transcript: str, speakers: List[str], max_claims: int) -> List[Dict]:
+        """Enhanced AI claim extraction with better context understanding"""
+        
+        if not self.openai_client:
             return self._extract_claims_with_patterns(transcript, speakers)
+        
+        try:
+            # Use GPT-4 for better accuracy if available
+            model = "gpt-4" if self.use_gpt4 else "gpt-3.5-turbo"
+            
+            # Prepare speaker context
+            speaker_context = ""
+            if speakers:
+                speaker_context = f"Speakers identified: {', '.join(speakers)}\n"
+                if 'Donald Trump' in speakers and 'Kamala Harris' in speakers:
+                    speaker_context += "Context: This appears to be from the Trump-Harris presidential debate on September 10, 2024.\n"
+            
+            # Split transcript into manageable chunks if too long
+            max_chars = 6000
+            if len(transcript) > max_chars:
+                # Process in chunks
+                chunks = []
+                words = transcript.split()
+                current_chunk = []
+                current_length = 0
+                
+                for word in words:
+                    current_length += len(word) + 1
+                    if current_length > max_chars:
+                        chunks.append(' '.join(current_chunk))
+                        current_chunk = [word]
+                        current_length = len(word)
+                    else:
+                        current_chunk.append(word)
+                
+                if current_chunk:
+                    chunks.append(' '.join(current_chunk))
+            else:
+                chunks = [transcript]
+            
+            all_claims = []
+            
+            for i, chunk in enumerate(chunks):
+                logger.info(f"Processing chunk {i+1}/{len(chunks)} with AI")
+                
+                prompt = f"""
+                You are an expert fact-checker analyzing a political transcript. Extract factual claims that can be verified.
+                
+                {speaker_context}
+                
+                IMPORTANT INSTRUCTIONS:
+                1. Extract COMPLETE claims with full context - not fragments
+                2. Include WHO said it (speaker attribution)
+                3. Preserve exact wording - do not paraphrase
+                4. Focus on verifiable factual assertions, not opinions
+                5. Include claims about:
+                   - Statistics, numbers, percentages
+                   - Historical events or actions
+                   - Policy positions or voting records
+                   - Comparisons or rankings
+                   - Statements about what did or didn't happen
+                
+                For each claim, assess:
+                - Is this a factual assertion or opinion?
+                - Can this be verified with evidence?
+                - Is the speaker making a specific, checkable claim?
+                
+                DO NOT include:
+                - Future predictions or promises
+                - Personal feelings or beliefs
+                - Vague generalizations
+                - Rhetorical questions
+                
+                Transcript chunk {i+1}/{len(chunks)}:
+                {chunk}
+                
+                Return a JSON array with up to {max_claims // len(chunks)} claims:
+                [
+                    {{
+                        "text": "Complete claim exactly as stated",
+                        "speaker": "Speaker name",
+                        "context": "Relevant surrounding context",
+                        "type": "statistic|historical|policy|comparison|action",
+                        "confidence": 0-100
+                    }}
+                ]
+                
+                Ensure each claim is a complete sentence or thought, not a fragment.
+                """
+                
+                response = self.openai_client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {
+                            "role": "system", 
+                            "content": "You are a precise fact-checking assistant. Extract complete, verifiable claims while maintaining exact wording and full context."
+                        },
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.2,  # Lower temperature for more consistent extraction
+                    max_tokens=3000
+                )
+                
+                content = response.choices[0].message.content
+                
+                # Parse JSON response
+                try:
+                    # Find JSON array in response
+                    json_match = re.search(r'\[.*\]', content, re.DOTALL)
+                    if json_match:
+                        claims_data = json.loads(json_match.group())
+                        
+                        # Validate and enhance claims
+                        for claim in claims_data:
+                            if isinstance(claim, dict) and claim.get('text'):
+                                # Ensure we have complete sentences
+                                claim_text = claim['text'].strip()
+                                
+                                # Skip if too short
+                                if len(claim_text) < 20:
+                                    continue
+                                
+                                # Ensure it ends with punctuation
+                                if claim_text and claim_text[-1] not in '.!?':
+                                    claim_text += '.'
+                                
+                                all_claims.append({
+                                    'text': claim_text,
+                                    'speaker': claim.get('speaker', speakers[0] if speakers else 'Unknown'),
+                                    'context': claim.get('context', ''),
+                                    'type': claim.get('type', 'general'),
+                                    'confidence': min(max(claim.get('confidence', 75), 0), 100)
+                                })
+                        
+                except json.JSONDecodeError as e:
+                    logger.error(f"Failed to parse AI response as JSON: {e}")
+                    # Try to parse as structured text
+                    parsed_claims = self._parse_structured_claims(content, speakers)
+                    all_claims.extend(parsed_claims)
+            
+            logger.info(f"AI extracted {len(all_claims)} total claims")
+            return all_claims
+                
+        except Exception as e:
+            logger.error(f"Enhanced AI extraction error: {str(e)}")
+        
+        # Fallback to pattern-based extraction
+        return self._extract_claims_with_patterns(transcript, speakers)
     
     def _parse_structured_claims(self, content: str, speakers: List[str]) -> List[Dict]:
         """Parse structured text response from AI"""
