@@ -1,422 +1,447 @@
 """
-Enhanced Fact Checking Service with Temporal Context and Better Accuracy
+Transcript Fact Checker - Main Flask Application
+Enhanced version with improved verdict system and AI integration
 """
+import os
 import logging
-import requests
-from typing import List, Dict, Optional, Tuple
-from datetime import datetime, date
+import uuid
+from datetime import datetime
+from typing import List, Dict
+from flask import Flask, render_template, jsonify, request, send_file
+from flask_cors import CORS
+from dotenv import load_dotenv
 import json
-import re
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import inch
+from reportlab.lib.enums import TA_CENTER
+import io
+from threading import Thread
+import time
+import traceback
+
+# Load environment variables first
+load_dotenv()
+
+# Import configuration
 from config import Config
 
+# Initialize Flask app
+app = Flask(__name__)
+app.config.from_object(Config)
+CORS(app)
+
+# Set up logging
+logging.basicConfig(
+    level=getattr(logging, Config.LOG_LEVEL, logging.INFO),
+    format=Config.LOG_FORMAT
+)
 logger = logging.getLogger(__name__)
 
-class FactChecker:
-    """Enhanced fact checker with temporal context awareness and political context"""
+# Database initialization with fallback
+mongo_client = None
+db = None
+jobs_collection = None
+results_collection = None
+redis_client = None
+
+# In-memory storage as fallback
+in_memory_jobs = {}
+in_memory_results = {}
+
+# Try to connect to MongoDB if configured
+if Config.MONGODB_URI:
+    try:
+        from pymongo import MongoClient
+        mongo_client = MongoClient(Config.MONGODB_URI, serverSelectionTimeoutMS=5000)
+        # Test connection
+        mongo_client.server_info()
+        db = mongo_client[Config.MONGODB_DB_NAME]
+        jobs_collection = db['jobs']
+        results_collection = db['results']
+        logger.info("MongoDB connected successfully")
+    except Exception as e:
+        logger.warning(f"MongoDB connection failed: {str(e)}. Using in-memory storage.")
+        mongo_client = None
+else:
+    logger.info("MongoDB URI not configured. Using in-memory storage.")
+
+# Try to connect to Redis if configured
+if Config.REDIS_URL:
+    try:
+        import redis
+        redis_client = redis.from_url(Config.REDIS_URL, socket_connect_timeout=5)
+        redis_client.ping()
+        logger.info("Redis connected successfully")
+    except Exception as e:
+        logger.warning(f"Redis connection failed: {str(e)}. Using in-memory storage.")
+        redis_client = None
+else:
+    logger.info("Redis URL not configured. Using in-memory storage.")
+
+# Import services - REQUIRED for app to function
+try:
+    from services.transcript import TranscriptProcessor
+    from services.claims import ClaimExtractor
+    from services.factcheck import FactChecker, VERDICT_CATEGORIES
     
-    def __init__(self, config: Config):
-        self.config = config
-        self.google_api_key = config.GOOGLE_FACTCHECK_API_KEY
-        self.openai_api_key = config.OPENAI_API_KEY
-        self.session = requests.Session()
-        
-        # Initialize OpenAI if available
-        self.openai_client = None
-        if self.openai_api_key:
-            try:
-                from openai import OpenAI
-                self.openai_client = OpenAI(api_key=self.openai_api_key)
-                logger.info("OpenAI client initialized for fact checking")
-            except Exception as e:
-                logger.error(f"Failed to initialize OpenAI: {e}")
-        
-        # Initialize political topics checker
-        try:
-            from services.political_topics import PoliticalTopicsChecker
-            self.political_checker = PoliticalTopicsChecker()
-        except:
-            logger.warning("Political topics checker not available")
-            self.political_checker = None
-    
-    def check_claims(self, claims: List[str], source: str = None, context: Dict = None) -> List[Dict]:
-        """
-        Check multiple claims with temporal context awareness
-        
-        Args:
-            claims: List of claims to check
-            source: Source of the transcript (for temporal context)
-            context: Additional context including date, speakers, etc.
-        """
-        if not claims:
-            return []
-        
-        # Extract temporal context from the transcript
-        temporal_context = self._extract_temporal_context(source, context)
-        
-        results = []
-        
-        # Process claims in batches for efficiency
-        with ThreadPoolExecutor(max_workers=5) as executor:
-            future_to_claim = {
-                executor.submit(self._check_single_claim, claim, i, temporal_context): (claim, i) 
-                for i, claim in enumerate(claims)
-            }
-            
-            for future in as_completed(future_to_claim):
-                claim, index = future_to_claim[future]
-                try:
-                    result = future.result()
-                    results.append((index, result))
-                except Exception as e:
-                    logger.error(f"Error checking claim '{claim}': {str(e)}")
-                    results.append((index, {
-                        'claim': claim,
-                        'verdict': 'error',
-                        'explanation': f'Error during fact checking: {str(e)}',
-                        'confidence': 0,
-                        'sources': []
-                    }))
-        
-        # Sort by original order
-        results.sort(key=lambda x: x[0])
-        return [r[1] for r in results]
-    
-    def _extract_temporal_context(self, source: str, context: Dict) -> Dict:
-        """Extract temporal context from the transcript"""
-        temporal_context = {
-            'transcript_date': None,
-            'current_date': datetime.now(),
-            'temporal_references': {}
-        }
-        
-        # Try to extract date from context
-        if context:
-            if 'date' in context:
-                temporal_context['transcript_date'] = context['date']
-            if 'metadata' in context and 'date' in context['metadata']:
-                temporal_context['transcript_date'] = context['metadata']['date']
-        
-        # Try to extract from source
-        if source and not temporal_context['transcript_date']:
-            # Look for debate references
-            if 'debate' in source.lower():
-                if 'harris' in source.lower() and 'trump' in source.lower():
-                    # The Trump-Harris debate was on September 10, 2024
-                    temporal_context['transcript_date'] = '2024-09-10'
-                    temporal_context['event'] = 'Trump-Harris Presidential Debate'
-            
-            # Look for date patterns in source
-            date_patterns = [
-                r'(\d{4}-\d{2}-\d{2})',
-                r'(\d{1,2}/\d{1,2}/\d{4})',
-                r'(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4}'
-            ]
-            
-            for pattern in date_patterns:
-                match = re.search(pattern, source, re.IGNORECASE)
-                if match:
-                    temporal_context['transcript_date'] = match.group(1)
-                    break
-        
-        return temporal_context
-    
-    def _check_single_claim(self, claim: str, index: int, temporal_context: Dict) -> Dict:
-        """Check a single claim with temporal awareness"""
-        logger.info(f"Checking claim {index + 1}: {claim[:100]}...")
-        
-        # Check if this is about the Trump-Harris debate
-        claim_lower = claim.lower()
-        if 'harris' in claim_lower and 'trump' in claim_lower and ('debate' in claim_lower or 'debated' in claim_lower):
-            # Check for negative claims about the debate
-            if any(phrase in claim_lower for phrase in ['never debated', 'no debate', "didn't debate", "did not debate"]):
-                return {
-                    'claim': claim,
-                    'verdict': 'false',
-                    'explanation': 'False. Trump and Harris participated in a presidential debate on September 10, 2024, at the National Constitution Center in Philadelphia.',
-                    'confidence': 100,
-                    'sources': ['ABC News', 'National Constitution Center', 'Verified Historical Record']
-                }
-            # Positive claims about the debate
-            elif any(phrase in claim_lower for phrase in ['had a debate', 'debated', 'participated in a debate']):
-                return {
-                    'claim': claim,
-                    'verdict': 'true',
-                    'explanation': 'True. Trump and Harris participated in a presidential debate on September 10, 2024, moderated by ABC News.',
-                    'confidence': 100,
-                    'sources': ['ABC News', 'Historical Record']
-                }
-        
-        # First, check against political topics database
-        if self.political_checker:
-            political_check = self.political_checker.check_claim(claim)
-            if political_check and political_check.get('found'):
-                return {
-                    'claim': claim,
-                    'verdict': political_check.get('verdict', 'unverified'),
-                    'explanation': political_check.get('explanation', ''),
-                    'confidence': political_check.get('confidence', 75),
-                    'sources': [political_check.get('source', 'Political Database')]
-                }
-        
-        # Use AI to understand the claim with temporal context
-        claim_analysis = self._analyze_claim_with_ai(claim, temporal_context)
-        
-        # Gather evidence from multiple sources
-        evidence = []
-        
-        # 1. Google Fact Check API (if available)
-        if self.google_api_key:
-            google_results = self._check_google_factcheck(claim)
-            if google_results:
-                evidence.extend(google_results)
-        
-        # 2. Use AI for complex analysis
-        if self.openai_client and claim_analysis:
-            evidence.append({
-                'source': 'AI Analysis',
-                'verdict': claim_analysis.get('verdict', 'unverified'),
-                'explanation': claim_analysis.get('explanation', ''),
-                'confidence': claim_analysis.get('confidence', 50)
-            })
-        
-        # 3. Pattern matching for common false claims
-        pattern_check = self._check_known_patterns(claim, temporal_context)
-        if pattern_check:
-            evidence.append(pattern_check)
-        
-        # Synthesize results
-        return self._synthesize_evidence(claim, evidence, temporal_context)
-    
-    def _analyze_claim_with_ai(self, claim: str, temporal_context: Dict) -> Optional[Dict]:
-        """Use AI to analyze claims with temporal context"""
-        if not self.openai_client:
-            return None
-        
-        try:
-            # Build context message
-            context_info = ""
-            if temporal_context.get('transcript_date'):
-                context_info = f"This claim was made on {temporal_context['transcript_date']}. "
-            if temporal_context.get('event'):
-                context_info += f"The context is: {temporal_context['event']}. "
-            
-            # Add specific known facts
-            context_info += """
-            Important facts:
-            - Trump and Harris had a presidential debate on September 10, 2024
-            - Trump was president 2017-2021 and is president again starting January 2025
-            - Harris was VP 2021-2025
-            """
-            
-            prompt = f"""
-            Analyze this claim for factual accuracy:
-            Claim: "{claim}"
-            
-            {context_info}
-            
-            Important: When the claim uses temporal references like "this week", "recently", "last month", etc., 
-            interpret them relative to when the claim was made, not today's date.
-            
-            Consider:
-            1. Is this claim factually accurate?
-            2. What context is important?
-            3. Are there any misleading elements?
-            
-            Respond with:
-            - verdict: true/mostly_true/mixed/mostly_false/false
-            - explanation: Clear explanation
-            - confidence: 0-100
-            """
-            
-            response = self.openai_client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": "You are a fact-checking expert. Be precise and consider temporal context."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.3
-            )
-            
-            # Parse response
-            content = response.choices[0].message.content
-            
-            # Extract verdict
-            verdict_match = re.search(r'verdict:\s*(true|mostly_true|mixed|mostly_false|false)', content, re.IGNORECASE)
-            verdict = verdict_match.group(1).lower() if verdict_match else 'unverified'
-            
-            # Extract explanation
-            explanation_match = re.search(r'explanation:\s*(.+?)(?:confidence:|$)', content, re.IGNORECASE | re.DOTALL)
-            explanation = explanation_match.group(1).strip() if explanation_match else content
-            
-            # Extract confidence
-            confidence_match = re.search(r'confidence:\s*(\d+)', content)
-            confidence = int(confidence_match.group(1)) if confidence_match else 70
-            
-            return {
-                'verdict': verdict,
-                'explanation': explanation,
-                'confidence': confidence
-            }
-            
-        except Exception as e:
-            logger.error(f"AI analysis error: {str(e)}")
-            return None
-    
-    def _check_known_patterns(self, claim: str, temporal_context: Dict) -> Optional[Dict]:
-        """Check for known false claim patterns"""
-        claim_lower = claim.lower()
-        
-        # Check for temporal mismatches
-        if 'this week' in claim_lower or 'recently' in claim_lower or 'just' in claim_lower:
-            if temporal_context.get('transcript_date'):
-                return {
-                    'source': 'Temporal Analysis',
-                    'verdict': 'needs_context',
-                    'explanation': f"Note: Temporal references like 'this week' refer to the week of {temporal_context['transcript_date']}, not the current week.",
-                    'confidence': 60
-                }
-        
-        # Check for debate-related claims
-        if 'never debated' in claim_lower or 'no debate' in claim_lower:
-            if 'trump' in claim_lower and 'harris' in claim_lower:
-                return {
-                    'source': 'Historical Record',
-                    'verdict': 'false',
-                    'explanation': 'Trump and Harris participated in a presidential debate on September 10, 2024.',
-                    'confidence': 100
-                }
-        
-        # Check for war claims
-        if 'no new wars' in claim_lower and 'trump' in claim_lower:
-            return {
-                'source': 'Historical Record',
-                'verdict': 'true',
-                'explanation': 'True. Trump did not start any new wars during his first presidency (2017-2021).',
-                'confidence': 95
-            }
-        
-        return None
-    
-    def _synthesize_evidence(self, claim: str, evidence: List[Dict], temporal_context: Dict) -> Dict:
-        """Synthesize evidence from multiple sources"""
-        if not evidence:
-            return {
-                'claim': claim,
-                'verdict': 'unverified',
-                'explanation': 'Unable to verify this claim with available sources.',
-                'confidence': 0,
-                'sources': [],
-                'temporal_context': temporal_context.get('transcript_date')
-            }
-        
-        # Weight different sources
-        weights = {
-            'Google Fact Check': 1.0,
-            'AI Analysis': 0.8,
-            'Historical Record': 1.0,
-            'Temporal Analysis': 0.6,
-            'Pattern Match': 0.7,
-            'Political Database': 0.9
-        }
-        
-        # Calculate weighted verdict
-        verdict_scores = {
-            'true': 0, 'mostly_true': 0, 'mixed': 0, 
-            'mostly_false': 0, 'false': 0, 'unverified': 0,
-            'needs_context': 0, 'misleading': 0
-        }
-        
-        total_weight = 0
-        explanations = []
-        sources = []
-        
-        for item in evidence:
-            source = item.get('source', 'Unknown')
-            verdict = item.get('verdict', 'unverified')
-            weight = weights.get(source, 0.5)
-            confidence = item.get('confidence', 50) / 100
-            
-            if verdict in verdict_scores:
-                verdict_scores[verdict] += weight * confidence
-                total_weight += weight * confidence
-            
-            if item.get('explanation'):
-                explanations.append(f"{source}: {item['explanation']}")
-            sources.append(source)
-        
-        # Determine final verdict
-        if total_weight > 0:
-            for verdict in verdict_scores:
-                verdict_scores[verdict] /= total_weight
-        
-        final_verdict = max(verdict_scores, key=verdict_scores.get)
-        confidence = int(verdict_scores[final_verdict] * 100)
-        
-        # Build explanation
-        explanation = ' '.join(explanations)
-        if temporal_context.get('transcript_date'):
-            explanation = f"[Context: Statement from {temporal_context['transcript_date']}] " + explanation
-        
-        return {
-            'claim': claim,
-            'verdict': final_verdict,
-            'explanation': explanation,
-            'confidence': confidence,
-            'sources': list(set(sources)),
-            'temporal_context': temporal_context.get('transcript_date')
-        }
-    
-    def _check_google_factcheck(self, claim: str) -> List[Dict]:
-        """Check claim using Google Fact Check API"""
-        try:
-            url = "https://factchecktools.googleapis.com/v1alpha1/claims:search"
-            params = {
-                'query': claim,
-                'key': self.google_api_key
-            }
-            
-            response = self.session.get(url, params=params, timeout=5)
-            
-            if response.status_code == 200:
-                data = response.json()
-                results = []
-                
-                for item in data.get('claims', [])[:3]:  # Top 3 results
-                    rating = item.get('claimReview', [{}])[0].get('textualRating', '')
-                    verdict = self._map_rating_to_verdict(rating)
-                    
-                    results.append({
-                        'source': 'Google Fact Check',
-                        'verdict': verdict,
-                        'explanation': item.get('text', ''),
-                        'confidence': 80 if verdict != 'unverified' else 40
-                    })
-                
-                return results
-                
-        except Exception as e:
-            logger.error(f"Google Fact Check error: {str(e)}")
-        
-        return []
-    
-    def _map_rating_to_verdict(self, rating: str) -> str:
-        """Map fact check ratings to our verdict system"""
-        rating_lower = rating.lower()
-        
-        if any(word in rating_lower for word in ['true', 'correct', 'accurate']):
-            return 'true'
-        elif any(word in rating_lower for word in ['mostly true', 'mostly correct']):
-            return 'mostly_true'
-        elif any(word in rating_lower for word in ['mixed', 'partly']):
-            return 'mixed'
-        elif any(word in rating_lower for word in ['mostly false', 'mostly incorrect']):
-            return 'mostly_false'
-        elif any(word in rating_lower for word in ['false', 'incorrect', 'wrong']):
-            return 'false'
-        elif any(word in rating_lower for word in ['misleading', 'deceptive']):
-            return 'misleading'
-        elif any(word in rating_lower for word in ['unproven', 'unverified']):
-            return 'unverified'
+    # Initialize services
+    transcript_processor = TranscriptProcessor()
+    claim_extractor = ClaimExtractor(openai_api_key=Config.OPENAI_API_KEY)
+    fact_checker = FactChecker(Config)
+    logger.info("Services initialized successfully")
+except ImportError as e:
+    logger.error(f"CRITICAL: Failed to import required services: {str(e)}")
+    logger.error("Please ensure services directory exists with transcript.py, claims.py, and factcheck.py")
+    raise SystemExit(f"Cannot start application without services: {str(e)}")
+
+# Enhanced speaker database
+SPEAKER_DATABASE = {
+    'donald trump': {
+        'full_name': 'Donald J. Trump',
+        'role': '45th and 47th President of the United States',
+        'party': 'Republican',
+        'criminal_record': 'Multiple indictments in 2023-2024',
+        'fraud_history': 'Trump Organization fraud conviction 2022',
+        'fact_check_history': 'Extensive record of false and misleading statements',
+        'credibility_notes': 'Known for frequent false claims and exaggerations'
+    },
+    'j.d. vance': {
+        'full_name': 'James David Vance',
+        'role': 'Vice President of the United States',
+        'party': 'Republican',
+        'criminal_record': None,
+        'fraud_history': None,
+        'fact_check_history': 'Mixed record on factual accuracy',
+        'credibility_notes': 'Serving as VP since January 2025'
+    },
+    'joe biden': {
+        'full_name': 'Joseph R. Biden Jr.',
+        'role': '46th President of the United States (2021-2025)',
+        'party': 'Democrat',
+        'criminal_record': None,
+        'fraud_history': None,
+        'fact_check_history': 'Generally accurate with occasional misstatements',
+        'credibility_notes': 'Former President'
+    },
+    'kamala harris': {
+        'full_name': 'Kamala D. Harris',
+        'role': 'Former Vice President of the United States (2021-2025)',
+        'party': 'Democrat',
+        'criminal_record': None,
+        'fraud_history': None,
+        'fact_check_history': 'Generally accurate',
+        'credibility_notes': 'Former Vice President'
+    }
+}
+
+# Helper functions
+def store_job(job_id: str, job_data: dict):
+    """Store job in database or memory"""
+    try:
+        if jobs_collection:
+            jobs_collection.insert_one({'_id': job_id, **job_data})
         else:
-            return 'unverified'
+            in_memory_jobs[job_id] = job_data.copy()
+            logger.info(f"Stored job {job_id} in memory with status: {job_data.get('status')}")
+        
+        if redis_client:
+            redis_client.setex(f"job:{job_id}", 3600, json.dumps(job_data))
+    except Exception as e:
+        logger.error(f"Error storing job: {e}")
+        in_memory_jobs[job_id] = job_data.copy()
+
+def get_job(job_id: str) -> dict:
+    """Get job from database or memory"""
+    try:
+        # Try Redis first for speed
+        if redis_client:
+            try:
+                cached = redis_client.get(f"job:{job_id}")
+                if cached:
+                    return json.loads(cached)
+            except Exception as e:
+                logger.warning(f"Redis get failed: {e}")
+        
+        # Try MongoDB
+        if jobs_collection:
+            try:
+                job = jobs_collection.find_one({'_id': job_id})
+                if job:
+                    job.pop('_id', None)
+                    return job
+            except Exception as e:
+                logger.warning(f"MongoDB get failed: {e}")
+        
+        # Fallback to memory
+        job = in_memory_jobs.get(job_id)
+        if job:
+            logger.info(f"Retrieved job {job_id} from memory with status: {job.get('status')}")
+            return job.copy()
+        
+        logger.warning(f"Job {job_id} not found in any storage")
+        return None
+    except Exception as e:
+        logger.error(f"Error getting job {job_id}: {e}")
+        return in_memory_jobs.get(job_id, {}).copy() if job_id in in_memory_jobs else None
+
+def update_job(job_id: str, updates: dict):
+    """Update job in database or memory"""
+    try:
+        if jobs_collection:
+            try:
+                jobs_collection.update_one(
+                    {'_id': job_id},
+                    {'$set': updates}
+                )
+            except Exception as e:
+                logger.warning(f"MongoDB update failed: {e}")
+                if job_id in in_memory_jobs:
+                    in_memory_jobs[job_id].update(updates)
+        else:
+            if job_id in in_memory_jobs:
+                in_memory_jobs[job_id].update(updates)
+                logger.info(f"Updated job {job_id} in memory with: {list(updates.keys())}")
+            else:
+                logger.error(f"Job {job_id} not found in memory for update")
+        
+        # Update cache if exists
+        if redis_client:
+            try:
+                job_data = get_job(job_id)
+                if job_data:
+                    redis_client.setex(f"job:{job_id}", 3600, json.dumps(job_data))
+            except Exception as e:
+                logger.warning(f"Redis update failed: {e}")
+    except Exception as e:
+        logger.error(f"Error updating job {job_id}: {e}")
+        if job_id in in_memory_jobs:
+            in_memory_jobs[job_id].update(updates)
+
+def update_job_progress(job_id: str, progress: int, message: str):
+    """Update job progress"""
+    update_job(job_id, {
+        'progress': progress,
+        'message': message,
+        'status': 'failed' if progress < 0 else 'processing'
+    })
+
+def calculate_credibility_score_enhanced(fact_checks: List[Dict]) -> Dict:
+    """Calculate overall credibility score with nuanced verdicts"""
+    if not fact_checks:
+        return {
+            'score': 0,
+            'label': 'No claims verified',
+            'verdict_counts': {},
+            'breakdown': {}
+        }
+    
+    # Count each verdict type
+    verdict_counts = {}
+    total_score = 0
+    scorable_claims = 0
+    
+    for fc in fact_checks:
+        verdict = fc.get('verdict', 'needs_context')
+        verdict_counts[verdict] = verdict_counts.get(verdict, 0) + 1
+        
+        # Get score for this verdict
+        verdict_info = VERDICT_CATEGORIES.get(verdict, VERDICT_CATEGORIES['needs_context'])
+        if verdict_info['score'] is not None:
+            total_score += verdict_info['score']
+            scorable_claims += 1
+    
+    # Calculate weighted score
+    if scorable_claims > 0:
+        score = total_score / scorable_claims
+    else:
+        score = 50  # Default to middle if no scorable claims
+    
+    # Determine overall label
+    if score >= 85:
+        label = 'Highly Credible'
+    elif score >= 70:
+        label = 'Generally Credible'
+    elif score >= 50:
+        label = 'Mixed Credibility'
+    elif score >= 30:
+        label = 'Low Credibility'
+    else:
+        label = 'Very Low Credibility'
+    
+    # Check for deception patterns
+    deceptive_count = verdict_counts.get('intentionally_deceptive', 0)
+    false_count = verdict_counts.get('false', 0)
+    misleading_count = verdict_counts.get('misleading', 0)
+    
+    if deceptive_count >= 3:
+        label = 'Pattern of Deception Detected'
+        score = max(score - 20, 0)  # Penalty for deception pattern
+    elif false_count + misleading_count >= 5:
+        label = 'Significant Credibility Issues'
+        score = max(score - 10, 0)
+    
+    return {
+        'score': round(score),
+        'label': label,
+        'verdict_counts': verdict_counts,
+        'total_claims': len(fact_checks),
+        'breakdown': {
+            'accurate': verdict_counts.get('true', 0) + verdict_counts.get('mostly_true', 0) + verdict_counts.get('nearly_true', 0),
+            'misleading': verdict_counts.get('exaggeration', 0) + verdict_counts.get('misleading', 0),
+            'false': verdict_counts.get('mostly_false', 0) + verdict_counts.get('false', 0) + verdict_counts.get('intentionally_deceptive', 0),
+            'other': verdict_counts.get('needs_context', 0) + verdict_counts.get('opinion', 0)
+        }
+    }
+
+def generate_enhanced_conversational_summary(results: Dict) -> str:
+    """Generate a more nuanced conversational summary with AI insights"""
+    
+    cred_score = results.get('credibility_score', {})
+    score = cred_score.get('score', 0)
+    label = cred_score.get('label', 'Unknown')
+    verdict_counts = cred_score.get('verdict_counts', {})
+    
+    # Build detailed breakdown
+    summary_parts = []
+    
+    # Opening assessment
+    if score >= 85:
+        summary_parts.append(f"✅ This transcript demonstrates {label} with a score of {score}%.")
+        summary_parts.append("The vast majority of claims made were accurate and verifiable.")
+    elif score >= 70:
+        summary_parts.append(f"✓ This transcript shows {label} with a score of {score}%.")
+        summary_parts.append("Most claims were accurate, though some minor issues were found.")
+    elif score >= 50:
+        summary_parts.append(f"⚠️ This transcript has {label} with a score of {score}%.")
+        summary_parts.append("A mix of accurate and problematic claims were identified.")
+    else:
+        summary_parts.append(f"❌ This transcript shows {label} with a concerning score of only {score}%.")
+        summary_parts.append("Significant accuracy issues were detected throughout.")
+    
+    # Detailed verdict breakdown
+    summary_parts.append(f"\n📊 Detailed Analysis of {results.get('total_claims', 0)} claims:")
+    
+    # Group verdicts by category
+    if verdict_counts:
+        if verdict_counts.get('true', 0) > 0:
+            summary_parts.append(f"• ✅ True: {verdict_counts['true']} claims")
+        if verdict_counts.get('mostly_true', 0) > 0:
+            summary_parts.append(f"• ✓ Mostly True: {verdict_counts['mostly_true']} claims")
+        if verdict_counts.get('nearly_true', 0) > 0:
+            summary_parts.append(f"• 🔵 Nearly True: {verdict_counts['nearly_true']} claims")
+        if verdict_counts.get('exaggeration', 0) > 0:
+            summary_parts.append(f"• 📏 Exaggerations: {verdict_counts['exaggeration']} claims")
+        if verdict_counts.get('misleading', 0) > 0:
+            summary_parts.append(f"• ⚠️ Misleading: {verdict_counts['misleading']} claims")
+        if verdict_counts.get('mostly_false', 0) > 0:
+            summary_parts.append(f"• ❌ Mostly False: {verdict_counts['mostly_false']} claims")
+        if verdict_counts.get('false', 0) > 0:
+            summary_parts.append(f"• ❌ False: {verdict_counts['false']} claims")
+        if verdict_counts.get('intentionally_deceptive', 0) > 0:
+            summary_parts.append(f"• 🚨 Intentionally Deceptive: {verdict_counts['intentionally_deceptive']} claims")
+        if verdict_counts.get('opinion', 0) > 0:
+            summary_parts.append(f"• 💭 Opinions: {verdict_counts['opinion']} statements")
+        if verdict_counts.get('needs_context', 0) > 0:
+            summary_parts.append(f"• ❓ Needs Context: {verdict_counts['needs_context']} claims")
+    
+    # Pattern detection
+    deceptive_count = verdict_counts.get('intentionally_deceptive', 0)
+    false_count = verdict_counts.get('false', 0)
+    misleading_count = verdict_counts.get('misleading', 0)
+    exaggeration_count = verdict_counts.get('exaggeration', 0)
+    
+    if deceptive_count >= 3:
+        summary_parts.append("\n🚨 PATTERN DETECTED: Multiple instances of intentional deception indicate a deliberate attempt to mislead.")
+    elif false_count >= 5:
+        summary_parts.append("\n⚠️ PATTERN DETECTED: Numerous false claims suggest serious credibility issues.")
+    elif misleading_count >= 4:
+        summary_parts.append("\n⚠️ PATTERN DETECTED: Multiple misleading statements indicate a pattern of distortion.")
+    elif exaggeration_count >= 5:
+        summary_parts.append("\n📏 PATTERN DETECTED: Frequent exaggerations suggest a tendency to overstate facts.")
+    
+    # Speaker-specific insights
+    speaker_context = results.get('speaker_context', {})
+    if speaker_context:
+        summary_parts.append("\n👤 Speaker Analysis:")
+        for speaker, info in speaker_context.items():
+            if info.get('false_claims_in_transcript', 0) > 0:
+                summary_parts.append(f"• {speaker}: Made {info['false_claims_in_transcript']} false or misleading claims in this transcript")
+            if info.get('warnings'):
+                for warning in info['warnings']:
+                    summary_parts.append(f"  ⚠️ {warning}")
+    
+    # Most problematic claims
+    fact_checks = results.get('fact_checks', [])
+    problematic_claims = [
+        fc for fc in fact_checks 
+        if fc.get('verdict') in ['false', 'mostly_false', 'intentionally_deceptive', 'misleading']
+    ]
+    
+    if problematic_claims:
+        summary_parts.append("\n❌ Most Concerning Claims:")
+        for i, fc in enumerate(problematic_claims[:3], 1):
+            claim_preview = fc['claim'][:100] + '...' if len(fc['claim']) > 100 else fc['claim']
+            verdict_details = fc.get('verdict_details', {})
+            verdict_label = verdict_details.get('label', fc['verdict'])
+            summary_parts.append(f"{i}. \"{claim_preview}\" - Verdict: {verdict_label}")
+    
+    # Context about the event
+    if 'debate' in results.get('source', '').lower():
+        summary_parts.append("\n📅 Note: This analysis is from a political debate where fact-checking is especially important for informed voting.")
+    
+    # AI usage indication
+    if Config.OPENAI_API_KEY:
+        summary_parts.append("\n🤖 This analysis was enhanced with AI for improved accuracy and context understanding.")
+    
+    # Recommendation
+    if score < 50:
+        summary_parts.append("\n💡 Recommendation: Readers should verify claims independently due to the significant accuracy issues found.")
+    elif score < 70:
+        summary_parts.append("\n💡 Recommendation: While some claims are accurate, readers should approach with caution and verify key assertions.")
+    
+    return '\n'.join(summary_parts)
+
+def analyze_speaker_credibility(speakers: List[str], fact_checks: List[Dict]) -> Dict:
+    """Analyze speaker credibility with comprehensive background"""
+    speaker_info = {}
+    
+    # Process each speaker
+    for speaker in speakers:
+        if not speaker:
+            continue
+            
+        speaker_lower = speaker.lower()
+        matched_info = None
+        
+        # Find matching speaker in database
+        for key, info in SPEAKER_DATABASE.items():
+            if key in speaker_lower or speaker_lower in key:
+                matched_info = info
+                break
+        
+        if matched_info:
+            # Count problematic claims by this speaker
+            speaker_false_claims = 0
+            speaker_misleading_claims = 0
+            speaker_deceptive_claims = 0
+            
+            for fc in fact_checks:
+                if fc.get('speaker', '').lower() == speaker_lower:
+                    verdict = fc.get('verdict', '')
+                    if verdict in ['false', 'mostly_false']:
+                        speaker_false_claims += 1
+                    elif verdict == 'misleading':
+                        speaker_misleading_claims += 1
+                    elif verdict == 'intentionally_deceptive':
+                        speaker_deceptive_claims += 1
+            
+            total_problematic = speaker_false_claims + speaker_misleading_claims + speaker_deceptive_claims
+            
+            speaker_info[speaker] = {
+                'full_name': matched_info.get('full_name', speaker),
+                'role': matched_info.get('role', 'Unknown'),
+                'party': matched_info.get('party', 'Unknown'),
+                'credibility_notes':
