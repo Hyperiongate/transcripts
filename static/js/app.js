@@ -266,13 +266,65 @@ function displayResults(results) {
     // Update stats
     updateStats(results);
     
-    // Display summary
+    // Display conversational summary and speaker context
     const summaryContainer = document.getElementById('analysis-summary');
-    summaryContainer.innerHTML = `We analyzed ${results.total_claims || 0} claims from your transcript. 
-        ${results.true_claims || 0} were verified as true, 
-        ${results.false_claims || 0} were found to be false, 
-        ${results.mixed_claims || 0} were mixed, and 
-        ${results.unverified_claims || 0} could not be verified.`;
+    let summaryHTML = '';
+    
+    // Add conversational summary if available
+    if (results.conversational_summary) {
+        summaryHTML += `<div class="conversational-summary" style="white-space: pre-line; line-height: 1.6;">
+            ${results.conversational_summary}
+        </div>`;
+    } else {
+        // Fallback to basic summary
+        summaryHTML += `We analyzed ${results.total_claims || 0} claims from your transcript. 
+            ${results.true_claims || 0} were verified as true, 
+            ${results.false_claims || 0} were found to be false, 
+            ${results.mixed_claims || 0} were mixed, and 
+            ${results.unverified_claims || 0} could not be verified.`;
+    }
+    
+    // Add speaker context if available
+    if (results.speaker_context && Object.keys(results.speaker_context).length > 0) {
+        summaryHTML += '<div class="speaker-context" style="margin-top: 20px; padding: 15px; background: #f8f9fa; border-radius: 8px;">';
+        summaryHTML += '<h4 style="margin-bottom: 10px;">Speaker Background:</h4>';
+        
+        for (const [speaker, info] of Object.entries(results.speaker_context)) {
+            summaryHTML += `<div class="speaker-info" style="margin-bottom: 15px;">`;
+            summaryHTML += `<h5>${info.full_name || speaker}</h5>`;
+            
+            if (info.role) {
+                summaryHTML += `<p><strong>Role:</strong> ${info.role}</p>`;
+            }
+            
+            if (info.criminal_record) {
+                summaryHTML += `<p style="color: #dc3545;"><strong>Criminal Record:</strong> ${info.criminal_record}</p>`;
+            }
+            
+            if (info.fraud_history) {
+                summaryHTML += `<p style="color: #ff6b6b;"><strong>Fraud History:</strong> ${info.fraud_history}</p>`;
+            }
+            
+            if (info.fact_check_history) {
+                summaryHTML += `<p><strong>Fact Check History:</strong> ${info.fact_check_history}</p>`;
+            }
+            
+            if (info.current_analysis && info.current_analysis.patterns && info.current_analysis.patterns.length > 0) {
+                summaryHTML += `<div style="margin-top: 10px; padding: 10px; background: #fff3cd; border-radius: 4px;">`;
+                summaryHTML += `<strong>Patterns in this transcript:</strong><ul style="margin: 5px 0 0 20px;">`;
+                info.current_analysis.patterns.forEach(pattern => {
+                    summaryHTML += `<li>${pattern}</li>`;
+                });
+                summaryHTML += `</ul></div>`;
+            }
+            
+            summaryHTML += `</div>`;
+        }
+        
+        summaryHTML += '</div>';
+    }
+    
+    summaryContainer.innerHTML = summaryHTML;
     
     // Display fact checks
     displayFactChecks(results.fact_checks || []);
