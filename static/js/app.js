@@ -1,611 +1,458 @@
-// Enhanced Fact Checker Frontend JavaScript
+// Main application JavaScript
+// Note: VERDICT_MAPPINGS is already defined in enhanced.js
 
 // Global variables
 let currentJobId = null;
 let pollInterval = null;
 
-// Verdict display mappings
-const VERDICT_MAPPINGS = {
-    'true': { icon: '✓', class: 'verdict-true', label: 'True' },
-    'mostly_true': { icon: '✓', class: 'verdict-mostly-true', label: 'Mostly True' },
-    'nearly_true': { icon: '✓', class: 'verdict-nearly-true', label: 'Nearly True' },
-    'exaggeration': { icon: '⚡', class: 'verdict-exaggeration', label: 'Exaggeration' },
-    'misleading': { icon: '⚠️', class: 'verdict-misleading', label: 'Misleading' },
-    'mostly_false': { icon: '✗', class: 'verdict-mostly-false', label: 'Mostly False' },
-    'false': { icon: '✗', class: 'verdict-false', label: 'False' },
-    'intentionally_deceptive': { icon: '🚨', class: 'verdict-intentionally-deceptive', label: 'Intentionally Deceptive' },
-    'needs_context': { icon: '?', class: 'verdict-needs-context', label: 'Needs Context' },
-    'opinion': { icon: '💭', class: 'verdict-opinion', label: 'Opinion' },
-    'unverified': { icon: '?', class: 'verdict-unverified', label: 'Unverified' }
-};
-
 // Initialize when DOM is loaded
 document.addEventListener('DOMContentLoaded', function() {
-    initializeTabs();
-    initializeFileInput();
-    initializeForm();
-    initializeExportButtons();
-    initializeYouTubeInput();
-});
-
-// Tab functionality
-function initializeTabs() {
+    // Initialize tabs
     const tabButtons = document.querySelectorAll('.tab-button');
-    const tabContents = document.querySelectorAll('.tab-content');
+    const panels = document.querySelectorAll('.input-panel');
     
     tabButtons.forEach(button => {
         button.addEventListener('click', () => {
             const targetTab = button.getAttribute('data-tab');
             
-            // Update button states
+            // Update active states
             tabButtons.forEach(btn => btn.classList.remove('active'));
-            button.classList.add('active');
+            panels.forEach(panel => panel.classList.remove('active'));
             
-            // Update content visibility
-            tabContents.forEach(content => {
-                content.classList.remove('active');
-                if (content.id === targetTab) {
-                    content.classList.add('active');
-                }
-            });
+            button.classList.add('active');
+            document.getElementById(`${targetTab}-panel`).classList.add('active');
         });
     });
-}
-
-// File input handling
-function initializeFileInput() {
-    const fileInput = document.getElementById('file-input');
-    const fileName = document.getElementById('file-name');
     
-    if (fileInput) {
-        fileInput.addEventListener('change', (e) => {
-            const file = e.target.files[0];
-            if (file) {
-                fileName.textContent = `Selected: ${file.name}`;
+    // Character counter
+    const textInput = document.getElementById('text-input');
+    const charCount = document.getElementById('char-count');
+    
+    if (textInput) {
+        textInput.addEventListener('input', () => {
+            charCount.textContent = textInput.value.length;
+            
+            // Warn if approaching limit
+            if (textInput.value.length > 45000) {
+                charCount.style.color = '#ef4444';
             } else {
-                fileName.textContent = 'No file selected';
+                charCount.style.color = '#6b7280';
             }
         });
     }
-}
-
-// YouTube input handling
-function initializeYouTubeInput() {
-    const youtubeInput = document.getElementById('youtube-url');
-    if (youtubeInput) {
-        youtubeInput.placeholder = 'https://www.youtube.com/watch?v=...';
-    }
-}
-
-// Form submission
-function initializeForm() {
-    const form = document.getElementById('fact-check-form');
-    if (form) {
-        form.addEventListener('submit', handleSubmit);
-    }
-}
-
-async function handleSubmit(e) {
-    e.preventDefault();
     
-    // Get active tab
-    const activeTab = document.querySelector('.tab-content.active');
-    const sourceType = activeTab.id.replace('-input', '');
+    // File upload handling
+    const fileInput = document.getElementById('file-input');
+    const dropZone = document.getElementById('file-drop-zone');
     
-    // Create form data
-    const formData = new FormData();
-    formData.append('source_type', sourceType);
-    
-    // Add speech date if provided
-    const speechDate = document.getElementById('speech-date');
-    if (speechDate && speechDate.value) {
-        formData.append('speech_date', speechDate.value);
+    if (dropZone) {
+        dropZone.addEventListener('click', () => fileInput.click());
+        
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('dragover');
+        });
+        
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.classList.remove('dragover');
+        });
+        
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+            
+            const files = e.dataTransfer.files;
+            if (files.length > 0) {
+                handleFileSelect(files[0]);
+            }
+        });
     }
     
-    // Add source-specific data
-    if (sourceType === 'text') {
-        const transcript = document.getElementById('transcript-text').value;
-        if (!transcript.trim()) {
-            showError('Please enter a transcript');
+    if (fileInput) {
+        fileInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                handleFileSelect(e.target.files[0]);
+            }
+        });
+    }
+});
+
+// File handling
+function handleFileSelect(file) {
+    const maxSize = 10 * 1024 * 1024; // 10MB
+    const allowedTypes = ['.txt', '.srt', '.vtt'];
+    const fileExt = file.name.toLowerCase().substr(file.name.lastIndexOf('.'));
+    
+    if (!allowedTypes.includes(fileExt)) {
+        showError('Invalid file type. Please upload TXT, SRT, or VTT files.');
+        return;
+    }
+    
+    if (file.size > maxSize) {
+        showError('File too large. Maximum size is 10MB.');
+        return;
+    }
+    
+    // Show file info
+    document.getElementById('file-name').textContent = file.name;
+    document.getElementById('file-info').style.display = 'flex';
+    document.getElementById('file-drop-zone').style.display = 'none';
+}
+
+function removeFile() {
+    document.getElementById('file-input').value = '';
+    document.getElementById('file-info').style.display = 'none';
+    document.getElementById('file-drop-zone').style.display = 'block';
+}
+
+// Start analysis
+async function startAnalysis() {
+    const activePanel = document.querySelector('.input-panel.active').id;
+    const isTextInput = activePanel === 'text-panel';
+    
+    let transcript = '';
+    
+    if (isTextInput) {
+        transcript = document.getElementById('text-input').value.trim();
+        if (!transcript) {
+            showError('Please enter a transcript to analyze.');
             return;
         }
-        formData.append('transcript', transcript);
-    } else if (sourceType === 'file') {
+        if (transcript.length > 50000) {
+            showError('Transcript too long. Maximum 50,000 characters.');
+            return;
+        }
+    } else {
         const fileInput = document.getElementById('file-input');
-        if (!fileInput.files[0]) {
-            showError('Please select a file');
+        if (!fileInput.files || fileInput.files.length === 0) {
+            showError('Please select a file to analyze.');
             return;
         }
-        formData.append('file', fileInput.files[0]);
-    } else if (sourceType === 'youtube') {
-        const youtubeUrl = document.getElementById('youtube-url').value;
-        if (!youtubeUrl.trim()) {
-            showError('Please enter a YouTube URL');
+        
+        // Read file content
+        const file = fileInput.files[0];
+        try {
+            transcript = await readFileContent(file);
+        } catch (error) {
+            showError('Error reading file: ' + error.message);
             return;
         }
-        formData.append('youtube_url', youtubeUrl);
     }
     
-    // Show loading state
-    showLoading();
+    // Hide input section, show progress
+    document.getElementById('input-section').style.display = 'none';
+    document.getElementById('progress-section').style.display = 'block';
     
+    // Submit for analysis
+    submitTranscript(transcript);
+}
+
+// Read file content
+function readFileContent(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (e) => resolve(e.target.result);
+        reader.onerror = (e) => reject(new Error('Failed to read file'));
+        reader.readAsText(file);
+    });
+}
+
+// Submit transcript to API
+async function submitTranscript(transcript) {
     try {
-        const response = await fetch('/analyze', {
+        updateProgress(10, 'Submitting transcript...');
+        
+        const response = await fetch('/api/submit', {
             method: 'POST',
-            body: formData
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({ transcript: transcript })
         });
         
         const data = await response.json();
         
         if (response.ok) {
             currentJobId = data.job_id;
-            console.log('Analysis started with job ID:', currentJobId);
-            console.log('Source:', sourceType);
             pollForResults();
         } else {
-            hideLoading();
-            showError(data.error || 'Analysis failed');
+            throw new Error(data.error || 'Failed to submit transcript');
         }
     } catch (error) {
-        hideLoading();
-        showError('Network error: ' + error.message);
+        showError('Error: ' + error.message);
+        resetAnalysis();
     }
 }
 
 // Poll for results
 function pollForResults() {
+    let attempts = 0;
+    const maxAttempts = 60; // 1 minute timeout
+    
     pollInterval = setInterval(async () => {
         try {
-            const response = await fetch(`/status/${currentJobId}`);
-            const status = await response.json();
+            const response = await fetch(`/api/status/${currentJobId}`);
+            const data = await response.json();
             
-            updateProgress(status);
+            if (response.ok) {
+                // Update progress
+                const progress = data.progress || 0;
+                const message = data.message || 'Processing...';
+                updateProgress(progress, message);
+                
+                // Update steps
+                if (progress >= 25) document.getElementById('step-1').classList.add('active');
+                if (progress >= 50) document.getElementById('step-2').classList.add('active');
+                if (progress >= 75) document.getElementById('step-3').classList.add('active');
+                if (progress >= 90) document.getElementById('step-4').classList.add('active');
+                
+                // Check if completed
+                if (data.status === 'completed') {
+                    clearInterval(pollInterval);
+                    getResults();
+                } else if (data.status === 'failed') {
+                    clearInterval(pollInterval);
+                    showError(data.error || 'Analysis failed');
+                    resetAnalysis();
+                }
+            }
             
-            if (status.status === 'completed') {
+            attempts++;
+            if (attempts >= maxAttempts) {
                 clearInterval(pollInterval);
-                const resultsResponse = await fetch(`/results/${currentJobId}`);
-                const results = await resultsResponse.json();
-                hideLoading();
-                displayResults(results);
-            } else if (status.status === 'failed') {
-                clearInterval(pollInterval);
-                hideLoading();
-                showError(status.error || 'Analysis failed');
+                showError('Analysis timeout. Please try again.');
+                resetAnalysis();
             }
         } catch (error) {
             clearInterval(pollInterval);
-            hideLoading();
-            showError('Failed to get status');
+            showError('Connection error. Please try again.');
+            resetAnalysis();
         }
     }, 1000);
 }
 
-// Update progress
-function updateProgress(status) {
-    const progressBar = document.querySelector('.progress-fill');
-    const progressText = document.querySelector('.progress-text');
-    
-    if (progressBar && status.progress !== undefined) {
-        progressBar.style.width = `${status.progress}%`;
-    }
-    
-    if (progressText) {
-        if (status.stage === 'extracting_claims') {
-            progressText.textContent = 'Extracting claims...';
-        } else if (status.checked_claims !== undefined) {
-            progressText.textContent = `Checking claim ${status.checked_claims} of ${status.total_claims || '?'}`;
+// Get results
+async function getResults() {
+    try {
+        const response = await fetch(`/api/results/${currentJobId}`);
+        const results = await response.json();
+        
+        if (response.ok) {
+            displayResults(results);
         } else {
-            progressText.textContent = 'Processing...';
+            throw new Error(results.error || 'Failed to get results');
         }
+    } catch (error) {
+        showError('Error getting results: ' + error.message);
+        resetAnalysis();
     }
+}
+
+// Update progress
+function updateProgress(percent, message) {
+    document.getElementById('progress-fill').style.width = percent + '%';
+    document.getElementById('progress-text').textContent = message;
 }
 
 // Display results
 function displayResults(results) {
-    const resultsSection = document.getElementById('results-section');
-    if (!resultsSection) return;
+    // Hide progress, show results
+    document.getElementById('progress-section').style.display = 'none';
+    document.getElementById('results-section').style.display = 'block';
     
-    resultsSection.style.display = 'block';
-    resultsSection.innerHTML = `
-        <div class="results-header">
-            <h2>Fact Check Results</h2>
-            <div class="export-buttons">
-                <button class="btn btn-secondary export-btn" data-format="pdf">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                        <polyline points="14 2 14 8 20 8"></polyline>
-                        <line x1="16" y1="13" x2="8" y2="13"></line>
-                        <line x1="16" y1="17" x2="8" y2="17"></line>
-                        <polyline points="10 9 9 9 8 9"></polyline>
-                    </svg>
-                    Export PDF
-                </button>
-                <button class="btn btn-secondary export-btn" data-format="json">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
-                        <polyline points="7 10 12 15 17 10"></polyline>
-                        <line x1="12" y1="15" x2="12" y2="3"></line>
-                    </svg>
-                    Export JSON
-                </button>
-                <button class="btn btn-secondary export-btn" data-format="text">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-                        <polyline points="14 2 14 8 20 8"></polyline>
-                        <line x1="16" y1="13" x2="8" y2="13"></line>
-                        <line x1="16" y1="17" x2="8" y2="17"></line>
-                        <line x1="16" y1="21" x2="8" y2="21"></line>
-                    </svg>
-                    Export Text
-                </button>
-            </div>
-        </div>
-        
-        ${results.enhanced_summary ? `
-            <div class="enhanced-summary">
-                <h3>
-                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                        <circle cx="12" cy="12" r="10"></circle>
-                        <line x1="12" y1="16" x2="12" y2="12"></line>
-                        <line x1="12" y1="8" x2="12.01" y2="8"></line>
-                    </svg>
-                    Executive Summary
-                </h3>
-                <div class="summary-content">${formatSummary(results.enhanced_summary)}</div>
-            </div>
-        ` : ''}
-        
-        ${results.speakers && Object.keys(results.speakers).length > 0 ? displaySpeakerContext(results.speakers) : ''}
-        
-        ${results.patterns ? displayPatterns(results.patterns) : ''}
-        
-        ${displayCredibilityMeter(results)}
-        
-        <div class="stats-grid">
-            <div class="stat-card">
-                <div class="stat-value">${results.total_claims || results.checked_claims || 0}</div>
-                <div class="stat-label">Total Claims</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value">${countVerdicts(results.fact_checks, ['true', 'mostly_true', 'nearly_true'])}</div>
-                <div class="stat-label">True Claims</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value">${countVerdicts(results.fact_checks, ['false', 'mostly_false', 'intentionally_deceptive'])}</div>
-                <div class="stat-label">False Claims</div>
-            </div>
-            <div class="stat-card">
-                <div class="stat-value">${countVerdicts(results.fact_checks, ['misleading', 'exaggeration'])}</div>
-                <div class="stat-label">Misleading</div>
-            </div>
-        </div>
-        
-        <h3 style="margin-top: 2rem; margin-bottom: 1rem;">Detailed Fact Checks</h3>
-        <div class="fact-check-list">
-            ${results.fact_checks.map((check, index) => displayFactCheck(check, index)).join('')}
-        </div>
-    `;
+    // Update credibility score
+    const score = results.credibility_score?.score || 0;
+    const label = results.credibility_score?.label || 'Unknown';
     
-    // Re-initialize export buttons
-    initializeExportButtons();
-}
-
-function displaySpeakerContext(speakers) {
-    let html = '<div class="speaker-context">';
-    html += '<h4><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg> Speaker Background</h4>';
-    html += '<div class="speaker-info">';
+    document.getElementById('credibility-value').textContent = score;
+    document.getElementById('credibility-label').textContent = label;
     
-    for (const [speaker, context] of Object.entries(speakers)) {
-        if (context.criminal_record || context.fraud_history) {
-            html += '<div class="speaker-record">';
-            html += `<strong>${speaker}:</strong>`;
-            if (context.criminal_record) {
-                html += `<span class="criminal-record">Criminal Record: ${context.criminal_record}</span>`;
-            }
-            if (context.fraud_history) {
-                html += `<span class="fraud-history">Fraud History: ${context.fraud_history}</span>`;
-            }
-            html += '</div>';
-        }
+    // Position meter pointer
+    const pointer = document.getElementById('credibility-pointer');
+    pointer.style.left = `calc(${score}% - 3px)`;
+    
+    // Update summary
+    const summary = results.conversational_summary || results.summary || 'No summary available.';
+    document.getElementById('analysis-summary').innerHTML = formatSummary(summary);
+    
+    // Update stats
+    document.getElementById('total-claims').textContent = results.total_claims || 0;
+    document.getElementById('verified-claims').textContent = 
+        results.credibility_score?.breakdown?.accurate || 0;
+    document.getElementById('false-claims').textContent = 
+        results.credibility_score?.breakdown?.false || 0;
+    document.getElementById('unverified-claims').textContent = 
+        results.credibility_score?.breakdown?.other || 0;
+    
+    // Display fact checks
+    displayFactChecks(results.fact_checks || []);
+    
+    // Add speaker/topic info if available
+    if (results.speakers && results.speakers.length > 0) {
+        const speakerInfo = document.createElement('div');
+        speakerInfo.className = 'speaker-info';
+        speakerInfo.innerHTML = `<strong>Speakers:</strong> ${results.speakers.join(', ')}`;
+        document.getElementById('analysis-summary').appendChild(speakerInfo);
     }
     
-    html += '</div></div>';
-    return html;
-}
-
-function displayPatterns(patterns) {
-    if (!patterns.deception_pattern) return '';
-    
-    return `
-        <div class="pattern-alert">
-            <svg class="pattern-alert-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"></path>
-                <line x1="12" y1="9" x2="12" y2="13"></line>
-                <line x1="12" y1="17" x2="12.01" y2="17"></line>
-            </svg>
-            <div class="pattern-alert-content">
-                <h4>Pattern of Deception Detected</h4>
-                <p>This transcript contains ${patterns.false_claims} false claims, ${patterns.misleading_claims} misleading claims, and ${patterns.intentionally_deceptive} intentionally deceptive statements. This appears to be a deliberate pattern of misinformation.</p>
-            </div>
-        </div>
-    `;
-}
-
-function displayCredibilityMeter(results) {
-    const patterns = results.patterns || {};
-    const percentage = 100 - (patterns.deceptive_percentage || 0);
-    let level = 'high';
-    let label = 'High Credibility';
-    
-    if (percentage < 50) {
-        level = 'low';
-        label = 'Low Credibility';
-    } else if (percentage < 75) {
-        level = 'medium';
-        label = 'Medium Credibility';
+    if (results.topics && results.topics.length > 0) {
+        const topicInfo = document.createElement('div');
+        topicInfo.className = 'topic-info';
+        topicInfo.innerHTML = `<strong>Topics:</strong> ${results.topics.join(', ')}`;
+        document.getElementById('analysis-summary').appendChild(topicInfo);
     }
-    
-    return `
-        <div class="credibility-meter">
-            <h3>Overall Credibility Score</h3>
-            <div class="meter-container">
-                <div class="meter-fill ${level}" style="width: ${percentage}%">
-                    <div class="meter-label">${Math.round(percentage)}%</div>
-                </div>
-            </div>
-            <div class="meter-description">${label}</div>
-        </div>
-    `;
 }
 
-function displayFactCheck(check, index) {
-    const verdict = check.verdict || 'unverified';
-    const verdictInfo = VERDICT_MAPPINGS[verdict.toLowerCase()] || VERDICT_MAPPINGS.unverified;
-    
-    return `
-        <div class="fact-check-item">
-            ${check.ai_analysis_used ? '<div class="ai-badge">💡 AI Enhanced</div>' : ''}
-            <div class="fact-check-header">
-                <div class="claim-text">${check.claim || 'No claim text'}</div>
-                <span class="verdict-badge ${verdictInfo.class}">
-                    ${verdictInfo.icon} ${verdictInfo.label}
-                </span>
-            </div>
-            
-            ${check.full_context ? `
-                <div class="full-context">
-                    <strong>Full context:</strong> ${check.full_context}
-                </div>
-            ` : ''}
-            
-            <div class="explanation">${check.explanation || 'No explanation available'}</div>
-            
-            ${check.confidence ? `
-                <div class="confidence-section">
-                    <h4>Confidence Level</h4>
-                    <div class="confidence-bar">
-                        <div class="confidence-fill" style="width: ${check.confidence}%"></div>
-                    </div>
-                    <span class="confidence-text">${check.confidence}% confident</span>
-                </div>
-            ` : ''}
-            
-            ${check.sources && check.sources.length > 0 ? `
-                <div class="sources">
-                    <h4>Sources</h4>
-                    <div class="source-list">
-                        ${check.sources.map(source => `
-                            <span class="source-item">
-                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                    <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"></path>
-                                    <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"></path>
-                                </svg>
-                                ${source}
-                            </span>
-                        `).join('')}
-                    </div>
-                </div>
-            ` : ''}
-        </div>
-    `;
-}
-
+// Format summary text
 function formatSummary(summary) {
     return summary
-        .replace(/🚨/g, '<span class="warning">🚨</span>')
-        .replace(/⚠️/g, '<span class="warning">⚠️</span>')
-        .replace(/✓/g, '<span class="success">✓</span>')
-        .replace(/✅/g, '<span class="success">✅</span>')
-        .replace(/❌/g, '<span class="warning">❌</span>')
-        .replace(/💡/g, '<span class="success">💡</span>')
-        .replace(/\n/g, '<br>');
+        .replace(/\n/g, '<br>')
+        .replace(/✅/g, '<span style="color: #10b981;">✅</span>')
+        .replace(/❌/g, '<span style="color: #ef4444;">❌</span>')
+        .replace(/⚠️/g, '<span style="color: #f59e0b;">⚠️</span>')
+        .replace(/🚨/g, '<span style="color: #dc2626;">🚨</span>')
+        .replace(/💡/g, '<span style="color: #3b82f6;">💡</span>');
 }
 
-function countVerdicts(factChecks, verdictTypes) {
-    if (!factChecks) return 0;
-    return factChecks.filter(check => 
-        verdictTypes.includes((check.verdict || 'unverified').toLowerCase())
-    ).length;
-}
-
-// Export functionality
-function initializeExportButtons() {
-    const exportButtons = document.querySelectorAll('.export-btn');
-    exportButtons.forEach(button => {
-        button.addEventListener('click', () => {
-            const format = button.getAttribute('data-format');
-            if (currentJobId) {
-                exportResults(currentJobId, format);
-            }
-        });
+// Display fact checks
+function displayFactChecks(factChecks) {
+    const container = document.getElementById('fact-check-list');
+    container.innerHTML = '';
+    
+    if (factChecks.length === 0) {
+        container.innerHTML = '<p style="text-align: center; color: #6b7280;">No fact checks available.</p>';
+        return;
+    }
+    
+    factChecks.forEach((check, index) => {
+        const item = document.createElement('div');
+        const verdict = check.verdict || 'unverified';
+        const verdictClass = getVerdictClass(verdict);
+        
+        item.className = `fact-check-item ${verdictClass}`;
+        item.innerHTML = `
+            <div class="fact-check-header">
+                <div class="fact-check-claim">${check.claim || 'No claim text'}</div>
+                <div class="fact-check-verdict ${verdictClass}">
+                    <i class="fas ${getVerdictIcon(verdict)}"></i>
+                    ${formatVerdict(verdict)}
+                </div>
+            </div>
+            <div class="fact-check-details">
+                <p>${check.explanation || 'No explanation available.'}</p>
+                ${check.sources && check.sources.length > 0 ? 
+                    `<div class="fact-check-source">
+                        <strong>Sources:</strong> ${check.sources.join(', ')}
+                    </div>` : ''}
+            </div>
+        `;
+        
+        container.appendChild(item);
     });
 }
 
-async function exportResults(jobId, format) {
-    try {
-        const response = await fetch(`/export/${jobId}/${format}`);
-        
-        if (response.ok) {
-            if (format === 'json') {
-                const data = await response.json();
-                downloadJSON(data, `fact_check_${jobId}.json`);
-            } else {
-                const blob = await response.blob();
-                const url = window.URL.createObjectURL(blob);
-                const a = document.createElement('a');
-                a.href = url;
-                a.download = `fact_check_${jobId}.${format}`;
-                document.body.appendChild(a);
-                a.click();
-                window.URL.revokeObjectURL(url);
-                document.body.removeChild(a);
-            }
-        } else {
-            showError('Export failed');
-        }
-    } catch (error) {
-        showError('Export error: ' + error.message);
-    }
-}
-
-function downloadJSON(data, filename) {
-    const json = JSON.stringify(data, null, 2);
-    const blob = new Blob([json], { type: 'application/json' });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    window.URL.revokeObjectURL(url);
-    document.body.removeChild(a);
-}
-
-// Loading and error states
-function showLoading() {
-    const loadingOverlay = document.createElement('div');
-    loadingOverlay.id = 'loading-overlay';
-    loadingOverlay.className = 'loading-overlay';
-    loadingOverlay.innerHTML = `
-        <div class="loading-container">
-            <div class="loading-spinner"></div>
-            <div class="loading-content">
-                <h3>Analyzing Transcript</h3>
-                <div class="progress-bar">
-                    <div class="progress-fill"></div>
-                </div>
-                <p class="progress-text">Starting analysis...</p>
-            </div>
-        </div>
-    `;
-    document.body.appendChild(loadingOverlay);
-}
-
-function hideLoading() {
-    const loadingOverlay = document.getElementById('loading-overlay');
-    if (loadingOverlay) {
-        loadingOverlay.remove();
-    }
-}
-
-function showError(message) {
-    const errorDiv = document.createElement('div');
-    errorDiv.className = 'error-message';
-    errorDiv.innerHTML = `
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <circle cx="12" cy="12" r="10"></circle>
-            <line x1="12" y1="8" x2="12" y2="12"></line>
-            <line x1="12" y1="16" x2="12.01" y2="16"></line>
-        </svg>
-        ${message}
-    `;
+// Get verdict class
+function getVerdictClass(verdict) {
+    const v = (verdict || 'unverified').toLowerCase().replace(' ', '_');
     
-    const container = document.querySelector('.main-content');
-    if (container) {
-        container.insertBefore(errorDiv, container.firstChild);
-        setTimeout(() => errorDiv.remove(), 5000);
+    if (VERDICT_MAPPINGS && VERDICT_MAPPINGS[v]) {
+        return VERDICT_MAPPINGS[v].class;
     }
-}
-
-// Utility functions
-function debounce(func, wait) {
-    let timeout;
-    return function executedFunction(...args) {
-        const later = () => {
-            clearTimeout(timeout);
-            func(...args);
-        };
-        clearTimeout(timeout);
-        timeout = setTimeout(later, wait);
+    
+    // Fallback mapping
+    const mapping = {
+        'true': 'true',
+        'mostly_true': 'true',
+        'nearly_true': 'true',
+        'false': 'false',
+        'mostly_false': 'false',
+        'misleading': 'false',
+        'intentionally_deceptive': 'false',
+        'exaggeration': 'unverified',
+        'needs_context': 'unverified',
+        'opinion': 'unverified',
+        'unverified': 'unverified'
     };
+    
+    return mapping[v] || 'unverified';
 }
 
-// Enhanced keyboard shortcuts
-document.addEventListener('keydown', function(e) {
-    // Ctrl/Cmd + Enter to submit
-    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
-        const form = document.getElementById('fact-check-form');
-        if (form) {
-            form.dispatchEvent(new Event('submit'));
-        }
+// Get verdict icon
+function getVerdictIcon(verdict) {
+    const v = (verdict || 'unverified').toLowerCase().replace(' ', '_');
+    
+    if (VERDICT_MAPPINGS && VERDICT_MAPPINGS[v]) {
+        return VERDICT_MAPPINGS[v].icon;
     }
     
-    // Escape to close loading
-    if (e.key === 'Escape') {
-        hideLoading();
-        if (pollInterval) {
-            clearInterval(pollInterval);
-        }
-    }
-});
-
-// Auto-save transcript
-const transcriptTextarea = document.getElementById('transcript-text');
-if (transcriptTextarea) {
-    const saveTranscript = debounce(() => {
-        localStorage.setItem('saved-transcript', transcriptTextarea.value);
-    }, 1000);
+    // Fallback icons
+    const icons = {
+        'true': 'fa-check-circle',
+        'mostly_true': 'fa-check-circle',
+        'nearly_true': 'fa-check-circle',
+        'false': 'fa-times-circle',
+        'mostly_false': 'fa-times-circle',
+        'misleading': 'fa-exclamation-triangle',
+        'intentionally_deceptive': 'fa-exclamation-triangle',
+        'exaggeration': 'fa-question-circle',
+        'needs_context': 'fa-question-circle',
+        'opinion': 'fa-comment',
+        'unverified': 'fa-question-circle'
+    };
     
-    transcriptTextarea.addEventListener('input', saveTranscript);
-    
-    // Restore saved transcript on load
-    const savedTranscript = localStorage.getItem('saved-transcript');
-    if (savedTranscript) {
-        transcriptTextarea.value = savedTranscript;
-    }
+    return icons[v] || 'fa-question-circle';
 }
 
-// Example transcript button
-function loadExampleTranscript() {
-    const transcriptTextarea = document.getElementById('transcript-text');
-    if (transcriptTextarea) {
-        transcriptTextarea.value = `Speaker 1: The unemployment rate has dropped to 3.5%, the lowest in 50 years.
+// Format verdict label
+function formatVerdict(verdict) {
+    if (VERDICT_MAPPINGS && VERDICT_MAPPINGS[verdict]) {
+        return VERDICT_MAPPINGS[verdict].label;
+    }
+    
+    // Fallback formatting
+    return verdict.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+}
 
-Speaker 2: Actually, while the rate is low, we've seen similar rates multiple times in the past 50 years, including in 2019.
-
-Speaker 1: Crime rates in major cities have increased by 40% this year compared to last year.
-
-Speaker 2: That's an exaggeration. FBI data shows violent crime increased by about 5% nationally, though some cities did see larger increases.
-
-Speaker 1: We've invested more in renewable energy than any previous administration - over $100 billion last year alone.
-
-Speaker 2: I'd need to verify those specific numbers, but renewable energy investment has indeed increased significantly.`;
-        
-        // Switch to text tab
-        document.querySelector('[data-tab="text-input"]').click();
+// Export results
+async function exportResults(format) {
+    if (!currentJobId) {
+        showError('No results to export');
+        return;
+    }
+    
+    try {
+        window.location.href = `/api/export/${currentJobId}`;
+    } catch (error) {
+        showError('Error exporting results: ' + error.message);
     }
 }
 
-// Add example button to UI
-document.addEventListener('DOMContentLoaded', function() {
-    const textTab = document.getElementById('text-input');
-    if (textTab) {
-        const exampleBtn = document.createElement('button');
-        exampleBtn.type = 'button';
-        exampleBtn.className = 'btn btn-secondary';
-        exampleBtn.style.marginBottom = '1rem';
-        exampleBtn.innerHTML = 'Load Example Transcript';
-        exampleBtn.onclick = loadExampleTranscript;
-        textTab.insertBefore(exampleBtn, textTab.firstChild);
+// Reset analysis
+function resetAnalysis() {
+    document.getElementById('input-section').style.display = 'block';
+    document.getElementById('progress-section').style.display = 'none';
+    document.getElementById('results-section').style.display = 'none';
+    
+    // Reset progress
+    document.getElementById('progress-fill').style.width = '0%';
+    document.getElementById('progress-text').textContent = 'Initializing...';
+    
+    // Reset steps
+    document.querySelectorAll('.step').forEach(step => {
+        step.classList.remove('active');
+    });
+    
+    // Clear job ID
+    currentJobId = null;
+    
+    // Clear poll interval
+    if (pollInterval) {
+        clearInterval(pollInterval);
     }
-});
+}
+
+// Show error message
+function showError(message) {
+    alert(message); // Simple alert for now
+    // TODO: Implement better error display
+}
