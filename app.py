@@ -1,513 +1,810 @@
 """
 Transcript Fact Checker - Main Flask Application
-AI-powered fact-checking for transcripts and speeches
+Enhanced version with improved verdict system and AI integration
 """
 import os
-import uuid
 import logging
-import traceback
+import uuid
 from datetime import datetime
-from threading import Thread
-from collections import defaultdict
-from flask import Flask, render_template, request, jsonify, send_file
+from typing import List, Dict
+from flask import Flask, render_template, jsonify, request, send_file
 from flask_cors import CORS
-from werkzeug.utils import secure_filename
+from dotenv import load_dotenv
+import json
+from reportlab.lib import colors
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import inch
+from reportlab.lib.enums import TA_CENTER
+import io
+from threading import Thread
+import time
+import traceback
+
+# Load environment variables first
+load_dotenv()
 
 # Import configuration
 from config import Config
-
-# Import job storage
-from job_storage import get_job_storage
-
-# Import services
-from services.transcript import TranscriptProcessor
-from services.claims import ClaimExtractor
-from services.factcheck import FactChecker
-from services.export import PDFExporter
-from services.context_resolver import ContextResolver
-from services.speaker_history import SpeakerHistoryTracker
-from services.temporal_context import TemporalContextHandler
-
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
 
 # Initialize Flask app
 app = Flask(__name__)
 app.config.from_object(Config)
 CORS(app)
 
-# Validate configuration
-Config.validate()
+# Set up logging
+logging.basicConfig(
+    level=getattr(logging, Config.LOG_LEVEL, logging.INFO),
+    format=Config.LOG_FORMAT
+)
+logger = logging.getLogger(__name__)
 
-# Initialize services
-transcript_processor = TranscriptProcessor()
-claim_extractor = ClaimExtractor()
-fact_checker = FactChecker()
-pdf_exporter = PDFExporter()
-context_resolver = ContextResolver()
-speaker_tracker = SpeakerHistoryTracker()
-temporal_handler = TemporalContextHandler()
-job_storage = get_job_storage()
+# Database initialization with fallback
+mongo_client = None
+db = None
+jobs_collection = None
+results_collection = None
+redis_client = None
 
-# File upload handling
-UPLOAD_FOLDER = 'uploads'
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+# In-memory storage as fallback
+in_memory_jobs = {}
+in_memory_results = {}
 
-def allowed_file(filename):
-    """Check if file extension is allowed"""
-    return '.' in filename and \
-           filename.rsplit('.', 1)[1].lower() in Config.ALLOWED_EXTENSIONS
-
-def analyze_patterns(fact_checks):
-    """Analyze patterns in fact checks to detect intentional deception"""
-    patterns = {
-        'false_claims': 0,
-        'misleading_claims': 0,
-        'intentionally_deceptive': 0,
-        'exaggerations': 0,
-        'opinion_as_fact': 0,
-        'total_claims': len(fact_checks),
-        'deception_pattern': False,
-        'concerning_claims': []
-    }
-    
-    for check in fact_checks:
-        verdict = check.get('verdict', 'unverified').lower()
-        
-        if verdict == 'false':
-            patterns['false_claims'] += 1
-            patterns['concerning_claims'].append(check.get('claim', ''))
-        elif verdict == 'misleading':
-            patterns['misleading_claims'] += 1
-            patterns['concerning_claims'].append(check.get('claim', ''))
-        elif verdict == 'intentionally_deceptive':
-            patterns['intentionally_deceptive'] += 1
-            patterns['concerning_claims'].append(check.get('claim', ''))
-        elif verdict == 'exaggeration':
-            patterns['exaggerations'] += 1
-        elif verdict == 'opinion':
-            patterns['opinion_as_fact'] += 1
-    
-    # Detect pattern of deception
-    deceptive_count = patterns['false_claims'] + patterns['misleading_claims'] + patterns['intentionally_deceptive']
-    if deceptive_count >= 3 or patterns['intentionally_deceptive'] >= 1:
-        patterns['deception_pattern'] = True
-    
-    patterns['deceptive_percentage'] = (deceptive_count / patterns['total_claims'] * 100) if patterns['total_claims'] > 0 else 0
-    
-    return patterns
-
-def generate_enhanced_summary(results):
-    """Generate an enhanced conversational summary with all context"""
-    summary = []
-    
-    # Speaker context
-    speakers = results.get('speakers', {})
-    if speakers:
-        summary.append("SPEAKER BACKGROUND")
-        summary.append("-" * 50)
-        for speaker, context in speakers.items():
-            if context.get('criminal_record') or context.get('fraud_history'):
-                summary.append(f"\n⚠️ WARNING: {speaker} has a concerning background:")
-                if context.get('criminal_record'):
-                    summary.append(f"Criminal Record: {context['criminal_record']}")
-                if context.get('fraud_history'):
-                    summary.append(f"Fraud History: {context['fraud_history']}")
-        summary.append("")
-    
-    # Pattern analysis
-    fact_checks = results.get('fact_checks', [])
-    patterns = analyze_patterns(fact_checks)
-    
-    summary.append("CREDIBILITY ASSESSMENT")
-    summary.append("-" * 50)
-    
-    if patterns['deception_pattern']:
-        summary.append("🚨 PATTERN OF DECEPTION DETECTED")
-        summary.append(f"This transcript contains {patterns['false_claims']} false claims, "
-                      f"{patterns['misleading_claims']} misleading claims, and "
-                      f"{patterns['intentionally_deceptive']} intentionally deceptive statements.")
-        summary.append("\nThis appears to be a deliberate pattern of misinformation.")
-    else:
-        summary.append(f"✓ Analysis of {patterns['total_claims']} claims:")
-        summary.append(f"  - True/Mostly True: {patterns['total_claims'] - patterns['false_claims'] - patterns['misleading_claims'] - patterns['exaggerations']}")
-        summary.append(f"  - False/Misleading: {patterns['false_claims'] + patterns['misleading_claims']}")
-        summary.append(f"  - Exaggerations: {patterns['exaggerations']}")
-    
-    # Most concerning claims
-    if patterns['concerning_claims']:
-        summary.append("\nMOST CONCERNING FALSE CLAIMS:")
-        for i, claim in enumerate(patterns['concerning_claims'][:5], 1):
-            summary.append(f"{i}. {claim}")
-    
-    # Overall verdict
-    summary.append("\nOVERALL VERDICT:")
-    if patterns['deceptive_percentage'] >= 50:
-        summary.append("❌ HIGHLY UNRELIABLE - Majority of verifiable claims are false or misleading")
-    elif patterns['deceptive_percentage'] >= 25:
-        summary.append("⚠️ QUESTIONABLE - Significant number of false or misleading claims")
-    elif patterns['deceptive_percentage'] >= 10:
-        summary.append("⚡ MOSTLY ACCURATE - Some false claims but generally reliable")
-    else:
-        summary.append("✅ RELIABLE - Very few or no false claims detected")
-    
-    # AI usage note
-    if any(check.get('ai_analysis_used') for check in fact_checks):
-        summary.append("\n💡 AI-powered analysis was used to enhance accuracy and context understanding.")
-    
-    return "\n".join(summary)
-
-def process_transcript(transcript_text, source_type='text', job_id=None, speech_date=None):
-    """Process transcript with full context and enhanced fact-checking"""
+# Try to connect to MongoDB if configured
+if Config.MONGODB_URI:
     try:
-        logger.info(f"Processing transcript for job {job_id}")
+        from pymongo import MongoClient
+        mongo_client = MongoClient(Config.MONGODB_URI, serverSelectionTimeoutMS=5000)
+        # Test connection
+        mongo_client.server_info()
+        db = mongo_client[Config.MONGODB_DB_NAME]
+        jobs_collection = db['jobs']
+        results_collection = db['results']
+        logger.info("MongoDB connected successfully")
+    except Exception as e:
+        logger.warning(f"MongoDB connection failed: {str(e)}. Using in-memory storage.")
+        mongo_client = None
+else:
+    logger.info("MongoDB URI not configured. Using in-memory storage.")
+
+# Try to connect to Redis if configured
+if Config.REDIS_URL:
+    try:
+        import redis
+        redis_client = redis.from_url(Config.REDIS_URL, socket_connect_timeout=5)
+        redis_client.ping()
+        logger.info("Redis connected successfully")
+    except Exception as e:
+        logger.warning(f"Redis connection failed: {str(e)}. Using in-memory storage.")
+        redis_client = None
+else:
+    logger.info("Redis URL not configured. Using in-memory storage.")
+
+# Import services - REQUIRED for app to function
+try:
+    from services.transcript import TranscriptProcessor
+    from services.claims import ClaimExtractor
+    from services.factcheck import FactChecker, VERDICT_CATEGORIES
+    
+    # Initialize services
+    transcript_processor = TranscriptProcessor()
+    claim_extractor = ClaimExtractor(openai_api_key=Config.OPENAI_API_KEY)
+    fact_checker = FactChecker(Config)
+    logger.info("Services initialized successfully")
+except ImportError as e:
+    logger.error(f"CRITICAL: Failed to import required services: {str(e)}")
+    logger.error("Please ensure services directory exists with transcript.py, claims.py, and factcheck.py")
+    raise SystemExit(f"Cannot start application without services: {str(e)}")
+
+# Enhanced speaker database
+SPEAKER_DATABASE = {
+    'donald trump': {
+        'full_name': 'Donald J. Trump',
+        'role': '45th and 47th President of the United States',
+        'party': 'Republican',
+        'criminal_record': 'Multiple indictments in 2023-2024',
+        'fraud_history': 'Trump Organization fraud conviction 2022',
+        'fact_check_history': 'Extensive record of false and misleading statements',
+        'credibility_notes': 'Known for frequent false claims and exaggerations'
+    },
+    'j.d. vance': {
+        'full_name': 'James David Vance',
+        'role': 'Vice President of the United States',
+        'party': 'Republican',
+        'criminal_record': None,
+        'fraud_history': None,
+        'fact_check_history': 'Mixed record on factual accuracy',
+        'credibility_notes': 'Serving as VP since January 2025'
+    },
+    'joe biden': {
+        'full_name': 'Joseph R. Biden Jr.',
+        'role': '46th President of the United States (2021-2025)',
+        'party': 'Democrat',
+        'criminal_record': None,
+        'fraud_history': None,
+        'fact_check_history': 'Generally accurate with occasional misstatements',
+        'credibility_notes': 'Former President'
+    },
+    'kamala harris': {
+        'full_name': 'Kamala D. Harris',
+        'role': 'Former Vice President of the United States (2021-2025)',
+        'party': 'Democrat',
+        'criminal_record': None,
+        'fraud_history': None,
+        'fact_check_history': 'Generally accurate',
+        'credibility_notes': 'Former Vice President'
+    }
+}
+
+# Helper functions
+def store_job(job_id: str, job_data: dict):
+    """Store job in database or memory"""
+    try:
+        if jobs_collection:
+            jobs_collection.insert_one({'_id': job_id, **job_data})
+        else:
+            in_memory_jobs[job_id] = job_data.copy()
+            logger.info(f"Stored job {job_id} in memory with status: {job_data.get('status')}")
         
-        # Update job status
-        if job_id:
-            job_storage.update_job(job_id, {
-                'status': 'processing',
-                'stage': 'extracting_claims',
-                'checked_claims': 0
-            })
+        if redis_client:
+            redis_client.setex(f"job:{job_id}", 3600, json.dumps(job_data))
+    except Exception as e:
+        logger.error(f"Error storing job: {e}")
+        in_memory_jobs[job_id] = job_data.copy()
+
+def get_job(job_id: str) -> dict:
+    """Get job from database or memory"""
+    try:
+        # Try Redis first for speed
+        if redis_client:
+            try:
+                cached = redis_client.get(f"job:{job_id}")
+                if cached:
+                    return json.loads(cached)
+            except Exception as e:
+                logger.warning(f"Redis get failed: {e}")
         
-        # Set temporal context if speech date provided
-        if speech_date:
-            temporal_handler.set_speech_date(speech_date)
+        # Try MongoDB
+        if jobs_collection:
+            try:
+                job = jobs_collection.find_one({'_id': job_id})
+                if job:
+                    job.pop('_id', None)
+                    return job
+            except Exception as e:
+                logger.warning(f"MongoDB get failed: {e}")
         
-        # Extract metadata and resolve speakers
-        metadata = transcript_processor.extract_metadata(transcript_text)
-        speakers = context_resolver.resolve_speakers(metadata.get('speakers', []))
+        # Fallback to memory
+        job = in_memory_jobs.get(job_id)
+        if job:
+            logger.info(f"Retrieved job {job_id} from memory with status: {job.get('status')}")
+            return job.copy()
         
-        # Extract claims with enhanced AI
-        claims = claim_extractor.extract_claims_enhanced(transcript_text, use_ai=True)
-        total_claims = len(claims)
+        logger.warning(f"Job {job_id} not found in any storage")
+        return None
+    except Exception as e:
+        logger.error(f"Error getting job {job_id}: {e}")
+        return in_memory_jobs.get(job_id, {}).copy() if job_id in in_memory_jobs else None
+
+def update_job(job_id: str, updates: dict):
+    """Update job in database or memory"""
+    try:
+        if jobs_collection:
+            try:
+                jobs_collection.update_one(
+                    {'_id': job_id},
+                    {'$set': updates}
+                )
+            except Exception as e:
+                logger.warning(f"MongoDB update failed: {e}")
+                if job_id in in_memory_jobs:
+                    in_memory_jobs[job_id].update(updates)
+        else:
+            if job_id in in_memory_jobs:
+                in_memory_jobs[job_id].update(updates)
+                logger.info(f"Updated job {job_id} in memory with: {list(updates.keys())}")
+            else:
+                logger.error(f"Job {job_id} not found in memory for update")
         
-        logger.info(f"Extracted {total_claims} claims")
-        
-        # Initialize results
-        results = {
-            'job_id': job_id,
-            'source_type': source_type,
-            'metadata': metadata,
-            'speakers': {},
-            'fact_checks': [],
-            'summary': '',
-            'enhanced_summary': '',
-            'checked_claims': 0,
-            'total_claims': total_claims,
-            'patterns': {}
+        # Update cache if exists
+        if redis_client:
+            try:
+                job_data = get_job(job_id)
+                if job_data:
+                    redis_client.setex(f"job:{job_id}", 3600, json.dumps(job_data))
+            except Exception as e:
+                logger.warning(f"Redis update failed: {e}")
+    except Exception as e:
+        logger.error(f"Error updating job {job_id}: {e}")
+        if job_id in in_memory_jobs:
+            in_memory_jobs[job_id].update(updates)
+
+def update_job_progress(job_id: str, progress: int, message: str):
+    """Update job progress"""
+    update_job(job_id, {
+        'progress': progress,
+        'message': message,
+        'status': 'failed' if progress < 0 else 'processing'
+    })
+
+def calculate_credibility_score_enhanced(fact_checks: List[Dict]) -> Dict:
+    """Calculate overall credibility score with nuanced verdicts"""
+    if not fact_checks:
+        return {
+            'score': 0,
+            'label': 'No claims verified',
+            'verdict_counts': {},
+            'breakdown': {}
         }
+    
+    # Count each verdict type
+    verdict_counts = {}
+    total_score = 0
+    scorable_claims = 0
+    
+    for fc in fact_checks:
+        verdict = fc.get('verdict', 'needs_context')
+        verdict_counts[verdict] = verdict_counts.get(verdict, 0) + 1
         
-        # Get speaker context
-        for speaker in speakers:
-            context = fact_checker.get_speaker_context(speaker)
-            results['speakers'][speaker] = context
-            speaker_tracker.update_speaker_record(speaker, context)
+        # Get score for this verdict
+        verdict_info = VERDICT_CATEGORIES.get(verdict, VERDICT_CATEGORIES['needs_context'])
+        if verdict_info['score'] is not None:
+            total_score += verdict_info['score']
+            scorable_claims += 1
+    
+    # Calculate weighted score
+    if scorable_claims > 0:
+        score = total_score / scorable_claims
+    else:
+        score = 50  # Default to middle if no scorable claims
+    
+    # Determine overall label
+    if score >= 85:
+        label = 'Highly Credible'
+    elif score >= 70:
+        label = 'Generally Credible'
+    elif score >= 50:
+        label = 'Mixed Credibility'
+    elif score >= 30:
+        label = 'Low Credibility'
+    else:
+        label = 'Very Low Credibility'
+    
+    # Check for deception patterns
+    deceptive_count = verdict_counts.get('intentionally_deceptive', 0)
+    false_count = verdict_counts.get('false', 0)
+    misleading_count = verdict_counts.get('misleading', 0)
+    
+    if deceptive_count >= 3:
+        label = 'Pattern of Deception Detected'
+        score = max(score - 20, 0)  # Penalty for deception pattern
+    elif false_count + misleading_count >= 5:
+        label = 'Significant Credibility Issues'
+        score = max(score - 10, 0)
+    
+    return {
+        'score': round(score),
+        'label': label,
+        'verdict_counts': verdict_counts,
+        'total_claims': len(fact_checks),
+        'breakdown': {
+            'accurate': verdict_counts.get('true', 0) + verdict_counts.get('mostly_true', 0) + verdict_counts.get('nearly_true', 0),
+            'misleading': verdict_counts.get('exaggeration', 0) + verdict_counts.get('misleading', 0),
+            'false': verdict_counts.get('mostly_false', 0) + verdict_counts.get('false', 0) + verdict_counts.get('intentionally_deceptive', 0),
+            'other': verdict_counts.get('needs_context', 0) + verdict_counts.get('opinion', 0)
+        }
+    }
+
+def generate_enhanced_conversational_summary(results: Dict) -> str:
+    """Generate a more nuanced conversational summary with AI insights"""
+    
+    cred_score = results.get('credibility_score', {})
+    score = cred_score.get('score', 0)
+    label = cred_score.get('label', 'Unknown')
+    verdict_counts = cred_score.get('verdict_counts', {})
+    
+    # Build detailed breakdown
+    summary_parts = []
+    
+    # Opening assessment
+    if score >= 85:
+        summary_parts.append(f"✅ This transcript demonstrates {label} with a score of {score}%.")
+        summary_parts.append("The vast majority of claims made were accurate and verifiable.")
+    elif score >= 70:
+        summary_parts.append(f"✓ This transcript shows {label} with a score of {score}%.")
+        summary_parts.append("Most claims were accurate, though some minor issues were found.")
+    elif score >= 50:
+        summary_parts.append(f"⚠️ This transcript has {label} with a score of {score}%.")
+        summary_parts.append("A mix of accurate and problematic claims were identified.")
+    else:
+        summary_parts.append(f"❌ This transcript shows {label} with a concerning score of only {score}%.")
+        summary_parts.append("Significant accuracy issues were detected throughout.")
+    
+    # Detailed verdict breakdown
+    summary_parts.append(f"\n📊 Detailed Analysis of {results.get('total_claims', 0)} claims:")
+    
+    # Group verdicts by category
+    if verdict_counts:
+        if verdict_counts.get('true', 0) > 0:
+            summary_parts.append(f"• ✅ True: {verdict_counts['true']} claims")
+        if verdict_counts.get('mostly_true', 0) > 0:
+            summary_parts.append(f"• ✓ Mostly True: {verdict_counts['mostly_true']} claims")
+        if verdict_counts.get('nearly_true', 0) > 0:
+            summary_parts.append(f"• 🔵 Nearly True: {verdict_counts['nearly_true']} claims")
+        if verdict_counts.get('exaggeration', 0) > 0:
+            summary_parts.append(f"• 📏 Exaggerations: {verdict_counts['exaggeration']} claims")
+        if verdict_counts.get('misleading', 0) > 0:
+            summary_parts.append(f"• ⚠️ Misleading: {verdict_counts['misleading']} claims")
+        if verdict_counts.get('mostly_false', 0) > 0:
+            summary_parts.append(f"• ❌ Mostly False: {verdict_counts['mostly_false']} claims")
+        if verdict_counts.get('false', 0) > 0:
+            summary_parts.append(f"• ❌ False: {verdict_counts['false']} claims")
+        if verdict_counts.get('intentionally_deceptive', 0) > 0:
+            summary_parts.append(f"• 🚨 Intentionally Deceptive: {verdict_counts['intentionally_deceptive']} claims")
+        if verdict_counts.get('opinion', 0) > 0:
+            summary_parts.append(f"• 💭 Opinions: {verdict_counts['opinion']} statements")
+        if verdict_counts.get('needs_context', 0) > 0:
+            summary_parts.append(f"• ❓ Needs Context: {verdict_counts['needs_context']} claims")
+    
+    # Pattern detection
+    deceptive_count = verdict_counts.get('intentionally_deceptive', 0)
+    false_count = verdict_counts.get('false', 0)
+    misleading_count = verdict_counts.get('misleading', 0)
+    exaggeration_count = verdict_counts.get('exaggeration', 0)
+    
+    if deceptive_count >= 3:
+        summary_parts.append("\n🚨 PATTERN DETECTED: Multiple instances of intentional deception indicate a deliberate attempt to mislead.")
+    elif false_count >= 5:
+        summary_parts.append("\n⚠️ PATTERN DETECTED: Numerous false claims suggest serious credibility issues.")
+    elif misleading_count >= 4:
+        summary_parts.append("\n⚠️ PATTERN DETECTED: Multiple misleading statements indicate a pattern of distortion.")
+    elif exaggeration_count >= 5:
+        summary_parts.append("\n📏 PATTERN DETECTED: Frequent exaggerations suggest a tendency to overstate facts.")
+    
+    # Speaker-specific insights
+    speaker_context = results.get('speaker_context', {})
+    if speaker_context:
+        summary_parts.append("\n👤 Speaker Analysis:")
+        for speaker, info in speaker_context.items():
+            if info.get('false_claims_in_transcript', 0) > 0:
+                summary_parts.append(f"• {speaker}: Made {info['false_claims_in_transcript']} false or misleading claims in this transcript")
+            if info.get('warnings'):
+                for warning in info['warnings']:
+                    summary_parts.append(f"  ⚠️ {warning}")
+    
+    # Most problematic claims
+    fact_checks = results.get('fact_checks', [])
+    problematic_claims = [
+        fc for fc in fact_checks 
+        if fc.get('verdict') in ['false', 'mostly_false', 'intentionally_deceptive', 'misleading']
+    ]
+    
+    if problematic_claims:
+        summary_parts.append("\n❌ Most Concerning Claims:")
+        for i, fc in enumerate(problematic_claims[:3], 1):
+            claim_preview = fc['claim'][:100] + '...' if len(fc['claim']) > 100 else fc['claim']
+            verdict_details = fc.get('verdict_details', {})
+            verdict_label = verdict_details.get('label', fc['verdict'])
+            summary_parts.append(f"{i}. \"{claim_preview}\" - Verdict: {verdict_label}")
+    
+    # Context about the event
+    if 'debate' in results.get('source', '').lower():
+        summary_parts.append("\n📅 Note: This analysis is from a political debate where fact-checking is especially important for informed voting.")
+    
+    # AI usage indication
+    if Config.OPENAI_API_KEY:
+        summary_parts.append("\n🤖 This analysis was enhanced with AI for improved accuracy and context understanding.")
+    
+    # Recommendation
+    if score < 50:
+        summary_parts.append("\n💡 Recommendation: Readers should verify claims independently due to the significant accuracy issues found.")
+    elif score < 70:
+        summary_parts.append("\n💡 Recommendation: While some claims are accurate, readers should approach with caution and verify key assertions.")
+    
+    return '\n'.join(summary_parts)
+
+def analyze_speaker_credibility(speakers: List[str], fact_checks: List[Dict]) -> Dict:
+    """Analyze speaker credibility with comprehensive background"""
+    speaker_info = {}
+    
+    # Process each speaker
+    for speaker in speakers:
+        if not speaker:
+            continue
+            
+        speaker_lower = speaker.lower()
+        matched_info = None
+        
+        # Find matching speaker in database
+        for key, info in SPEAKER_DATABASE.items():
+            if key in speaker_lower or speaker_lower in key:
+                matched_info = info
+                break
+        
+        if matched_info:
+            # Count problematic claims by this speaker
+            speaker_false_claims = 0
+            speaker_misleading_claims = 0
+            speaker_deceptive_claims = 0
+            
+            for fc in fact_checks:
+                if fc.get('speaker', '').lower() == speaker_lower:
+                    verdict = fc.get('verdict', '')
+                    if verdict in ['false', 'mostly_false']:
+                        speaker_false_claims += 1
+                    elif verdict == 'misleading':
+                        speaker_misleading_claims += 1
+                    elif verdict == 'intentionally_deceptive':
+                        speaker_deceptive_claims += 1
+            
+            total_problematic = speaker_false_claims + speaker_misleading_claims + speaker_deceptive_claims
+            
+            speaker_info[speaker] = {
+                'full_name': matched_info.get('full_name', speaker),
+                'role': matched_info.get('role', 'Unknown'),
+                'party': matched_info.get('party', 'Unknown'),
+                'credibility_notes': matched_info.get('credibility_notes', ''),
+                'criminal_record': matched_info.get('criminal_record'),
+                'fraud_history': matched_info.get('fraud_history'),
+                'fact_check_history': matched_info.get('fact_check_history', ''),
+                'false_claims_in_transcript': speaker_false_claims,
+                'misleading_claims_in_transcript': speaker_misleading_claims,
+                'deceptive_claims_in_transcript': speaker_deceptive_claims,
+                'total_problematic_claims': total_problematic,
+                'warnings': []
+            }
+            
+            # Add warnings if applicable
+            if matched_info.get('criminal_record'):
+                speaker_info[speaker]['warnings'].append(f"Criminal Record: {matched_info['criminal_record']}")
+            if matched_info.get('fraud_history'):
+                speaker_info[speaker]['warnings'].append(f"Fraud History: {matched_info['fraud_history']}")
+            if total_problematic >= 5:
+                speaker_info[speaker]['warnings'].append(f"Made {total_problematic} false or misleading claims in this transcript")
+    
+    return speaker_info
+
+def store_results(job_id: str, results: dict):
+    """Store analysis results"""
+    try:
+        if results_collection:
+            results_collection.insert_one({'_id': job_id, **results})
+        else:
+            in_memory_results[job_id] = results.copy()
+            logger.info(f"Stored results for job {job_id} in memory")
+        
+        if redis_client:
+            redis_client.setex(f"results:{job_id}", 86400, json.dumps(results))
+    except Exception as e:
+        logger.error(f"Error storing results: {e}")
+        in_memory_results[job_id] = results.copy()
+
+def get_results(job_id: str) -> dict:
+    """Get analysis results"""
+    try:
+        # Try Redis first
+        if redis_client:
+            try:
+                cached = redis_client.get(f"results:{job_id}")
+                if cached:
+                    return json.loads(cached)
+            except Exception as e:
+                logger.warning(f"Redis get results failed: {e}")
+        
+        # Try MongoDB
+        if results_collection:
+            try:
+                results = results_collection.find_one({'_id': job_id})
+                if results:
+                    results.pop('_id', None)
+                    return results
+            except Exception as e:
+                logger.warning(f"MongoDB get results failed: {e}")
+        
+        # Fallback to memory
+        return in_memory_results.get(job_id, {}).copy()
+    except Exception as e:
+        logger.error(f"Error getting results: {e}")
+        return in_memory_results.get(job_id, {}).copy()
+
+# Background task to process fact checking
+def process_fact_check(job_id: str, transcript: str):
+    """Process fact checking in background"""
+    try:
+        logger.info(f"Starting fact check for job {job_id}")
+        update_job_progress(job_id, 10, "Extracting claims...")
+        
+        # Extract claims
+        claims_data = claim_extractor.extract(transcript)
+        if not claims_data:
+            raise Exception("No claims could be extracted")
+        
+        claims = claims_data.get('claims', [])
+        speakers = claims_data.get('speakers', [])
+        topics = claims_data.get('topics', [])
+        
+        logger.info(f"Extracted {len(claims)} claims from {len(speakers)} speakers")
+        update_job_progress(job_id, 30, f"Checking {len(claims)} claims...")
         
         # Fact check each claim
+        fact_checks = []
         for i, claim in enumerate(claims):
-            if job_id:
-                job_storage.update_job(job_id, {
-                    'checked_claims': i + 1,
-                    'progress': int((i + 1) / total_claims * 100)
-                })
-            
-            # Use comprehensive checking
             try:
-                fact_check = fact_checker.check_claim_comprehensive(
-                    claim,
-                    context={
-                        'speakers': speakers,
-                        'metadata': metadata,
-                        'speech_date': speech_date,
-                        'full_transcript': transcript_text
-                    }
-                )
-            except:
-                # Fallback to regular checking
-                fact_check = fact_checker.check_claim(claim)
-            
-            # Add temporal context resolution
-            if speech_date and temporal_handler:
-                fact_check = temporal_handler.resolve_temporal_references(
-                    fact_check,
-                    speech_date
-                )
-            
-            results['fact_checks'].append(fact_check)
+                # Update progress
+                progress = 30 + int((i / len(claims)) * 60)
+                update_job_progress(job_id, progress, f"Checking claim {i+1} of {len(claims)}...")
+                
+                # Fact check with enhanced verdict system
+                result = fact_checker.check_claim_with_verdict(claim['text'])
+                result['speaker'] = claim.get('speaker', 'Unknown')
+                result['claim'] = claim['text']
+                result['context'] = claim.get('context', '')
+                fact_checks.append(result)
+                
+            except Exception as e:
+                logger.error(f"Error checking claim {i}: {e}")
+                fact_checks.append({
+                    'claim': claim['text'],
+                    'verdict': 'error',
+                    'explanation': f"Error checking claim: {str(e)}",
+                    'sources': [],
+                    'speaker': claim.get('speaker', 'Unknown')
+                })
         
-        # Analyze patterns
-        results['patterns'] = analyze_patterns(results['fact_checks'])
+        # Calculate credibility score
+        update_job_progress(job_id, 90, "Calculating credibility score...")
+        credibility_score = calculate_credibility_score_enhanced(fact_checks)
         
-        # Generate summaries
-        results['summary'] = fact_checker.generate_summary(results['fact_checks'])
-        results['enhanced_summary'] = generate_enhanced_summary(results)
-        results['checked_claims'] = len(results['fact_checks'])
+        # Analyze speaker credibility
+        speaker_context = analyze_speaker_credibility(speakers, fact_checks)
         
-        # Update speaker history
-        for speaker in speakers:
-            speaker_tracker.add_fact_check_results(
-                speaker,
-                results['fact_checks'],
-                results['patterns']
-            )
+        # Prepare results
+        results = {
+            'job_id': job_id,
+            'total_claims': len(claims),
+            'checked_claims': len(fact_checks),
+            'fact_checks': fact_checks,
+            'credibility_score': credibility_score,
+            'speakers': speakers,
+            'topics': topics,
+            'speaker_context': speaker_context,
+            'source': 'transcript',
+            'completed_at': datetime.utcnow().isoformat()
+        }
+        
+        # Generate enhanced conversational summary
+        results['conversational_summary'] = generate_enhanced_conversational_summary(results)
         
         # Store results
-        if job_id:
-            job_storage.store_results(job_id, results)
-            job_storage.update_job(job_id, {
-                'status': 'completed',
-                'progress': 100,
-                'completed_at': datetime.utcnow()
-            })
+        store_results(job_id, results)
         
-        logger.info(f"Completed processing for job {job_id}")
-        return results
-        
-    except Exception as e:
-        logger.error(f"Error processing transcript: {str(e)}")
-        logger.error(traceback.format_exc())
-        
-        if job_id:
-            job_storage.update_job(job_id, {
-                'status': 'failed',
-                'error': str(e)
-            })
-        
-        raise
-
-@app.route('/')
-def index():
-    """Main page"""
-    return render_template('index.html')
-
-@app.route('/analyze', methods=['POST'])
-def analyze():
-    """Analyze transcript endpoint"""
-    try:
-        # Generate job ID
-        job_id = str(uuid.uuid4())
-        
-        # Get transcript data
-        transcript_text = None
-        source_type = request.form.get('source_type', 'text')
-        speech_date = request.form.get('speech_date')
-        
-        if source_type == 'file':
-            if 'file' not in request.files:
-                return jsonify({'error': 'No file provided'}), 400
-            
-            file = request.files['file']
-            if file.filename == '':
-                return jsonify({'error': 'No file selected'}), 400
-            
-            if file and allowed_file(file.filename):
-                filename = secure_filename(file.filename)
-                filepath = os.path.join(UPLOAD_FOLDER, f"{job_id}_{filename}")
-                file.save(filepath)
-                
-                # Process file based on type
-                transcript_text = transcript_processor.process_file(filepath)
-            else:
-                return jsonify({'error': 'Invalid file type'}), 400
-        
-        elif source_type == 'youtube':
-            youtube_url = request.form.get('youtube_url')
-            if not youtube_url:
-                return jsonify({'error': 'No YouTube URL provided'}), 400
-            
-            transcript_text = transcript_processor.process_youtube(youtube_url)
-        
-        else:  # text
-            transcript_text = request.form.get('transcript')
-            if not transcript_text:
-                return jsonify({'error': 'No transcript provided'}), 400
-        
-        # Create job
-        job_storage.create_job(job_id, {
-            'source_type': source_type,
-            'speech_date': speech_date,
-            'status': 'queued'
+        # Update job status
+        update_job(job_id, {
+            'status': 'completed',
+            'progress': 100,
+            'message': 'Analysis complete',
+            'completed_at': datetime.utcnow().isoformat()
         })
         
-        # Process in background
-        thread = Thread(
-            target=process_transcript,
-            args=(transcript_text, source_type, job_id, speech_date)
-        )
+        logger.info(f"Completed fact check for job {job_id}")
+        
+    except Exception as e:
+        logger.error(f"Error in fact check process: {e}")
+        logger.error(traceback.format_exc())
+        update_job(job_id, {
+            'status': 'failed',
+            'progress': -1,
+            'message': f"Error: {str(e)}",
+            'error': str(e)
+        })
+
+# Routes
+@app.route('/')
+def index():
+    """Render main page"""
+    return render_template('index.html')
+
+@app.route('/health')
+def health():
+    """Health check endpoint"""
+    return jsonify({
+        'status': 'healthy',
+        'mongodb': 'connected' if mongo_client else 'not connected',
+        'redis': 'connected' if redis_client else 'not connected',
+        'services': {
+            'transcript_processor': 'ready',
+            'claim_extractor': 'ready',
+            'fact_checker': 'ready'
+        }
+    })
+
+@app.route('/api/submit', methods=['POST'])
+def submit_transcript():
+    """Submit transcript for fact checking"""
+    try:
+        data = request.get_json()
+        transcript = data.get('transcript', '').strip()
+        
+        if not transcript:
+            return jsonify({'error': 'No transcript provided'}), 400
+        
+        if len(transcript) > Config.MAX_TRANSCRIPT_LENGTH:
+            return jsonify({'error': f'Transcript too long. Maximum {Config.MAX_TRANSCRIPT_LENGTH} characters allowed.'}), 400
+        
+        # Clean transcript
+        transcript = transcript_processor.clean_transcript(transcript)
+        
+        # Create job
+        job_id = str(uuid.uuid4())
+        job_data = {
+            'status': 'queued',
+            'progress': 0,
+            'message': 'Processing started',
+            'created_at': datetime.utcnow().isoformat(),
+            'transcript_length': len(transcript)
+        }
+        
+        # Store job
+        store_job(job_id, job_data)
+        
+        # Start background processing
+        thread = Thread(target=process_fact_check, args=(job_id, transcript))
+        thread.daemon = True
         thread.start()
         
         return jsonify({
             'job_id': job_id,
-            'message': 'Analysis started'
+            'status': 'processing'
         })
         
     except Exception as e:
-        logger.error(f"Error in analyze endpoint: {str(e)}")
+        logger.error(f"Error in submit_transcript: {e}")
         return jsonify({'error': str(e)}), 500
 
-@app.route('/status/<job_id>')
-def get_status(job_id):
-    """Get job status"""
+@app.route('/api/status/<job_id>')
+def check_status(job_id):
+    """Check job status"""
     try:
-        job = job_storage.get_job(job_id)
+        job = get_job(job_id)
         if not job:
             return jsonify({'error': 'Job not found'}), 404
         
         return jsonify(job)
         
     except Exception as e:
-        logger.error(f"Error getting status: {str(e)}")
+        logger.error(f"Error checking status: {e}")
         return jsonify({'error': str(e)}), 500
 
-@app.route('/results/<job_id>')
-def get_results(job_id):
-    """Get analysis results"""
+@app.route('/api/results/<job_id>')
+def get_fact_check_results(job_id):
+    """Get fact check results"""
     try:
-        results = job_storage.get_results(job_id)
+        # Check job status first
+        job = get_job(job_id)
+        if not job:
+            return jsonify({'error': 'Job not found'}), 404
+        
+        if job['status'] != 'completed':
+            return jsonify({
+                'error': 'Job not completed',
+                'status': job['status'],
+                'progress': job.get('progress', 0)
+            }), 202
+        
+        # Get results
+        results = get_results(job_id)
         if not results:
             return jsonify({'error': 'Results not found'}), 404
         
         return jsonify(results)
         
     except Exception as e:
-        logger.error(f"Error getting results: {str(e)}")
+        logger.error(f"Error getting results: {e}")
         return jsonify({'error': str(e)}), 500
 
-@app.route('/export/<job_id>/<format>')
-def export_results(job_id, format):
-    """Export results in various formats"""
+@app.route('/api/export/<job_id>', methods=['GET'])
+def export_results(job_id):
+    """Export results as PDF"""
     try:
-        results = job_storage.get_results(job_id)
+        # Get results
+        results = get_results(job_id)
         if not results:
             return jsonify({'error': 'Results not found'}), 404
         
-        if format == 'pdf':
-            pdf_path = pdf_exporter.export_to_pdf(results)
-            return send_file(pdf_path, as_attachment=True, 
-                           download_name=f'fact_check_{job_id}.pdf')
+        # Create PDF
+        buffer = io.BytesIO()
+        doc = SimpleDocTemplate(buffer, pagesize=letter)
+        story = []
         
-        elif format == 'json':
-            return jsonify(results)
+        # Styles
+        styles = getSampleStyleSheet()
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Title'],
+            fontSize=24,
+            textColor=colors.HexColor('#1a1a1a'),
+            spaceAfter=30,
+            alignment=TA_CENTER
+        )
         
-        elif format == 'text':
-            text_report = generate_text_report(results)
-            return text_report, 200, {
-                'Content-Type': 'text/plain',
-                'Content-Disposition': f'attachment; filename=fact_check_{job_id}.txt'
-            }
+        # Title
+        story.append(Paragraph("Transcript Fact Check Report", title_style))
+        story.append(Spacer(1, 0.5*inch))
         
-        else:
-            return jsonify({'error': 'Invalid format'}), 400
+        # Summary
+        summary_style = ParagraphStyle(
+            'Summary',
+            parent=styles['Normal'],
+            fontSize=12,
+            leading=16,
+            spaceAfter=20
+        )
+        
+        if results.get('conversational_summary'):
+            summary_text = results['conversational_summary'].replace('\n', '<br/>')
+            story.append(Paragraph("<b>Executive Summary</b>", styles['Heading2']))
+            story.append(Paragraph(summary_text, summary_style))
+            story.append(Spacer(1, 0.3*inch))
+        
+        # Credibility Score
+        cred_score = results.get('credibility_score', {})
+        story.append(Paragraph(f"<b>Overall Credibility Score: {cred_score.get('score', 0)}%</b>", styles['Heading2']))
+        story.append(Paragraph(f"Rating: {cred_score.get('label', 'Unknown')}", styles['Normal']))
+        story.append(Spacer(1, 0.3*inch))
+        
+        # Fact Checks Table
+        story.append(Paragraph("<b>Detailed Fact Checks</b>", styles['Heading2']))
+        story.append(Spacer(1, 0.2*inch))
+        
+        # Create table data
+        table_data = [['Claim', 'Verdict', 'Explanation']]
+        
+        for fc in results.get('fact_checks', []):
+            claim_text = fc.get('claim', '')[:100] + '...' if len(fc.get('claim', '')) > 100 else fc.get('claim', '')
+            verdict = fc.get('verdict', 'Unknown').replace('_', ' ').title()
+            explanation = fc.get('explanation', '')[:150] + '...' if len(fc.get('explanation', '')) > 150 else fc.get('explanation', '')
             
+            table_data.append([
+                Paragraph(claim_text, styles['Normal']),
+                Paragraph(verdict, styles['Normal']),
+                Paragraph(explanation, styles['Normal'])
+            ])
+        
+        # Create table
+        table = Table(table_data, colWidths=[2.5*inch, 1.5*inch, 2.5*inch])
+        table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), colors.grey),
+            ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+            ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+            ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE', (0, 0), (-1, 0), 12),
+            ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+            ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+            ('GRID', (0, 0), (-1, -1), 1, colors.black)
+        ]))
+        
+        story.append(table)
+        
+        # Build PDF
+        doc.build(story)
+        buffer.seek(0)
+        
+        return send_file(
+            buffer,
+            as_attachment=True,
+            download_name=f'fact_check_report_{job_id}.pdf',
+            mimetype='application/pdf'
+        )
+        
     except Exception as e:
-        logger.error(f"Error exporting results: {str(e)}")
+        logger.error(f"Error exporting results: {e}")
         return jsonify({'error': str(e)}), 500
-
-@app.route('/speakers')
-def get_speakers():
-    """Get list of known speakers with their history"""
-    try:
-        speakers = speaker_tracker.get_all_speakers()
-        return jsonify(speakers)
-    except Exception as e:
-        logger.error(f"Error getting speakers: {str(e)}")
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/speaker/<name>')
-def get_speaker_details(name):
-    """Get detailed information about a specific speaker"""
-    try:
-        details = speaker_tracker.get_speaker_details(name)
-        if not details:
-            return jsonify({'error': 'Speaker not found'}), 404
-        return jsonify(details)
-    except Exception as e:
-        logger.error(f"Error getting speaker details: {str(e)}")
-        return jsonify({'error': str(e)}), 500
-
-def generate_text_report(results):
-    """Generate a text report from results"""
-    report = []
-    report.append("FACT CHECK REPORT")
-    report.append("=" * 50)
-    report.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    report.append("")
-    
-    # Enhanced summary at the top
-    report.append("EXECUTIVE SUMMARY")
-    report.append("-" * 50)
-    report.append(results.get('enhanced_summary', 'No summary available'))
-    report.append("")
-    
-    # Speaker information
-    if results.get('speakers'):
-        report.append("SPEAKER INFORMATION")
-        report.append("-" * 50)
-        for speaker, context in results['speakers'].items():
-            report.append(f"\n{speaker}:")
-            if context.get('criminal_record'):
-                report.append(f"  Criminal Record: {context['criminal_record']}")
-            if context.get('fraud_history'):
-                report.append(f"  Fraud History: {context['fraud_history']}")
-            if context.get('fact_check_history'):
-                history = context['fact_check_history']
-                report.append(f"  Past Fact Checks: {history.get('total_claims', 0)} claims")
-                report.append(f"  Average Accuracy: {history.get('accuracy_rate', 0):.1f}%")
-        report.append("")
-    
-    # Pattern analysis
-    if results.get('patterns'):
-        report.append("PATTERN ANALYSIS")
-        report.append("-" * 50)
-        patterns = results['patterns']
-        if patterns.get('deception_pattern'):
-            report.append("⚠️ PATTERN OF DECEPTION DETECTED")
-        report.append(f"Total Claims: {patterns.get('total_claims', 0)}")
-        report.append(f"False Claims: {patterns.get('false_claims', 0)}")
-        report.append(f"Misleading Claims: {patterns.get('misleading_claims', 0)}")
-        report.append(f"Intentionally Deceptive: {patterns.get('intentionally_deceptive', 0)}")
-        report.append("")
-    
-    # Detailed fact checks
-    report.append("DETAILED FACT CHECKS")
-    report.append("-" * 50)
-    
-    for i, check in enumerate(results.get('fact_checks', []), 1):
-        report.append(f"\nClaim {i}:")
-        report.append(f"Statement: {check.get('full_context', check.get('claim', 'N/A'))}")
-        report.append(f"Verdict: {check.get('verdict', 'unverified').upper()}")
-        
-        if check.get('confidence'):
-            report.append(f"Confidence: {check['confidence']}%")
-        
-        report.append(f"Explanation: {check.get('explanation', 'No explanation available')}")
-        
-        if check.get('sources'):
-            report.append(f"Sources: {', '.join(check['sources'])}")
-        
-        if check.get('ai_analysis_used'):
-            report.append("✓ AI-enhanced analysis")
-        
-        report.append("")
-    
-    return "\n".join(report)
-
-@app.errorhandler(404)
-def not_found(error):
-    """Handle 404 errors"""
-    return jsonify({'error': 'Not found'}), 404
-
-@app.errorhandler(500)
-def internal_error(error):
-    """Handle 500 errors"""
-    logger.error(f"Internal error: {str(error)}")
-    return jsonify({'error': 'Internal server error'}), 500
 
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=Config.DEBUG)
+    # Validate configuration on startup
+    warnings = Config.validate()
+    for warning in warnings:
+        logger.warning(warning)
+    
+    app.run(debug=Config.DEBUG, host='0.0.0.0', port=Config.PORT)
