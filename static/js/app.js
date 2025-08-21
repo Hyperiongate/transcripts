@@ -35,6 +35,29 @@ document.addEventListener('DOMContentLoaded', function() {
     // File input handler
     const fileInput = document.getElementById('file-input');
     fileInput.addEventListener('change', handleFileSelect);
+    
+    // File drop zone
+    const dropZone = document.getElementById('file-drop-zone');
+    dropZone.addEventListener('click', () => fileInput.click());
+    
+    // Drag and drop
+    dropZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropZone.classList.add('dragover');
+    });
+    
+    dropZone.addEventListener('dragleave', () => {
+        dropZone.classList.remove('dragover');
+    });
+    
+    dropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropZone.classList.remove('dragover');
+        if (e.dataTransfer.files.length) {
+            fileInput.files = e.dataTransfer.files;
+            handleFileSelect({ target: { files: e.dataTransfer.files } });
+        }
+    });
 });
 
 // File handling
@@ -44,11 +67,9 @@ function handleFileSelect(event) {
     
     const fileInfo = document.getElementById('file-info');
     const fileName = document.getElementById('file-name');
-    const fileSize = document.getElementById('file-size');
     
     fileName.textContent = file.name;
-    fileSize.textContent = formatFileSize(file.size);
-    fileInfo.style.display = 'block';
+    fileInfo.style.display = 'flex';
     
     // Read file content
     const reader = new FileReader();
@@ -59,12 +80,12 @@ function handleFileSelect(event) {
     reader.readAsText(file);
 }
 
-function formatFileSize(bytes) {
-    if (bytes === 0) return '0 Bytes';
-    const k = 1024;
-    const sizes = ['Bytes', 'KB', 'MB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+function removeFile() {
+    const fileInput = document.getElementById('file-input');
+    fileInput.value = '';
+    fileInput.dataset.content = '';
+    document.getElementById('file-info').style.display = 'none';
+    document.getElementById('file-name').textContent = '';
 }
 
 // Analysis functions
@@ -229,63 +250,29 @@ async function loadResults() {
 }
 
 function displayResults(results) {
-    // Update credibility meter
-    const credibilityScore = document.getElementById('credibility-score');
+    // Update credibility meter - using the correct element IDs from your HTML
+    const credibilityValue = document.getElementById('credibility-value');
     const credibilityLabel = document.getElementById('credibility-label');
-    const credibilityFill = document.getElementById('credibility-fill');
+    const credibilityPointer = document.getElementById('credibility-pointer');
     
-    credibilityScore.textContent = `${results.credibility_score}%`;
-    credibilityLabel.textContent = results.credibility_label;
-    credibilityFill.style.width = `${results.credibility_score}%`;
+    // Set the score value
+    credibilityValue.textContent = results.credibility_score || 0;
+    credibilityLabel.textContent = results.credibility_label || 'Unknown';
     
-    // Update color based on score
-    let color = '#10b981'; // green
-    if (results.credibility_score < 40) {
-        color = '#ef4444'; // red
-    } else if (results.credibility_score < 60) {
-        color = '#f59e0b'; // yellow
-    }
-    credibilityFill.style.backgroundColor = color;
+    // Position the pointer on the meter (0-100% mapped to the meter width)
+    const score = results.credibility_score || 0;
+    credibilityPointer.style.left = `${score}%`;
     
     // Update stats
     updateStats(results);
     
-    // Display summary if available
-    if (results.fact_checks && results.fact_checks.length > 0 && results.fact_checks[0].overall_summary) {
-        const summaryContainer = document.getElementById('analysis-summary');
-        const summary = results.fact_checks[0].overall_summary;
-        
-        let summaryHtml = '<div class="summary-section">';
-        summaryHtml += '<h3>Analysis Summary</h3>';
-        
-        if (typeof summary === 'object') {
-            Object.entries(summary).forEach(([key, value]) => {
-                summaryHtml += `<div class="summary-item">`;
-                summaryHtml += `<h4>${key.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}</h4>`;
-                summaryHtml += `<p>${value}</p>`;
-                summaryHtml += `</div>`;
-            });
-        } else {
-            summaryHtml += `<p>${summary}</p>`;
-        }
-        
-        summaryHtml += '</div>';
-        summaryContainer.innerHTML = summaryHtml;
-    } else {
-        // Basic summary
-        const summaryContainer = document.getElementById('analysis-summary');
-        const summaryHtml = `
-            <div class="summary-section">
-                <h3>Analysis Complete</h3>
-                <p>We analyzed ${results.total_claims || 0} claims from your transcript. 
-                ${results.true_claims || 0} were verified as true, 
-                ${results.false_claims || 0} were found to be false, and 
-                ${results.unverified_claims || 0} could not be verified.</p>
-            </div>
-        `;
-        
-        summaryContainer.innerHTML = summaryHtml;
-    }
+    // Display summary
+    const summaryContainer = document.getElementById('analysis-summary');
+    summaryContainer.innerHTML = `We analyzed ${results.total_claims || 0} claims from your transcript. 
+        ${results.true_claims || 0} were verified as true, 
+        ${results.false_claims || 0} were found to be false, 
+        ${results.mixed_claims || 0} were mixed, and 
+        ${results.unverified_claims || 0} could not be verified.`;
     
     // Display fact checks
     displayFactChecks(results.fact_checks || []);
@@ -355,35 +342,41 @@ function displayFactChecks(factChecks) {
 function getVerdictClass(verdict) {
     const mapping = {
         'true': 'true',
-        'mostly_true': 'mostly-true',
-        'mixed': 'mixed',
-        'unclear': 'unclear',
-        'misleading': 'misleading',
-        'lacks_context': 'lacks-context',
-        'mostly_false': 'mostly-false',
+        'mostly_true': 'true',
+        'mostly true': 'true',
+        'mixed': 'unverified',
+        'unclear': 'unverified',
+        'misleading': 'false',
+        'lacks_context': 'unverified',
+        'lacks context': 'unverified',
+        'mostly_false': 'false',
+        'mostly false': 'false',
         'false': 'false',
         'unverified': 'unverified',
-        'error': 'error'
+        'error': 'unverified'
     };
     
-    return mapping[verdict.toLowerCase().replace(' ', '_')] || 'unverified';
+    return mapping[verdict.toLowerCase()] || 'unverified';
 }
 
 function getVerdictIcon(verdict) {
     const icons = {
         'true': 'fa-check-circle',
-        'mostly_true': 'fa-check',
-        'mixed': 'fa-adjust',
+        'mostly_true': 'fa-check-circle',
+        'mostly true': 'fa-check-circle',
+        'mixed': 'fa-question-circle',
         'unclear': 'fa-question-circle',
         'misleading': 'fa-exclamation-triangle',
         'lacks_context': 'fa-info-circle',
-        'mostly_false': 'fa-times',
+        'lacks context': 'fa-info-circle',
+        'mostly_false': 'fa-times-circle',
+        'mostly false': 'fa-times-circle',
         'false': 'fa-times-circle',
-        'unverified': 'fa-question',
+        'unverified': 'fa-question-circle',
         'error': 'fa-exclamation-circle'
     };
     
-    return icons[verdict.toLowerCase().replace(' ', '_')] || 'fa-question';
+    return icons[verdict.toLowerCase()] || 'fa-question-circle';
 }
 
 // Error handling
@@ -391,18 +384,34 @@ function showError(message) {
     // Create alert element
     const alert = document.createElement('div');
     alert.className = 'alert alert-error';
+    alert.style.cssText = `
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        background: #fee2e2;
+        border: 1px solid #fecaca;
+        color: #dc2626;
+        padding: 16px 24px;
+        border-radius: 8px;
+        box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        z-index: 1000;
+        animation: slideIn 0.3s ease;
+    `;
     alert.innerHTML = `
         <i class="fas fa-exclamation-circle"></i>
         <span>${message}</span>
     `;
     
     // Add to page
-    const container = document.querySelector('.container');
-    container.insertBefore(alert, container.firstChild);
+    document.body.appendChild(alert);
     
     // Remove after 5 seconds
     setTimeout(() => {
-        alert.remove();
+        alert.style.animation = 'slideOut 0.3s ease';
+        setTimeout(() => alert.remove(), 300);
     }, 5000);
 }
 
@@ -452,67 +461,7 @@ async function exportResults(format) {
         } finally {
             hideLoader();
         }
-    } else {
-        // For JSON/TXT export
-        try {
-            const response = await fetch(`/api/results/${currentJobId}`);
-            const results = await response.json();
-            
-            let content, filename, type;
-            
-            if (format === 'json') {
-                content = JSON.stringify(results, null, 2);
-                filename = `fact-check-results-${currentJobId}.json`;
-                type = 'application/json';
-            } else {
-                // Format as text
-                content = formatResultsAsText(results);
-                filename = `fact-check-results-${currentJobId}.txt`;
-                type = 'text/plain';
-            }
-            
-            const blob = new Blob([content], { type });
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = filename;
-            document.body.appendChild(a);
-            a.click();
-            window.URL.revokeObjectURL(url);
-            a.remove();
-            
-            showSuccess(`${format.toUpperCase()} downloaded successfully`);
-        } catch (error) {
-            console.error('Export error:', error);
-            showError('Failed to export results');
-        }
     }
-}
-
-function formatResultsAsText(results) {
-    let text = 'TRANSCRIPT FACT CHECK REPORT\n';
-    text += '===========================\n\n';
-    text += `Generated: ${new Date().toLocaleString()}\n`;
-    text += `Overall Credibility: ${results.credibility_score}% (${results.credibility_label})\n\n`;
-    text += `Total Claims: ${results.total_claims}\n`;
-    text += `True Claims: ${results.true_claims}\n`;
-    text += `False Claims: ${results.false_claims}\n`;
-    text += `Unverified Claims: ${results.unverified_claims}\n\n`;
-    text += 'DETAILED FACT CHECKS\n';
-    text += '-------------------\n\n';
-    
-    results.fact_checks.forEach((check, index) => {
-        text += `${index + 1}. ${check.claim}\n`;
-        text += `   Verdict: ${check.verdict}\n`;
-        text += `   Confidence: ${check.confidence}%\n`;
-        text += `   Explanation: ${check.explanation}\n`;
-        if (check.sources && check.sources.length > 0) {
-            text += `   Sources: ${check.sources.join(', ')}\n`;
-        }
-        text += '\n';
-    });
-    
-    return text;
 }
 
 function resetAnalysis() {
@@ -525,27 +474,6 @@ function resetAnalysis() {
     
     // Clear job ID
     currentJobId = null;
-}
-
-function resetForm() {
-    // Clear text input
-    document.getElementById('text-input').value = '';
-    document.getElementById('char-count').textContent = '0';
-    
-    // Clear file input
-    document.getElementById('file-input').value = '';
-    document.getElementById('file-info').style.display = 'none';
-    document.getElementById('file-name').textContent = '';
-    
-    // Reset to text input tab
-    document.querySelectorAll('.tab-button').forEach(btn => {
-        btn.classList.remove('active');
-    });
-    document.querySelectorAll('.input-panel').forEach(panel => {
-        panel.classList.remove('active');
-    });
-    document.querySelector('[data-tab="text"]').classList.add('active');
-    document.getElementById('text-panel').classList.add('active');
 }
 
 // UI Helper functions
@@ -573,6 +501,14 @@ function showLoader(message) {
             @keyframes spin {
                 to { transform: rotate(360deg); }
             }
+            @keyframes slideIn {
+                from { transform: translateX(100%); opacity: 0; }
+                to { transform: translateX(0); opacity: 1; }
+            }
+            @keyframes slideOut {
+                from { transform: translateX(0); opacity: 1; }
+                to { transform: translateX(100%); opacity: 0; }
+            }
         </style>
     `;
     document.body.appendChild(loader);
@@ -586,18 +522,13 @@ function hideLoader() {
 }
 
 function showSuccess(message) {
-    showNotification(message, 'success');
-}
-
-function showNotification(message, type = 'info') {
     const notification = document.createElement('div');
-    notification.className = `notification notification-${type}`;
     notification.style.cssText = `
         position: fixed;
         top: 20px;
         right: 20px;
         padding: 16px 24px;
-        background: ${type === 'success' ? '#10b981' : '#3b82f6'};
+        background: #10b981;
         color: white;
         border-radius: 8px;
         box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
@@ -612,20 +543,4 @@ function showNotification(message, type = 'info') {
         notification.style.animation = 'slideOut 0.3s ease';
         setTimeout(() => notification.remove(), 300);
     }, 3000);
-}
-
-// Dropdown functions
-function toggleDropdown(id) {
-    const dropdown = document.getElementById(id);
-    const arrow = document.getElementById(id.replace('dropdown', 'arrow'));
-    
-    if (dropdown.style.display === 'none' || !dropdown.style.display) {
-        dropdown.style.display = 'block';
-        arrow.classList.remove('fa-chevron-down');
-        arrow.classList.add('fa-chevron-up');
-    } else {
-        dropdown.style.display = 'none';
-        arrow.classList.remove('fa-chevron-up');
-        arrow.classList.add('fa-chevron-down');
-    }
 }
