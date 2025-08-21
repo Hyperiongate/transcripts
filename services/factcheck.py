@@ -8,13 +8,12 @@ from datetime import datetime, date
 import json
 import re
 from concurrent.futures import ThreadPoolExecutor, as_completed
-import openai
 from config import Config
 
 logger = logging.getLogger(__name__)
 
 class FactChecker:
-    """Enhanced fact checker with temporal context awareness"""
+    """Enhanced fact checker with temporal context awareness and political context"""
     
     def __init__(self, config: Config):
         self.config = config
@@ -22,9 +21,23 @@ class FactChecker:
         self.openai_api_key = config.OPENAI_API_KEY
         self.session = requests.Session()
         
-        # Set up OpenAI if available
+        # Initialize OpenAI if available
+        self.openai_client = None
         if self.openai_api_key:
-            openai.api_key = self.openai_api_key
+            try:
+                from openai import OpenAI
+                self.openai_client = OpenAI(api_key=self.openai_api_key)
+                logger.info("OpenAI client initialized for fact checking")
+            except Exception as e:
+                logger.error(f"Failed to initialize OpenAI: {e}")
+        
+        # Initialize political topics checker
+        try:
+            from services.political_topics import PoliticalTopicsChecker
+            self.political_checker = PoliticalTopicsChecker()
+        except:
+            logger.warning("Political topics checker not available")
+            self.political_checker = None
     
     def check_claims(self, claims: List[str], source: str = None, context: Dict = None) -> List[Dict]:
         """
@@ -112,19 +125,42 @@ class FactChecker:
         """Check a single claim with temporal awareness"""
         logger.info(f"Checking claim {index + 1}: {claim[:100]}...")
         
-        # First, use AI to understand the claim with temporal context
-        claim_analysis = self._analyze_claim_with_ai(claim, temporal_context)
-        
         # Check if this is about the Trump-Harris debate
-        if 'harris' in claim.lower() and 'trump' in claim.lower() and 'debate' in claim.lower():
-            if temporal_context.get('event') == 'Trump-Harris Presidential Debate':
+        claim_lower = claim.lower()
+        if 'harris' in claim_lower and 'trump' in claim_lower and ('debate' in claim_lower or 'debated' in claim_lower):
+            # Check for negative claims about the debate
+            if any(phrase in claim_lower for phrase in ['never debated', 'no debate', "didn't debate", "did not debate"]):
+                return {
+                    'claim': claim,
+                    'verdict': 'false',
+                    'explanation': 'False. Trump and Harris participated in a presidential debate on September 10, 2024, at the National Constitution Center in Philadelphia.',
+                    'confidence': 100,
+                    'sources': ['ABC News', 'National Constitution Center', 'Verified Historical Record']
+                }
+            # Positive claims about the debate
+            elif any(phrase in claim_lower for phrase in ['had a debate', 'debated', 'participated in a debate']):
                 return {
                     'claim': claim,
                     'verdict': 'true',
-                    'explanation': 'This transcript is from the Trump-Harris presidential debate on September 10, 2024.',
+                    'explanation': 'True. Trump and Harris participated in a presidential debate on September 10, 2024, moderated by ABC News.',
                     'confidence': 100,
-                    'sources': ['Event metadata', 'Transcript context']
+                    'sources': ['ABC News', 'Historical Record']
                 }
+        
+        # First, check against political topics database
+        if self.political_checker:
+            political_check = self.political_checker.check_claim(claim)
+            if political_check and political_check.get('found'):
+                return {
+                    'claim': claim,
+                    'verdict': political_check.get('verdict', 'unverified'),
+                    'explanation': political_check.get('explanation', ''),
+                    'confidence': political_check.get('confidence', 75),
+                    'sources': [political_check.get('source', 'Political Database')]
+                }
+        
+        # Use AI to understand the claim with temporal context
+        claim_analysis = self._analyze_claim_with_ai(claim, temporal_context)
         
         # Gather evidence from multiple sources
         evidence = []
@@ -136,7 +172,7 @@ class FactChecker:
                 evidence.extend(google_results)
         
         # 2. Use AI for complex analysis
-        if self.openai_api_key and claim_analysis:
+        if self.openai_client and claim_analysis:
             evidence.append({
                 'source': 'AI Analysis',
                 'verdict': claim_analysis.get('verdict', 'unverified'),
@@ -154,7 +190,7 @@ class FactChecker:
     
     def _analyze_claim_with_ai(self, claim: str, temporal_context: Dict) -> Optional[Dict]:
         """Use AI to analyze claims with temporal context"""
-        if not self.openai_api_key:
+        if not self.openai_client:
             return None
         
         try:
@@ -164,6 +200,14 @@ class FactChecker:
                 context_info = f"This claim was made on {temporal_context['transcript_date']}. "
             if temporal_context.get('event'):
                 context_info += f"The context is: {temporal_context['event']}. "
+            
+            # Add specific known facts
+            context_info += """
+            Important facts:
+            - Trump and Harris had a presidential debate on September 10, 2024
+            - Trump was president 2017-2021 and is president again starting January 2025
+            - Harris was VP 2021-2025
+            """
             
             prompt = f"""
             Analyze this claim for factual accuracy:
@@ -185,7 +229,7 @@ class FactChecker:
             - confidence: 0-100
             """
             
-            response = openai.ChatCompletion.create(
+            response = self.openai_client.chat.completions.create(
                 model="gpt-3.5-turbo",
                 messages=[
                     {"role": "system", "content": "You are a fact-checking expert. Be precise and consider temporal context."},
@@ -225,12 +269,12 @@ class FactChecker:
         
         # Check for temporal mismatches
         if 'this week' in claim_lower or 'recently' in claim_lower or 'just' in claim_lower:
-            if not temporal_context.get('transcript_date'):
+            if temporal_context.get('transcript_date'):
                 return {
                     'source': 'Temporal Analysis',
-                    'verdict': 'lacks_context',
-                    'explanation': 'This claim uses temporal references but lacks date context for proper verification.',
-                    'confidence': 40
+                    'verdict': 'needs_context',
+                    'explanation': f"Note: Temporal references like 'this week' refer to the week of {temporal_context['transcript_date']}, not the current week.",
+                    'confidence': 60
                 }
         
         # Check for debate-related claims
@@ -242,6 +286,15 @@ class FactChecker:
                     'explanation': 'Trump and Harris participated in a presidential debate on September 10, 2024.',
                     'confidence': 100
                 }
+        
+        # Check for war claims
+        if 'no new wars' in claim_lower and 'trump' in claim_lower:
+            return {
+                'source': 'Historical Record',
+                'verdict': 'true',
+                'explanation': 'True. Trump did not start any new wars during his first presidency (2017-2021).',
+                'confidence': 95
+            }
         
         return None
     
@@ -263,14 +316,15 @@ class FactChecker:
             'AI Analysis': 0.8,
             'Historical Record': 1.0,
             'Temporal Analysis': 0.6,
-            'Pattern Match': 0.7
+            'Pattern Match': 0.7,
+            'Political Database': 0.9
         }
         
         # Calculate weighted verdict
         verdict_scores = {
             'true': 0, 'mostly_true': 0, 'mixed': 0, 
             'mostly_false': 0, 'false': 0, 'unverified': 0,
-            'lacks_context': 0
+            'needs_context': 0, 'misleading': 0
         }
         
         total_weight = 0
@@ -283,8 +337,9 @@ class FactChecker:
             weight = weights.get(source, 0.5)
             confidence = item.get('confidence', 50) / 100
             
-            verdict_scores[verdict] += weight * confidence
-            total_weight += weight * confidence
+            if verdict in verdict_scores:
+                verdict_scores[verdict] += weight * confidence
+                total_weight += weight * confidence
             
             if item.get('explanation'):
                 explanations.append(f"{source}: {item['explanation']}")
@@ -359,6 +414,8 @@ class FactChecker:
             return 'mostly_false'
         elif any(word in rating_lower for word in ['false', 'incorrect', 'wrong']):
             return 'false'
+        elif any(word in rating_lower for word in ['misleading', 'deceptive']):
+            return 'misleading'
         elif any(word in rating_lower for word in ['unproven', 'unverified']):
             return 'unverified'
         else:
