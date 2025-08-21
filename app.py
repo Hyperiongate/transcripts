@@ -9,8 +9,8 @@ from datetime import datetime
 from typing import List, Dict
 from flask import Flask, render_template, jsonify, request, send_file
 from flask_cors import CORS
-from dotenv import load_dotenv
 import json
+from reportlab.lib import colors
 from reportlab.lib import colors
 from reportlab.lib.pagesizes import letter
 from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
@@ -21,9 +21,6 @@ import io
 from threading import Thread
 import time
 import traceback
-
-# Load environment variables first
-load_dotenv()
 
 # Import configuration
 from config import Config
