@@ -228,6 +228,152 @@ def update_job_progress(job_id: str, progress: int, message: str):
         'status': 'failed' if progress < 0 else 'processing'
     })
 
+def generate_conversational_summary(results: Dict) -> str:
+    """Generate a conversational summary of the fact check results"""
+    cred_score = results.get('credibility_score', {})
+    score = cred_score.get('score', 0)
+    label = cred_score.get('label', 'Unknown')
+    true_claims = cred_score.get('true_claims', 0)
+    false_claims = cred_score.get('false_claims', 0)
+    mixed_claims = cred_score.get('mixed_claims', 0)
+    unverified_claims = cred_score.get('unverified_claims', 0)
+    total_claims = results.get('total_claims', 0)
+    
+    # Start with overall assessment
+    if score >= 80:
+        summary = f"Overall, this transcript shows {label} with a score of {score}%. "
+        summary += f"Most claims ({true_claims} out of {total_claims}) were verified as accurate. "
+    elif score >= 60:
+        summary = f"This transcript has {label} with a score of {score}%. "
+        summary += f"While {true_claims} claims were true, there were also {false_claims} false claims and {mixed_claims} misleading statements. "
+    elif score >= 40:
+        summary = f"This transcript demonstrates {label} with a concerning score of {score}%. "
+        summary += f"Out of {total_claims} claims analyzed, {false_claims} were false and {mixed_claims} were misleading. "
+    else:
+        summary = f"⚠️ This transcript has {label} with a score of only {score}%. "
+        summary += f"This is concerning: {false_claims} false claims and {mixed_claims} misleading statements out of {total_claims} total claims. "
+    
+    # Add pattern detection
+    if false_claims >= 5:
+        summary += f"\n\n🚨 PATTERN DETECTED: With {false_claims} false claims, this indicates a pattern of misinformation. "
+    elif false_claims >= 3:
+        summary += f"\n\n⚠️ WARNING: Multiple false claims ({false_claims}) suggest credibility issues. "
+    
+    # Add speaker-specific warnings
+    speaker_context = results.get('speaker_context', {})
+    for speaker, info in speaker_context.items():
+        if info.get('warnings'):
+            summary += f"\n\n📋 {speaker}: "
+            summary += " ".join(info['warnings'])
+    
+    # Highlight most problematic claims
+    fact_checks = results.get('fact_checks', [])
+    false_claim_examples = [fc for fc in fact_checks if fc.get('verdict', '').lower() in ['false', 'mostly_false']]
+    
+    if false_claim_examples:
+        summary += "\n\n❌ Most concerning false claims:"
+        for i, fc in enumerate(false_claim_examples[:3], 1):
+            summary += f"\n{i}. \"{fc['claim'][:100]}...\" - {fc.get('explanation', '')[:150]}"
+    
+    # Add context about the event if it's a debate
+    if 'debate' in results.get('source', '').lower():
+        summary += "\n\n📅 Context: This appears to be from a political debate where fact-checking is especially important for voters."
+    
+    return summary
+
+def calculate_credibility_score(fact_checks: List[Dict]) -> Dict:
+    """Calculate overall credibility score"""
+    if not fact_checks:
+        return {
+            'score': 0,
+            'label': 'No claims verified',
+            'true_claims': 0,
+            'false_claims': 0,
+            'mixed_claims': 0,
+            'unverified_claims': 0
+        }
+    
+    # Count verdicts
+    true_count = sum(1 for fc in fact_checks if fc.get('verdict', '').lower() in ['true', 'mostly true', 'correct', 'accurate'])
+    false_count = sum(1 for fc in fact_checks if fc.get('verdict', '').lower() in ['false', 'mostly false', 'incorrect', 'inaccurate'])
+    mixed_count = sum(1 for fc in fact_checks if fc.get('verdict', '').lower() in ['mixed', 'partially true', 'half true', 'misleading'])
+    unverified_count = sum(1 for fc in fact_checks if fc.get('verdict', '').lower() in ['unverified', 'unsubstantiated', 'lacks_context', 'needs_context'])
+    
+    total = len(fact_checks)
+    
+    # Calculate weighted score
+    score = ((true_count * 100) + (mixed_count * 50) + (unverified_count * 30)) / total if total > 0 else 0
+    
+    # Determine label
+    if score >= 80:
+        label = 'High Credibility'
+    elif score >= 60:
+        label = 'Moderate Credibility'
+    elif score >= 40:
+        label = 'Low Credibility'
+    else:
+        label = 'Very Low Credibility'
+    
+    return {
+        'score': round(score),
+        'label': label,
+        'true_claims': true_count,
+        'false_claims': false_count,
+        'mixed_claims': mixed_count,
+        'unverified_claims': unverified_count
+    }
+
+def analyze_speaker_credibility(speakers: List[str], fact_checks: List[Dict]) -> Dict:
+    """Analyze speaker credibility with comprehensive background"""
+    speaker_info = {}
+    
+    # Process each speaker
+    for speaker in speakers:
+        if not speaker:
+            continue
+            
+        speaker_lower = speaker.lower()
+        matched_info = None
+        
+        # Find matching speaker in database
+        for key, info in SPEAKER_DATABASE.items():
+            if key in speaker_lower or speaker_lower in key:
+                matched_info = info
+                break
+        
+        if matched_info:
+            # Count false claims by this speaker
+            speaker_false_claims = sum(1 for fc in fact_checks 
+                                     if fc.get('speaker', '').lower() == speaker_lower 
+                                     and fc.get('verdict', '').lower() in ['false', 'mostly_false'])
+            
+            speaker_info[speaker] = {
+                'full_name': matched_info.get('full_name', speaker),
+                'role': matched_info.get('role', 'Unknown'),
+                'party': matched_info.get('party', 'Unknown'),
+                'credibility_notes': matched_info.get('credibility_notes', ''),
+                'historical_accuracy': matched_info.get('fact_check_history', 'No data available'),
+                'false_claims_in_transcript': speaker_false_claims
+            }
+            
+            # Add warnings
+            warnings = []
+            if matched_info.get('criminal_record'):
+                warnings.append(f"Criminal Record: {matched_info['criminal_record']}")
+            if matched_info.get('fraud_history'):
+                warnings.append(f"Fraud History: {matched_info['fraud_history']}")
+            if speaker_false_claims >= 3:
+                warnings.append(f"Made {speaker_false_claims} false claims in this transcript")
+            
+            if warnings:
+                speaker_info[speaker]['warnings'] = warnings
+                
+            # Add pattern detection
+            if speaker_false_claims >= 5:
+                speaker_info[speaker]['pattern_detected'] = f"Pattern of deception: {speaker_false_claims} false claims"
+    
+    return speaker_info
+
 # Routes
 @app.route('/')
 def index():
@@ -404,6 +550,7 @@ def process_transcript_async(job_id: str, transcript: str, source: str):
                 'speakers': [],
                 'topics': [],
                 'speaker_context': {},
+                'conversational_summary': 'No verifiable claims were found in this transcript.',
                 'completed_at': datetime.now().isoformat()
             })
             return
@@ -457,6 +604,15 @@ def process_transcript_async(job_id: str, transcript: str, source: str):
         
         speaker_context = analyze_speaker_credibility(speakers, fact_checks)
         
+        # Generate conversational summary
+        conversational_summary = generate_conversational_summary({
+            'credibility_score': credibility_score,
+            'total_claims': len(claims),
+            'fact_checks': fact_checks,
+            'speaker_context': speaker_context,
+            'source': source
+        })
+        
         # Complete (100%)
         update_job_progress(job_id, 100, 'Analysis complete')
         
@@ -482,6 +638,7 @@ def process_transcript_async(job_id: str, transcript: str, source: str):
             'source': source,
             'metadata': metadata,
             'speaker_context': speaker_context,
+            'conversational_summary': conversational_summary,
             'completed_at': datetime.now().isoformat()
         }
         
@@ -586,6 +743,7 @@ def get_results(job_id):
             'speakers': results.get('speakers', []),
             'topics': results.get('topics', []),
             'speaker_context': results.get('speaker_context', {}),
+            'conversational_summary': results.get('conversational_summary', ''),
             'source': results.get('source', 'Unknown'),
             'processing_time': results.get('processing_time', 0),
             'completed_at': results.get('completed_at', ''),
@@ -620,7 +778,9 @@ def export_results(job_id, format):
                 'credibility_score': job.get('credibility_score', {}),
                 'fact_checks': job.get('fact_checks', []),
                 'metadata': job.get('metadata', {}),
-                'processing_time': job.get('processing_time', 0)
+                'processing_time': job.get('processing_time', 0),
+                'conversational_summary': job.get('conversational_summary', ''),
+                'speaker_context': job.get('speaker_context', {})
             })
             
         elif format == 'txt':
@@ -631,6 +791,12 @@ def export_results(job_id, format):
             output.append(f"Date: {job.get('completed_at', datetime.now().isoformat())}")
             output.append(f"Source: {job.get('source', 'Unknown')}")
             output.append(f"Processing Time: {job.get('processing_time', 0):.1f} seconds")
+            output.append("")
+            
+            # Conversational Summary
+            output.append("ANALYSIS SUMMARY:")
+            output.append("-" * 50)
+            output.append(job.get('conversational_summary', 'No summary available'))
             output.append("")
             
             # Credibility Score
@@ -689,6 +855,20 @@ def export_results(job_id, format):
             story.append(Paragraph(f"<b>Date:</b> {job.get('completed_at', 'N/A')}", info_style))
             story.append(Paragraph(f"<b>Source:</b> {job.get('source', 'Unknown')}", info_style))
             story.append(Paragraph(f"<b>Processing Time:</b> {job.get('processing_time', 0):.1f} seconds", info_style))
+            story.append(Spacer(1, 20))
+            
+            # Conversational Summary
+            summary_style = ParagraphStyle(
+                'SummaryStyle',
+                parent=styles['Normal'],
+                fontSize=12,
+                spaceAfter=20,
+                leftIndent=20,
+                rightIndent=20
+            )
+            story.append(Paragraph("<b>Analysis Summary:</b>", styles['Heading2']))
+            summary_text = job.get('conversational_summary', 'No summary available').replace('\n', '<br/>')
+            story.append(Paragraph(summary_text, summary_style))
             story.append(Spacer(1, 20))
             
             # Credibility Score
@@ -788,86 +968,6 @@ def export_results(job_id, format):
 def export_pdf(job_id):
     """Direct PDF export endpoint for backward compatibility"""
     return export_results(job_id, 'pdf')
-
-# Helper functions for analysis
-def calculate_credibility_score(fact_checks: List[Dict]) -> Dict:
-    """Calculate overall credibility score"""
-    if not fact_checks:
-        return {
-            'score': 0,
-            'label': 'No claims verified',
-            'true_claims': 0,
-            'false_claims': 0,
-            'mixed_claims': 0,
-            'unverified_claims': 0
-        }
-    
-    # Count verdicts
-    true_count = sum(1 for fc in fact_checks if fc.get('verdict', '').lower() in ['true', 'mostly true', 'correct', 'accurate'])
-    false_count = sum(1 for fc in fact_checks if fc.get('verdict', '').lower() in ['false', 'mostly false', 'incorrect', 'inaccurate'])
-    mixed_count = sum(1 for fc in fact_checks if fc.get('verdict', '').lower() in ['mixed', 'partially true', 'half true'])
-    unverified_count = sum(1 for fc in fact_checks if fc.get('verdict', '').lower() in ['unverified', 'unsubstantiated', 'lacks_context'])
-    
-    total = len(fact_checks)
-    
-    # Calculate weighted score
-    score = ((true_count * 100) + (mixed_count * 50) + (unverified_count * 30)) / total if total > 0 else 0
-    
-    # Determine label
-    if score >= 80:
-        label = 'High Credibility'
-    elif score >= 60:
-        label = 'Moderate Credibility'
-    elif score >= 40:
-        label = 'Low Credibility'
-    else:
-        label = 'Very Low Credibility'
-    
-    return {
-        'score': round(score),
-        'label': label,
-        'true_claims': true_count,
-        'false_claims': false_count,
-        'mixed_claims': mixed_count,
-        'unverified_claims': unverified_count
-    }
-
-def analyze_speaker_credibility(speakers: List[str], fact_checks: List[Dict]) -> Dict:
-    """Analyze speaker credibility - OPTIMIZED"""
-    speaker_info = {}
-    
-    # Quick lookup instead of iterating
-    speaker_lookup = {}
-    for speaker in speakers:
-        if not speaker:  # Skip empty speakers
-            continue
-        speaker_lower = speaker.lower()
-        for key, info in SPEAKER_DATABASE.items():
-            if key in speaker_lower or speaker_lower in key:
-                speaker_lookup[speaker] = info
-                break
-    
-    # Process matched speakers
-    for speaker, info in speaker_lookup.items():
-        speaker_info[speaker] = {
-            'full_name': info.get('full_name', speaker),
-            'role': info.get('role', 'Unknown'),
-            'party': info.get('party', 'Unknown'),
-            'credibility_notes': info.get('credibility_notes', ''),
-            'historical_accuracy': info.get('fact_check_history', 'No data available')
-        }
-        
-        # Add warnings efficiently
-        warnings = []
-        if info.get('criminal_record'):
-            warnings.append(f"Criminal Record: {info['criminal_record']}")
-        if info.get('fraud_history'):
-            warnings.append(f"Fraud History: {info['fraud_history']}")
-        
-        if warnings:
-            speaker_info[speaker]['warnings'] = warnings
-    
-    return speaker_info
 
 @app.route('/api/debug/jobs')
 def debug_jobs():
