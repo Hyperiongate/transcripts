@@ -36,3 +36,5 @@ Pillow==10.1.0
 # Optional: Database support (only if using MongoDB/Redis)
 pymongo==4.5.0
 redis==5.0.0
+
+aiohttp==3.9.1
