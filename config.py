@@ -35,23 +35,25 @@ class Config:
     CENSUS_API_KEY = os.environ.get('CENSUS_API_KEY')
     CDC_API_KEY = os.environ.get('CDC_API_KEY')
     
-    # OpenAI Configuration
+    # OpenAI Configuration - AGGRESSIVE SETTINGS
     USE_GPT4 = os.environ.get('USE_GPT4', 'True').lower() == 'true'
     OPENAI_MODEL = 'gpt-4-1106-preview' if USE_GPT4 else 'gpt-3.5-turbo'
     ENABLE_AI_CLAIMS_EXTRACTION = True
     ENABLE_AI_FACT_CHECKING = True
     ENABLE_SOURCE_ANALYSIS = True
     ENABLE_COMPREHENSIVE_SUMMARY = True
+    ENABLE_AGGRESSIVE_CHECKING = True  # New setting
+    FORCE_VERDICT_ON_ALL_CLAIMS = True  # New setting
     
     # Application limits - INCREASED FOR LONGER TRANSCRIPTS
     MAX_TRANSCRIPT_LENGTH = 500000  # Increased to 500k characters (~100 pages)
-    MAX_CLAIMS_PER_TRANSCRIPT = 50  # maximum claims per analysis
+    MAX_CLAIMS_PER_TRANSCRIPT = 100  # Increased from 50
     MAX_CLAIM_LENGTH = 500  # characters per claim
     
-    # Timeouts
-    FACT_CHECK_TIMEOUT = 10  # seconds per claim
-    TOTAL_ANALYSIS_TIMEOUT = 600  # 10 minutes total (increased from 5)
-    API_TIMEOUT = 5  # seconds for external API calls
+    # Timeouts - INCREASED FOR THOROUGHNESS
+    FACT_CHECK_TIMEOUT = 15  # seconds per claim (increased)
+    TOTAL_ANALYSIS_TIMEOUT = 900  # 15 minutes total (increased)
+    API_TIMEOUT = 10  # seconds for external API calls (increased)
     REQUEST_TIMEOUT = 30  # seconds for HTTP requests
     
     # Caching
@@ -71,36 +73,26 @@ class Config:
     LOG_LEVEL = os.environ.get('LOG_LEVEL', 'INFO')
     LOG_FORMAT = '%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     
+    # Verdict thresholds - MORE AGGRESSIVE
+    CONFIDENCE_THRESHOLD_FOR_VERDICT = 50  # Lower threshold (was 70)
+    ALWAYS_PROVIDE_VERDICT = True  # Never return needs_context if possible
+    
     @classmethod
     def validate(cls):
-        """Validate configuration"""
+        """Validate configuration and return warnings"""
         warnings = []
         
         if not cls.GOOGLE_FACTCHECK_API_KEY:
-            warnings.append("Google Fact Check API key not set - fact checking will be limited")
+            warnings.append("No Google Fact Check API key configured")
         
         if not cls.OPENAI_API_KEY:
-            warnings.append("OpenAI API key not set - AI features disabled")
-        else:
-            if cls.USE_GPT4:
-                warnings.append("Using GPT-4 for enhanced accuracy (higher cost)")
-            else:
-                warnings.append("Using GPT-3.5-turbo (lower cost, good performance)")
-        
-        # Check for additional APIs
-        if not cls.NEWS_API_KEY:
-            warnings.append("News API key not set - news verification disabled")
-        
-        if not cls.SCRAPERAPI_KEY:
-            warnings.append("ScraperAPI key not set - web search verification limited")
-            
-        if not cls.FRED_API_KEY:
-            warnings.append("FRED API key not set - economic data verification disabled")
-        
-        if cls.DEBUG:
-            warnings.append("Running in DEBUG mode - not for production")
+            warnings.append("No OpenAI API key configured - AI fact-checking disabled")
         
         if cls.USE_IN_MEMORY_STORAGE:
-            warnings.append("Using in-memory storage - data will not persist between restarts")
+            warnings.append("Using in-memory storage - data will be lost on restart")
+        
+        # Check for any fact-checking capability
+        if not any([cls.GOOGLE_FACTCHECK_API_KEY, cls.OPENAI_API_KEY, cls.NEWS_API_KEY]):
+            warnings.append("WARNING: No fact-checking APIs configured!")
         
         return warnings
