@@ -1,613 +1,457 @@
 """
-Enhanced Fact Checking Service with Aggressive Verification
+Enhanced Fact-Checking Service - Verification-focused approach
+Replaces opinion-based categorization with actual fact verification
 """
 import re
 import logging
-from typing import Dict, List, Optional, Any
 import requests
+import json
+from typing import Dict, List, Optional, Any
 from datetime import datetime
-import asyncio
-from concurrent.futures import ThreadPoolExecutor
+from urllib.parse import quote
 
 logger = logging.getLogger(__name__)
 
-# Enhanced verdict categories with more nuance
+# Redesigned verdict system focused on verifiability
 VERDICT_CATEGORIES = {
-    'true': {
-        'label': 'True',
+    'verified_true': {
+        'label': 'Verified True',
         'icon': '✅',
-        'color': '#22c55e',
+        'color': '#10b981',
         'score': 100,
-        'description': 'Completely accurate'
+        'description': 'Claim verified as factually accurate through multiple sources'
     },
-    'mostly_true': {
-        'label': 'Mostly True',
-        'icon': '✅',
-        'color': '#86efac',
-        'score': 85,
-        'description': 'Accurate with minor issues'
-    },
-    'nearly_true': {
-        'label': 'Nearly True',
-        'icon': '✓',
-        'color': '#bef264',
-        'score': 75,
-        'description': 'More true than false'
-    },
-    'exaggeration': {
-        'label': 'Exaggeration',
-        'icon': '📏',
-        'color': '#facc15',
-        'score': 60,
-        'description': 'Based on truth but overstated'
-    },
-    'misleading': {
-        'label': 'Misleading',
-        'icon': '⚠️',
-        'color': '#fb923c',
-        'score': 40,
-        'description': 'True but gives wrong impression'
-    },
-    'mostly_false': {
-        'label': 'Mostly False',
-        'icon': '❌',
-        'color': '#f87171',
-        'score': 20,
-        'description': 'Significant inaccuracies with grain of truth'
-    },
-    'false': {
-        'label': 'False',
+    'verified_false': {
+        'label': 'Verified False',
         'icon': '❌',
         'color': '#ef4444',
         'score': 0,
-        'description': 'Demonstrably incorrect'
+        'description': 'Claim verified as factually incorrect through reliable sources'
     },
-    'intentionally_deceptive': {
-        'label': 'Intentionally Deceptive',
-        'icon': '🚨',
-        'color': '#dc2626',
-        'score': 0,
-        'description': 'Deliberately false or manipulative'
+    'partially_accurate': {
+        'label': 'Partially Accurate',
+        'icon': '⚠️',
+        'color': '#f59e0b',
+        'score': 50,
+        'description': 'Some elements true, others false or misleading'
     },
-    'needs_context': {
-        'label': 'Needs Context',
+    'unverifiable': {
+        'label': 'Unverifiable',
         'icon': '❓',
-        'color': '#8b5cf6',
+        'color': '#6b7280',
         'score': None,
-        'description': 'Cannot verify without additional information'
+        'description': 'Cannot be verified with available information'
     },
     'opinion': {
         'label': 'Opinion',
         'icon': '💭',
-        'color': '#6366f1',
+        'color': '#8b5cf6',
         'score': None,
         'description': 'Subjective statement, not a factual claim'
+    },
+    # Keep some old verdicts for compatibility during transition
+    'needs_context': {
+        'label': 'Unverifiable',
+        'icon': '❓',
+        'color': '#6b7280',
+        'score': None,
+        'description': 'Cannot be verified with available information'
     }
 }
 
 class FactChecker:
-    """Enhanced fact checker that aggressively seeks verdicts"""
+    """Fact checker that actually verifies claims"""
     
     def __init__(self, config):
         self.config = config
-        self.google_api_key = getattr(config, 'GOOGLE_FACTCHECK_API_KEY', None)
-        self.openai_api_key = getattr(config, 'OPENAI_API_KEY', None)
-        self.news_api_key = getattr(config, 'NEWS_API_KEY', None)
-        self.scraperapi_key = getattr(config, 'SCRAPERAPI_KEY', None)
+        self.api_keys = {
+            'openai': getattr(config, 'OPENAI_API_KEY', None),
+            'google': getattr(config, 'GOOGLE_FACTCHECK_API_KEY', None),
+            'news': getattr(config, 'NEWS_API_KEY', None),
+            'scraperapi': getattr(config, 'SCRAPERAPI_KEY', None),
+        }
         
-        # Initialize OpenAI client
+        # Initialize OpenAI
         self.openai_client = None
-        if self.openai_api_key:
+        if self.api_keys['openai']:
             try:
                 from openai import OpenAI
-                self.openai_client = OpenAI(api_key=self.openai_api_key)
-                logger.info("OpenAI client initialized for fact checking")
+                self.openai_client = OpenAI(api_key=self.api_keys['openai'])
+                logger.info("OpenAI initialized for fact-checking")
             except Exception as e:
                 logger.error(f"Failed to initialize OpenAI: {e}")
-        
-        # Initialize comprehensive checker if available
-        self.comprehensive_checker = None
-        try:
-            from services.comprehensive_factcheck import ComprehensiveFactChecker
-            self.comprehensive_checker = ComprehensiveFactChecker(config)
-            logger.info("Comprehensive fact checker initialized")
-        except Exception as e:
-            logger.warning(f"Comprehensive checker not available: {e}")
-        
-        # Thread pool for parallel checks
-        self.executor = ThreadPoolExecutor(max_workers=5)
     
     def check_claim_with_verdict(self, claim: str, context: Optional[Dict] = None) -> Dict:
-        """Main entry point - aggressively check claims and provide definitive verdicts"""
+        """Check a claim and return verification result"""
         try:
-            # Clean claim
+            # Clean and validate claim
             claim = claim.strip()
+            if len(claim.split()) < 3:
+                return self._create_verdict('unverifiable', 'Statement too short to verify')
             
-            # Quick opinion check
+            # Check if pure opinion
             if self._is_pure_opinion(claim):
                 return self._create_verdict('opinion', 'This is a subjective opinion')
             
-            # Use comprehensive checker if available
-            if self.comprehensive_checker:
-                try:
-                    result = self.comprehensive_checker.check_claim_with_verdict(claim, context)
-                    # Only accept if we got a real verdict
-                    if result.get('verdict') != 'needs_context':
-                        return result
-                except Exception as e:
-                    logger.warning(f"Comprehensive check failed: {e}")
+            # Extract verifiable elements
+            verifiable_elements = self._extract_verifiable_elements(claim)
+            if not verifiable_elements:
+                # Try web search anyway
+                web_result = self._verify_with_web_search(claim)
+                if web_result and web_result.get('verified') is not None:
+                    return self._create_verdict_from_result(web_result, claim)
+                return self._create_verdict('unverifiable', 'No verifiable facts found in claim')
             
-            # Run parallel checks
-            results = self._run_parallel_checks(claim)
+            # Run verification
+            verification_results = self._verify_elements(verifiable_elements, claim)
             
-            # Synthesize results aggressively
-            final_verdict = self._synthesize_results(results, claim)
-            
-            # Last resort: Force AI to make a decision
-            if final_verdict['verdict'] == 'needs_context' and self.openai_client:
-                final_verdict = self._force_ai_verdict(claim)
-            
-            return final_verdict
+            # Synthesize results
+            return self._synthesize_results(claim, verification_results)
             
         except Exception as e:
-            logger.error(f"Error checking claim: {e}")
-            # Even on error, try to provide something useful
-            if self.openai_client:
-                return self._force_ai_verdict(claim)
-            return self._create_verdict('needs_context', f'Error during fact-checking: {str(e)}')
+            logger.error(f"Error in fact check: {e}")
+            return self._create_verdict('unverifiable', f'Error during verification: {str(e)}')
     
-    def _run_parallel_checks(self, claim: str) -> List[Dict]:
-        """Run multiple fact checks in parallel"""
-        futures = []
+    def _extract_verifiable_elements(self, claim: str) -> List[Dict]:
+        """Extract specific facts that can be verified"""
+        elements = []
         
-        # 1. Google Fact Check
-        if self.google_api_key:
-            futures.append(self.executor.submit(self._check_google_fact_check, claim))
+        # Extract dates
+        date_patterns = [
+            r'\b(\d{4})\b',  # Years
+            r'\b(January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2},?\s+\d{4}\b',
+            r'\b\d{1,2}/\d{1,2}/\d{2,4}\b',
+        ]
+        for pattern in date_patterns:
+            matches = re.findall(pattern, claim, re.IGNORECASE)
+            for match in matches:
+                elements.append({
+                    'type': 'date',
+                    'value': match,
+                    'context': claim
+                })
         
-        # 2. AI Analysis
-        if self.openai_client:
-            futures.append(self.executor.submit(self._check_with_ai_decisive, claim))
+        # Extract numbers/statistics
+        number_patterns = [
+            r'\$[\d,]+(?:\.\d+)?(?:\s*(?:billion|million|thousand))?',
+            r'\b\d+(?:,\d{3})*(?:\.\d+)?(?:\s*(?:billion|million|thousand|percent|%))\b',
+            r'\b\d+(?:,\d{3})*(?:\.\d+)?\b',
+        ]
+        for pattern in number_patterns:
+            matches = re.findall(pattern, claim, re.IGNORECASE)
+            for match in matches:
+                elements.append({
+                    'type': 'statistic',
+                    'value': match,
+                    'context': claim
+                })
         
-        # 3. Web Search
-        if self.scraperapi_key:
-            futures.append(self.executor.submit(self._check_with_web_search, claim))
+        # Extract factual claims about events/people
+        if any(word in claim.lower() for word in ['born', 'founded', 'created', 'won', 'sold', 'earned']):
+            elements.append({
+                'type': 'factual_claim',
+                'value': claim,
+                'pattern': 'event_claim'
+            })
         
-        # 4. Pattern matching
-        futures.append(self.executor.submit(self._check_common_patterns, claim))
-        
-        # Collect results
+        return elements
+    
+    def _verify_elements(self, elements: List[Dict], full_claim: str) -> List[Dict]:
+        """Verify each extracted element"""
         results = []
-        for future in futures:
-            try:
-                result = future.result(timeout=5)
-                if result:
-                    results.append(result)
-            except Exception as e:
-                logger.warning(f"Check failed: {e}")
+        
+        # Always try Google Fact Check first
+        if self.api_keys['google']:
+            google_result = self._check_google_factcheck(full_claim)
+            if google_result:
+                results.append(google_result)
+        
+        # Try web search
+        if self.api_keys['scraperapi']:
+            web_result = self._verify_with_web_search(full_claim)
+            if web_result:
+                results.append(web_result)
+        
+        # If no results yet, try AI
+        if not results and self.openai_client:
+            ai_result = self._verify_with_ai(full_claim)
+            if ai_result:
+                results.append(ai_result)
         
         return results
     
-    def _synthesize_results(self, results: List[Dict], claim: str) -> Dict:
-        """Aggressively synthesize multiple results into a single verdict"""
-        if not results:
-            return self._create_verdict('needs_context', 'No verification sources available')
+    def _check_google_factcheck(self, claim: str) -> Optional[Dict]:
+        """Use Google Fact Check API"""
+        if not self.api_keys['google']:
+            return None
         
-        # Count verdicts
-        verdict_counts = {}
-        total_confidence = 0
-        explanations = []
-        sources = []
-        
-        for result in results:
-            verdict = result.get('verdict', 'needs_context')
-            if verdict != 'needs_context':
-                verdict_counts[verdict] = verdict_counts.get(verdict, 0) + 1
-                total_confidence += result.get('confidence', 50)
-                explanations.append(result.get('explanation', ''))
-                sources.extend(result.get('sources', [result.get('source', 'Unknown')]))
-        
-        # If we have any non-context verdicts, use them
-        if verdict_counts:
-            # Get most common verdict
-            final_verdict = max(verdict_counts, key=verdict_counts.get)
-            avg_confidence = total_confidence / len([r for r in results if r.get('verdict') != 'needs_context'])
-            
-            # Combine explanations
-            unique_explanations = list(set(e for e in explanations if e))
-            final_explanation = ' '.join(unique_explanations[:2])
-            
-            return self._create_verdict(
-                final_verdict,
-                final_explanation,
-                confidence=int(avg_confidence),
-                sources=list(set(sources))
-            )
-        
-        # All returned needs_context - force a decision based on claim content
-        return self._analyze_claim_content(claim)
-    
-    def _check_with_ai_decisive(self, claim: str) -> Optional[Dict]:
-        """Force AI to give a decisive verdict"""
-        try:
-            prompt = f"""You are a decisive fact-checker. You MUST provide a verdict for this claim.
-
-Claim: "{claim}"
-
-IMPORTANT RULES:
-1. You MUST choose one of these verdicts: TRUE, MOSTLY_TRUE, EXAGGERATION, MISLEADING, MOSTLY_FALSE, FALSE
-2. ONLY use NEEDS_CONTEXT if the claim is literally impossible to evaluate (e.g., "They said something")
-3. Use your knowledge up to early 2024 to evaluate the claim
-4. If you're not 100% certain, make your best assessment based on available knowledge
-5. Consider if numbers are approximately correct (within 10-20% is MOSTLY_TRUE)
-6. Consider if the general thrust is correct even if details are wrong
-
-Provide your analysis:
-VERDICT: [Your chosen verdict]
-CONFIDENCE: [60-95]
-EXPLANATION: [One sentence explaining why]
-KEY_FACT: [One specific fact that supports your verdict]"""
-
-            response = self.openai_client.chat.completions.create(
-                model=getattr(self.config, 'OPENAI_MODEL', 'gpt-3.5-turbo'),
-                messages=[
-                    {"role": "system", "content": "You are a decisive fact-checker. Always provide a clear verdict."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.3,
-                max_tokens=200
-            )
-            
-            result = response.choices[0].message.content.strip()
-            
-            # Parse response
-            verdict_match = re.search(r'VERDICT:\s*(\w+)', result)
-            confidence_match = re.search(r'CONFIDENCE:\s*(\d+)', result)
-            explanation_match = re.search(r'EXPLANATION:\s*(.+?)(?=KEY_FACT:|$)', result, re.DOTALL)
-            
-            if verdict_match:
-                verdict = self._map_verdict(verdict_match.group(1))
-                confidence = int(confidence_match.group(1)) if confidence_match else 75
-                explanation = explanation_match.group(1).strip() if explanation_match else "AI analysis completed"
-                
-                # Never return needs_context from this method
-                if verdict == 'needs_context':
-                    verdict = 'mostly_false'  # Default to skeptical
-                    explanation = "Claim lacks sufficient supporting evidence"
-                
-                return self._create_verdict(
-                    verdict,
-                    explanation,
-                    confidence=confidence,
-                    sources=['AI Analysis']
-                )
-                
-        except Exception as e:
-            logger.error(f"AI analysis error: {e}")
-        
-        return None
-    
-    def _force_ai_verdict(self, claim: str) -> Dict:
-        """Last resort - force AI to make a decision"""
-        try:
-            prompt = f"""This claim needs a verdict. Based on general knowledge and common sense, what's most likely?
-
-Claim: "{claim}"
-
-Choose the MOST LIKELY verdict:
-- TRUE: If it sounds reasonable and likely correct
-- MOSTLY_TRUE: If it's probably right with minor issues  
-- MISLEADING: If it's technically true but gives wrong impression
-- MOSTLY_FALSE: If it's probably wrong
-- FALSE: If it's clearly incorrect
-
-What's your best guess? Just pick one.
-
-VERDICT: [pick one]
-REASON: [one sentence]"""
-
-            response = self.openai_client.chat.completions.create(
-                model='gpt-3.5-turbo',
-                messages=[
-                    {"role": "system", "content": "Make your best guess based on common sense."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.5,
-                max_tokens=100
-            )
-            
-            result = response.choices[0].message.content.strip()
-            verdict_match = re.search(r'VERDICT:\s*(\w+)', result)
-            
-            if verdict_match:
-                verdict = self._map_verdict(verdict_match.group(1))
-                if verdict == 'needs_context':
-                    verdict = 'mostly_false'
-                
-                return self._create_verdict(
-                    verdict,
-                    "Assessment based on general plausibility",
-                    confidence=60,
-                    sources=['Plausibility Analysis']
-                )
-                
-        except Exception as e:
-            logger.error(f"Force verdict error: {e}")
-        
-        # Ultimate fallback
-        return self._create_verdict(
-            'mostly_false',
-            'Insufficient evidence to support this claim',
-            confidence=55,
-            sources=['Default Assessment']
-        )
-    
-    def _analyze_claim_content(self, claim: str) -> Dict:
-        """Analyze claim content to make a verdict decision"""
-        claim_lower = claim.lower()
-        
-        # Check for red flag words that often indicate false claims
-        red_flags = ['always', 'never', 'every', 'all', 'none', 'only', 'biggest', 'smallest', 'first', 'last']
-        red_flag_count = sum(1 for flag in red_flags if flag in claim_lower)
-        
-        # Check for specific numbers - these can often be verified
-        has_specific_numbers = bool(re.search(r'\b\d{4,}\b', claim))
-        has_percentage = bool(re.search(r'\d+\.?\d*\s*%', claim))
-        
-        # Check claim length and complexity
-        word_count = len(claim.split())
-        
-        # Make a decision based on content
-        if red_flag_count >= 2:
-            return self._create_verdict(
-                'mostly_false',
-                'Claim contains multiple absolute statements that are rarely true',
-                confidence=65,
-                sources=['Content Analysis']
-            )
-        elif has_specific_numbers or has_percentage:
-            return self._create_verdict(
-                'misleading',
-                'Specific numbers provided without verification',
-                confidence=60,
-                sources=['Number Analysis']
-            )
-        elif word_count > 20:
-            return self._create_verdict(
-                'mixed',
-                'Complex claim with multiple components',
-                confidence=55,
-                sources=['Complexity Analysis']
-            )
-        else:
-            return self._create_verdict(
-                'mostly_false',
-                'Claim cannot be substantiated with available evidence',
-                confidence=55,
-                sources=['Evidence Analysis']
-            )
-    
-    def _check_common_patterns(self, claim: str) -> Optional[Dict]:
-        """Check claims against common patterns"""
-        claim_lower = claim.lower()
-        
-        # Common false claim patterns
-        false_patterns = [
-            (r'crime is at an? all[- ]time high', 'Crime rates have generally decreased over decades'),
-            (r'unemployment is at (?:an? )?(?:all[- ]time|record) high', 'Unemployment has been higher historically'),
-            (r'(?:biggest|largest|worst) (?:tax )?(?:increase|cut) in history', 'Likely an exaggeration'),
-            (r'(?:never|always) (?:been|happened)', 'Absolute statements are rarely true'),
-            (r'everyone (?:knows|says|agrees)', 'Overgeneralization'),
-            (r'nobody (?:knows|says|disagrees)', 'Overgeneralization')
-        ]
-        
-        for pattern, explanation in false_patterns:
-            if re.search(pattern, claim_lower):
-                return self._create_verdict(
-                    'mostly_false',
-                    explanation,
-                    confidence=70,
-                    sources=['Pattern Analysis']
-                )
-        
-        # Common true patterns
-        true_patterns = [
-            (r'according to (?:the )?(?:cdc|fbi|census|bls|federal reserve)', 'References authoritative source'),
-            (r'(?:study|research|data) (?:shows|indicates|suggests)', 'References research'),
-            (r'in (?:19|20)\d{2}', 'Includes specific date')
-        ]
-        
-        for pattern, explanation in true_patterns:
-            if re.search(pattern, claim_lower):
-                return self._create_verdict(
-                    'mostly_true',
-                    explanation,
-                    confidence=65,
-                    sources=['Source Recognition']
-                )
-        
-        return None
-    
-    def _check_google_fact_check(self, claim: str) -> Optional[Dict]:
-        """Check claim using Google Fact Check API"""
         try:
             url = "https://factchecktools.googleapis.com/v1alpha1/claims:search"
             params = {
-                'key': self.google_api_key,
-                'query': claim[:200],
-                'pageSize': 5
+                'key': self.api_keys['google'],
+                'query': claim,
+                'languageCode': 'en'
             }
             
-            response = requests.get(url, params=params, timeout=5)
-            
+            response = requests.get(url, params=params, timeout=10)
             if response.status_code == 200:
                 data = response.json()
                 
-                if 'claims' in data and data['claims']:
-                    for claim_review in data['claims']:
-                        if 'claimReview' in claim_review:
-                            for review in claim_review['claimReview']:
-                                rating = review.get('textualRating', '').lower()
-                                verdict = self._map_google_rating_to_verdict(rating)
-                                
-                                return self._create_verdict(
-                                    verdict,
-                                    review.get('title', 'Fact check available'),
-                                    confidence=85,
-                                    sources=[review.get('publisher', {}).get('name', 'Fact Checker')]
-                                )
-                                
+                if data.get('claims'):
+                    claim_data = data['claims'][0]
+                    review = claim_data.get('claimReview', [{}])[0]
+                    rating = review.get('textualRating', '')
+                    
+                    # Map rating to our system
+                    if any(word in rating.lower() for word in ['true', 'correct', 'accurate']):
+                        verified = True
+                    elif any(word in rating.lower() for word in ['false', 'incorrect', 'wrong']):
+                        verified = False
+                    else:
+                        verified = 'mixed'
+                    
+                    return {
+                        'element': claim,
+                        'verified': verified,
+                        'explanation': review.get('title', rating),
+                        'source': review.get('publisher', {}).get('name', 'Fact Checker'),
+                        'confidence': 85
+                    }
+                    
         except Exception as e:
-            logger.error(f"Google Fact Check API error: {e}")
+            logger.error(f"Google Fact Check error: {e}")
         
         return None
     
-    def _check_with_web_search(self, claim: str) -> Optional[Dict]:
-        """Check claim using web search"""
+    def _verify_with_web_search(self, claim: str) -> Optional[Dict]:
+        """Search web for verification"""
+        if not self.api_keys['scraperapi']:
+            return None
+        
         try:
-            # Extract key terms
-            key_terms = self._extract_key_terms(claim)
-            search_query = ' '.join(key_terms[:5])
+            # Search for fact-checking of this claim
+            query = f'"{claim}" fact check OR false OR true OR verified'
             
-            # Try ScraperAPI
-            url = f"http://api.scraperapi.com?api_key={self.scraperapi_key}&url=https://www.google.com/search?q={search_query}"
+            url = "https://api.scraperapi.com/structured/google/search"
+            params = {
+                'api_key': self.api_keys['scraperapi'],
+                'query': query,
+                'num': 5
+            }
             
-            response = requests.get(url, timeout=10)
-            
+            response = requests.get(url, params=params, timeout=15)
             if response.status_code == 200:
-                content = response.text.lower()
+                data = response.json()
+                results = data.get('organic_results', [])
                 
-                # Look for fact-checking indicators
-                if 'fact check' in content:
-                    if 'false' in content or 'incorrect' in content:
-                        return self._create_verdict(
-                            'false',
-                            'Web sources indicate this claim is false',
-                            confidence=75,
-                            sources=['Web Search']
-                        )
-                    elif 'true' in content or 'correct' in content:
-                        return self._create_verdict(
-                            'true',
-                            'Web sources support this claim',
-                            confidence=75,
-                            sources=['Web Search']
-                        )
-                    else:
-                        return self._create_verdict(
-                            'mixed',
-                            'Web sources show mixed information',
-                            confidence=65,
-                            sources=['Web Search']
-                        )
+                # Analyze results
+                verification_found = False
+                is_true = 0
+                is_false = 0
+                explanations = []
                 
+                for result in results:
+                    title = result.get('title', '').lower()
+                    snippet = result.get('snippet', '').lower()
+                    content = f"{title} {snippet}"
+                    
+                    # Look for verification indicators
+                    if any(word in content for word in ['fact check', 'verified', 'debunked', 'confirmed']):
+                        verification_found = True
+                        
+                        if any(word in content for word in ['false', 'incorrect', 'debunked', 'myth', 'no evidence']):
+                            is_false += 1
+                            explanations.append(f"{result.get('title')}: Indicates false")
+                        elif any(word in content for word in ['true', 'correct', 'confirmed', 'accurate', 'verified']):
+                            is_true += 1
+                            explanations.append(f"{result.get('title')}: Indicates true")
+                
+                if verification_found:
+                    if is_false > is_true:
+                        return {
+                            'element': claim,
+                            'verified': False,
+                            'explanation': ' | '.join(explanations),
+                            'source': 'Web Search',
+                            'confidence': min(70 + (is_false * 10), 90)
+                        }
+                    elif is_true > is_false:
+                        return {
+                            'element': claim,
+                            'verified': True,
+                            'explanation': ' | '.join(explanations),
+                            'source': 'Web Search',
+                            'confidence': min(70 + (is_true * 10), 90)
+                        }
+                        
         except Exception as e:
             logger.error(f"Web search error: {e}")
         
         return None
     
+    def _verify_with_ai(self, claim: str) -> Optional[Dict]:
+        """Use AI for verification as last resort"""
+        if not self.openai_client:
+            return None
+        
+        try:
+            prompt = f"""You are a fact-checker with knowledge up to early 2024.
+
+Verify this specific claim: "{claim}"
+
+Rules:
+1. Only say TRUE if you are certain this is accurate based on your knowledge
+2. Only say FALSE if you are certain this is inaccurate
+3. Say CANNOT_VERIFY if you're unsure or lack information
+4. Provide specific evidence for your verdict
+
+Format:
+VERDICT: [TRUE/FALSE/CANNOT_VERIFY]
+EVIDENCE: [Specific facts that support or refute the claim]
+CONFIDENCE: [0-100]"""
+
+            response = self.openai_client.chat.completions.create(
+                model='gpt-3.5-turbo',
+                messages=[
+                    {"role": "system", "content": "You are a strict fact-checker. Only verify claims you are certain about."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0,
+                max_tokens=300
+            )
+            
+            result = response.choices[0].message.content.strip()
+            
+            # Parse response
+            verdict_match = re.search(r'VERDICT: (\w+)', result)
+            confidence_match = re.search(r'CONFIDENCE: (\d+)', result)
+            evidence_match = re.search(r'EVIDENCE: (.+?)(?:\n|$)', result, re.DOTALL)
+            
+            if verdict_match:
+                verdict = verdict_match.group(1).upper()
+                confidence = int(confidence_match.group(1)) if confidence_match else 50
+                evidence = evidence_match.group(1).strip() if evidence_match else "No evidence provided"
+                
+                if verdict == 'TRUE':
+                    verified = True
+                elif verdict == 'FALSE':
+                    verified = False
+                else:
+                    return None
+                
+                return {
+                    'element': claim,
+                    'verified': verified,
+                    'explanation': evidence,
+                    'confidence': confidence,
+                    'source': 'AI Analysis'
+                }
+            
+        except Exception as e:
+            logger.error(f"AI verification error: {e}")
+        
+        return None
+    
+    def _synthesize_results(self, claim: str, verification_results: List[Dict]) -> Dict:
+        """Synthesize all verification results into final verdict"""
+        if not verification_results:
+            return self._create_verdict('unverifiable', 'Could not verify claim with available sources')
+        
+        # Count verification outcomes
+        verified_true = sum(1 for r in verification_results if r.get('verified') is True)
+        verified_false = sum(1 for r in verification_results if r.get('verified') is False)
+        
+        # Collect all explanations and sources
+        explanations = []
+        sources = []
+        total_confidence = 0
+        confidence_count = 0
+        
+        for result in verification_results:
+            if result.get('explanation'):
+                explanations.append(result['explanation'])
+            if result.get('source'):
+                sources.append(result['source'])
+            if result.get('confidence'):
+                total_confidence += result['confidence']
+                confidence_count += 1
+        
+        avg_confidence = total_confidence / confidence_count if confidence_count > 0 else 50
+        
+        # Determine final verdict
+        if verified_false > 0 and verified_true == 0:
+            verdict = 'verified_false'
+            explanation = "Claim verified as false. " + " ".join(explanations)
+        elif verified_true > 0 and verified_false == 0:
+            verdict = 'verified_true'
+            explanation = "Claim verified as true. " + " ".join(explanations)
+        elif verified_true > 0 and verified_false > 0:
+            verdict = 'partially_accurate'
+            explanation = "Claim contains both true and false elements. " + " ".join(explanations)
+        else:
+            verdict = 'unverifiable'
+            explanation = "Insufficient evidence to verify. " + " ".join(explanations)
+        
+        return self._create_verdict(
+            verdict,
+            explanation,
+            confidence=int(avg_confidence),
+            sources=list(set(sources))
+        )
+    
+    def _create_verdict_from_result(self, result: Dict, claim: str) -> Dict:
+        """Create verdict from a single result"""
+        if result.get('verified') is True:
+            verdict = 'verified_true'
+        elif result.get('verified') is False:
+            verdict = 'verified_false'
+        else:
+            verdict = 'unverifiable'
+        
+        return self._create_verdict(
+            verdict,
+            result.get('explanation', 'No explanation provided'),
+            confidence=result.get('confidence', 50),
+            sources=[result.get('source', 'Unknown')]
+        )
+    
     def _is_pure_opinion(self, claim: str) -> bool:
         """Check if claim is pure opinion"""
-        opinion_patterns = [
-            r'(?i)^i (?:think|believe|feel|hope|wish)',
-            r'(?i)(?:beautiful|wonderful|terrible|amazing|horrible|great|awful)(?!\s+(?:increase|decrease|number|data))',
-            r'(?i)(?:should|ought|must)(?!\s+have\s+(?:been|done))',
-            r'(?i)(?:best|worst)(?!\s+(?:since|in|ever))'
+        opinion_indicators = [
+            r'\b(i think|i believe|i feel|in my opinion|seems to me|appears to be)\b',
+            r'\b(should|ought to|must|need to)\b',
+            r'\b(best|worst|greatest|terrible|awesome|horrible)\b'
         ]
         
-        return any(re.search(pattern, claim) for pattern in opinion_patterns)
+        claim_lower = claim.lower()
+        
+        # Check for opinion phrases
+        for pattern in opinion_indicators:
+            if re.search(pattern, claim_lower):
+                # But check if it's quoting someone else's opinion as a fact
+                if not re.search(r'(said|says|stated|claimed|according to)', claim_lower):
+                    return True
+        
+        return False
     
-    def _extract_key_terms(self, claim: str) -> List[str]:
-        """Extract key terms from claim"""
-        # Remove common words
-        stop_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by', 'from', 'is', 'was', 'are', 'were', 'been', 'be'}
-        
-        words = claim.split()
-        key_terms = []
-        
-        # Get proper nouns
-        for word in words:
-            if word[0].isupper() and word.lower() not in stop_words:
-                key_terms.append(word)
-        
-        # Get numbers
-        numbers = re.findall(r'\b\d+\.?\d*\b', claim)
-        key_terms.extend(numbers)
-        
-        # Get remaining important words
-        for word in words:
-            if word.lower() not in stop_words and word not in key_terms and len(word) > 3:
-                key_terms.append(word)
-        
-        return key_terms[:5]
-    
-    def _map_verdict(self, verdict: str) -> str:
-        """Map various verdict formats to our standard verdicts"""
-        verdict_lower = verdict.lower().strip()
-        
-        mappings = {
-            'true': 'true',
-            'correct': 'true',
-            'accurate': 'true',
-            'mostly true': 'mostly_true',
-            'mostly_true': 'mostly_true',
-            'mostly accurate': 'mostly_true',
-            'nearly true': 'nearly_true',
-            'nearly_true': 'nearly_true',
-            'half true': 'nearly_true',
-            'exaggeration': 'exaggeration',
-            'exaggerated': 'exaggeration',
-            'misleading': 'misleading',
-            'mostly false': 'mostly_false',
-            'mostly_false': 'mostly_false',
-            'false': 'false',
-            'incorrect': 'false',
-            'wrong': 'false',
-            'mixed': 'misleading',
-            'needs_context': 'needs_context',
-            'needs context': 'needs_context',
-            'opinion': 'opinion'
-        }
-        
-        return mappings.get(verdict_lower, 'mostly_false')  # Default to mostly_false instead of needs_context
-    
-    def _map_google_rating_to_verdict(self, rating: str) -> str:
-        """Map Google ratings to our verdicts"""
-        rating_lower = rating.lower()
-        
-        mappings = {
-            'true': 'true',
-            'mostly true': 'mostly_true',
-            'half true': 'nearly_true',
-            'mostly false': 'mostly_false',
-            'false': 'false',
-            'pants on fire': 'false',
-            'misleading': 'misleading',
-            'lacks context': 'misleading',  # Changed from needs_context
-            'unproven': 'mostly_false',     # Changed from needs_context
-            'exaggerated': 'exaggeration'
-        }
-        
-        for key, value in mappings.items():
-            if key in rating_lower:
-                return value
-        
-        return 'mostly_false'  # Default to mostly_false
-    
-    def _create_verdict(self, verdict: str, explanation: str, confidence: int = 70, sources: List[str] = None) -> Dict:
-        """Create a verdict result"""
-        verdict_info = VERDICT_CATEGORIES.get(verdict, VERDICT_CATEGORIES['needs_context'])
-        
+    def _create_verdict(self, verdict: str, explanation: str, confidence: int = 50, sources: List[str] = None) -> Dict:
+        """Create standardized verdict"""
         return {
             'verdict': verdict,
-            'verdict_details': verdict_info,
+            'verdict_details': VERDICT_CATEGORIES.get(verdict, VERDICT_CATEGORIES['unverifiable']),
             'explanation': explanation,
             'confidence': confidence,
             'sources': sources or [],
-            'timestamp': datetime.utcnow().isoformat()
+            'timestamp': datetime.now().isoformat()
         }
     
     # Keep compatibility methods
+    def check_claim_comprehensive(self, claim: str, context: Dict[str, Any]) -> Dict:
+        """Compatibility method"""
+        return self.check_claim_with_verdict(claim, context)
+    
     def get_speaker_context(self, speaker_name: str) -> Dict[str, Any]:
+        """Compatibility method"""
         return {
             'criminal_record': None,
             'fraud_history': None,
@@ -618,10 +462,8 @@ REASON: [one sentence]"""
             }
         }
     
-    def check_claim_comprehensive(self, claim: str, context: Dict[str, Any]) -> Dict:
-        return self.check_claim_with_verdict(claim, context)
-    
     def generate_summary(self, fact_checks: List[Dict]) -> str:
+        """Generate summary of fact checks"""
         if not fact_checks:
             return "No claims were fact-checked."
         
@@ -629,12 +471,12 @@ REASON: [one sentence]"""
         verdict_counts = {}
         
         for fc in fact_checks:
-            verdict = fc.get('verdict', 'needs_context')
+            verdict = fc.get('verdict', 'unverifiable')
             verdict_counts[verdict] = verdict_counts.get(verdict, 0) + 1
         
         summary = f"Analyzed {total} claims:\n"
         for verdict, count in verdict_counts.items():
-            verdict_info = VERDICT_CATEGORIES.get(verdict, VERDICT_CATEGORIES['needs_context'])
+            verdict_info = VERDICT_CATEGORIES.get(verdict, VERDICT_CATEGORIES['unverifiable'])
             summary += f"- {verdict_info['label']}: {count}\n"
         
         return summary
