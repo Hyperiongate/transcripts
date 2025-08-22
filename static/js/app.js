@@ -1,5 +1,39 @@
 // Main application JavaScript
-// Note: VERDICT_MAPPINGS is already defined in enhanced.js
+// Updated for enhanced verification system
+
+// Updated verdict mappings for new system
+const VERDICT_MAPPINGS = {
+    'verified_true': {
+        label: 'Verified True',
+        class: 'true',
+        icon: 'fa-check-circle',
+        color: '#10b981'
+    },
+    'verified_false': {
+        label: 'Verified False',
+        class: 'false',
+        icon: 'fa-times-circle',
+        color: '#ef4444'
+    },
+    'partially_accurate': {
+        label: 'Partially Accurate',
+        class: 'mixed',
+        icon: 'fa-exclamation-triangle',
+        color: '#f59e0b'
+    },
+    'unverifiable': {
+        label: 'Unverifiable',
+        class: 'unverified',
+        icon: 'fa-question-circle',
+        color: '#6b7280'
+    },
+    'opinion': {
+        label: 'Opinion',
+        class: 'opinion',
+        icon: 'fa-comment',
+        color: '#8b5cf6'
+    }
+};
 
 // Global variables
 let currentJobId = null;
@@ -162,21 +196,21 @@ async function submitTranscript(transcript) {
     try {
         updateProgress(10, 'Submitting transcript...');
         
-        const response = await fetch('/api/submit', {
+        const response = await fetch('/api/analyze', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify({ transcript: transcript })
+            body: JSON.stringify({ transcript })
         });
         
         const data = await response.json();
         
         if (response.ok) {
             currentJobId = data.job_id;
-            pollForResults();
+            pollJobStatus();
         } else {
-            throw new Error(data.error || 'Failed to submit transcript');
+            throw new Error(data.error || 'Failed to start analysis');
         }
     } catch (error) {
         showError('Error: ' + error.message);
@@ -184,29 +218,16 @@ async function submitTranscript(transcript) {
     }
 }
 
-// Poll for results
-function pollForResults() {
-    let attempts = 0;
-    const maxAttempts = 60; // 1 minute timeout
-    
+// Poll job status
+function pollJobStatus() {
     pollInterval = setInterval(async () => {
         try {
             const response = await fetch(`/api/status/${currentJobId}`);
             const data = await response.json();
             
             if (response.ok) {
-                // Update progress
-                const progress = data.progress || 0;
-                const message = data.message || 'Processing...';
-                updateProgress(progress, message);
+                updateProgress(data.progress, data.message);
                 
-                // Update steps
-                if (progress >= 25) document.getElementById('step-1').classList.add('active');
-                if (progress >= 50) document.getElementById('step-2').classList.add('active');
-                if (progress >= 75) document.getElementById('step-3').classList.add('active');
-                if (progress >= 90) document.getElementById('step-4').classList.add('active');
-                
-                // Check if completed
                 if (data.status === 'completed') {
                     clearInterval(pollInterval);
                     getResults();
@@ -215,12 +236,9 @@ function pollForResults() {
                     showError(data.error || 'Analysis failed');
                     resetAnalysis();
                 }
-            }
-            
-            attempts++;
-            if (attempts >= maxAttempts) {
+            } else {
                 clearInterval(pollInterval);
-                showError('Analysis timeout. Please try again.');
+                showError('Error checking status. Please try again.');
                 resetAnalysis();
             }
         } catch (error) {
@@ -273,73 +291,53 @@ function displayResults(results) {
     
     // Update summary
     const summary = results.conversational_summary || results.summary || 'No summary available.';
-    document.getElementById('analysis-summary').innerHTML = formatSummary(summary);
+    document.getElementById('summary-text').innerHTML = summary.replace(/\n/g, '<br>');
     
-    // Update stats
-    document.getElementById('total-claims').textContent = results.total_claims || 0;
-    document.getElementById('verified-claims').textContent = 
-        results.credibility_score?.breakdown?.accurate || 0;
-    document.getElementById('false-claims').textContent = 
-        results.credibility_score?.breakdown?.false || 0;
-    document.getElementById('unverified-claims').textContent = 
-        results.credibility_score?.breakdown?.other || 0;
+    // Update statistics
+    const breakdown = results.credibility_score?.breakdown || {};
+    document.getElementById('verified-true-count').textContent = breakdown.verified_true || 0;
+    document.getElementById('verified-false-count').textContent = breakdown.verified_false || 0;
+    document.getElementById('partially-accurate-count').textContent = breakdown.partially_accurate || 0;
+    document.getElementById('unverifiable-count').textContent = breakdown.unverifiable || 0;
     
     // Display fact checks
     displayFactChecks(results.fact_checks || []);
     
-    // Add speaker/topic info if available
-    if (results.speakers && results.speakers.length > 0) {
-        const speakerInfo = document.createElement('div');
-        speakerInfo.className = 'speaker-info';
-        speakerInfo.innerHTML = `<strong>Speakers:</strong> ${results.speakers.join(', ')}`;
-        document.getElementById('analysis-summary').appendChild(speakerInfo);
+    // Display speaker analysis if available
+    if (results.speaker_analysis) {
+        displaySpeakerAnalysis(results.speaker_analysis);
     }
-    
-    if (results.topics && results.topics.length > 0) {
-        const topicInfo = document.createElement('div');
-        topicInfo.className = 'topic-info';
-        topicInfo.innerHTML = `<strong>Topics:</strong> ${results.topics.join(', ')}`;
-        document.getElementById('analysis-summary').appendChild(topicInfo);
-    }
-}
-
-// Format summary text
-function formatSummary(summary) {
-    return summary
-        .replace(/\n/g, '<br>')
-        .replace(/✅/g, '<span style="color: #10b981;">✅</span>')
-        .replace(/❌/g, '<span style="color: #ef4444;">❌</span>')
-        .replace(/⚠️/g, '<span style="color: #f59e0b;">⚠️</span>')
-        .replace(/🚨/g, '<span style="color: #dc2626;">🚨</span>')
-        .replace(/💡/g, '<span style="color: #3b82f6;">💡</span>');
 }
 
 // Display fact checks
 function displayFactChecks(factChecks) {
-    const container = document.getElementById('fact-check-list');
+    const container = document.getElementById('fact-checks-container');
     container.innerHTML = '';
     
     if (factChecks.length === 0) {
-        container.innerHTML = '<p style="text-align: center; color: #6b7280;">No fact checks available.</p>';
+        container.innerHTML = '<p class="no-claims">No claims found to fact-check.</p>';
         return;
     }
     
     factChecks.forEach((check, index) => {
         const item = document.createElement('div');
-        const verdict = check.verdict || 'unverified';
-        const verdictClass = getVerdictClass(verdict);
+        item.className = `fact-check-item verdict-${getVerdictClass(check.verdict)}`;
         
-        item.className = `fact-check-item ${verdictClass}`;
+        const verdictInfo = VERDICT_MAPPINGS[check.verdict] || VERDICT_MAPPINGS['unverifiable'];
+        
         item.innerHTML = `
             <div class="fact-check-header">
-                <div class="fact-check-claim">${check.claim || 'No claim text'}</div>
-                <div class="fact-check-verdict ${verdictClass}">
-                    <i class="fas ${getVerdictIcon(verdict)}"></i>
-                    ${formatVerdict(verdict)}
+                <div class="fact-check-number">#${index + 1}</div>
+                <div class="fact-check-verdict">
+                    <i class="fas ${verdictInfo.icon}"></i>
+                    ${verdictInfo.label}
                 </div>
+                ${check.speaker ? `<div class="fact-check-speaker">${check.speaker}</div>` : ''}
             </div>
-            <div class="fact-check-details">
-                <p>${check.explanation || 'No explanation available.'}</p>
+            <div class="fact-check-content">
+                <p class="fact-check-claim">"${check.claim}"</p>
+                <p class="fact-check-explanation">${check.explanation || 'No explanation available.'}</p>
+                ${check.confidence ? `<p class="fact-check-confidence">Confidence: ${check.confidence}%</p>` : ''}
                 ${check.sources && check.sources.length > 0 ? 
                     `<div class="fact-check-source">
                         <strong>Sources:</strong> ${check.sources.join(', ')}
@@ -351,62 +349,74 @@ function displayFactChecks(factChecks) {
     });
 }
 
+// Display speaker analysis
+function displaySpeakerAnalysis(speakerAnalysis) {
+    const container = document.getElementById('speaker-analysis-container');
+    if (!container) return;
+    
+    container.innerHTML = '';
+    
+    Object.entries(speakerAnalysis).forEach(([speaker, stats]) => {
+        const speakerDiv = document.createElement('div');
+        speakerDiv.className = 'speaker-stats';
+        
+        const accuracy = stats.accuracy_rate !== null ? `${stats.accuracy_rate}%` : 'N/A';
+        
+        speakerDiv.innerHTML = `
+            <h4>${speaker}</h4>
+            <div class="speaker-stats-grid">
+                <div class="stat">
+                    <span class="stat-label">Total Claims:</span>
+                    <span class="stat-value">${stats.total_claims}</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Accuracy Rate:</span>
+                    <span class="stat-value">${accuracy}</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Verified True:</span>
+                    <span class="stat-value">${stats.verified_true}</span>
+                </div>
+                <div class="stat">
+                    <span class="stat-label">Verified False:</span>
+                    <span class="stat-value">${stats.verified_false}</span>
+                </div>
+            </div>
+        `;
+        
+        container.appendChild(speakerDiv);
+    });
+}
+
 // Get verdict class
 function getVerdictClass(verdict) {
-    const v = (verdict || 'unverified').toLowerCase().replace(' ', '_');
+    const v = (verdict || 'unverifiable').toLowerCase().replace(' ', '_');
     
-    if (VERDICT_MAPPINGS && VERDICT_MAPPINGS[v]) {
+    if (VERDICT_MAPPINGS[v]) {
         return VERDICT_MAPPINGS[v].class;
     }
     
-    // Fallback mapping
-    const mapping = {
-        'true': 'true',
-        'mostly_true': 'true',
-        'nearly_true': 'true',
-        'false': 'false',
-        'mostly_false': 'false',
-        'misleading': 'false',
-        'intentionally_deceptive': 'false',
-        'exaggeration': 'unverified',
-        'needs_context': 'unverified',
-        'opinion': 'unverified',
-        'unverified': 'unverified'
-    };
-    
-    return mapping[v] || 'unverified';
+    // Fallback for any unmapped verdicts
+    return 'unverified';
 }
 
 // Get verdict icon
 function getVerdictIcon(verdict) {
-    const v = (verdict || 'unverified').toLowerCase().replace(' ', '_');
+    const v = (verdict || 'unverifiable').toLowerCase().replace(' ', '_');
     
-    if (VERDICT_MAPPINGS && VERDICT_MAPPINGS[v]) {
+    if (VERDICT_MAPPINGS[v]) {
         return VERDICT_MAPPINGS[v].icon;
     }
     
-    // Fallback icons
-    const icons = {
-        'true': 'fa-check-circle',
-        'mostly_true': 'fa-check-circle',
-        'nearly_true': 'fa-check-circle',
-        'false': 'fa-times-circle',
-        'mostly_false': 'fa-times-circle',
-        'misleading': 'fa-exclamation-triangle',
-        'intentionally_deceptive': 'fa-exclamation-triangle',
-        'exaggeration': 'fa-question-circle',
-        'needs_context': 'fa-question-circle',
-        'opinion': 'fa-comment',
-        'unverified': 'fa-question-circle'
-    };
-    
-    return icons[v] || 'fa-question-circle';
+    return 'fa-question-circle';
 }
 
 // Format verdict label
 function formatVerdict(verdict) {
-    if (VERDICT_MAPPINGS && VERDICT_MAPPINGS[verdict]) {
-        return VERDICT_MAPPINGS[verdict].label;
+    const v = (verdict || 'unverifiable').toLowerCase().replace(' ', '_');
+    
+    if (VERDICT_MAPPINGS[v]) {
+        return VERDICT_MAPPINGS[v].label;
     }
     
     // Fallback formatting
@@ -421,10 +431,37 @@ async function exportResults(format) {
     }
     
     try {
-        window.location.href = `/api/export/${currentJobId}`;
+        const response = await fetch(`/api/export/${currentJobId}/${format}`);
+        
+        if (response.ok) {
+            const blob = await response.blob();
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `factcheck_${currentJobId}.${format}`;
+            document.body.appendChild(a);
+            a.click();
+            window.URL.revokeObjectURL(url);
+            document.body.removeChild(a);
+        } else {
+            throw new Error('Export failed');
+        }
     } catch (error) {
         showError('Error exporting results: ' + error.message);
     }
+}
+
+// Show error message
+function showError(message) {
+    const errorDiv = document.createElement('div');
+    errorDiv.className = 'error-message';
+    errorDiv.textContent = message;
+    
+    document.body.appendChild(errorDiv);
+    
+    setTimeout(() => {
+        errorDiv.remove();
+    }, 5000);
 }
 
 // Reset analysis
@@ -433,26 +470,19 @@ function resetAnalysis() {
     document.getElementById('progress-section').style.display = 'none';
     document.getElementById('results-section').style.display = 'none';
     
-    // Reset progress
-    document.getElementById('progress-fill').style.width = '0%';
-    document.getElementById('progress-text').textContent = 'Initializing...';
+    // Clear inputs
+    document.getElementById('text-input').value = '';
+    document.getElementById('char-count').textContent = '0';
+    removeFile();
     
-    // Reset steps
-    document.querySelectorAll('.step').forEach(step => {
-        step.classList.remove('active');
-    });
-    
-    // Clear job ID
     currentJobId = null;
-    
-    // Clear poll interval
     if (pollInterval) {
         clearInterval(pollInterval);
+        pollInterval = null;
     }
 }
 
-// Show error message
-function showError(message) {
-    alert(message); // Simple alert for now
-    // TODO: Implement better error display
+// New analysis button
+function newAnalysis() {
+    resetAnalysis();
 }
