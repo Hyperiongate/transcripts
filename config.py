@@ -22,11 +22,18 @@ class Config:
     # Use in-memory storage if databases not available
     USE_IN_MEMORY_STORAGE = MONGODB_URI is None or REDIS_URL is None
     
-    # API Keys
+    # API Keys - ALL OF THEM
     GOOGLE_FACTCHECK_API_KEY = os.environ.get('GOOGLE_FACTCHECK_API_KEY')
     OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY')
     FRED_API_KEY = os.environ.get('FRED_API_KEY')
     YOUTUBE_API_KEY = os.environ.get('YOUTUBE_API_KEY')
+    NEWS_API_KEY = os.environ.get('NEWS_API_KEY')
+    SCRAPERAPI_KEY = os.environ.get('SCRAPERAPI_KEY')
+    SCRAPINGBEE_API_KEY = os.environ.get('SCRAPINGBEE_API_KEY')
+    MEDIASTACK_API_KEY = os.environ.get('MEDIASTACK_API_KEY')
+    NOAA_TOKEN = os.environ.get('NOAA_TOKEN')
+    CENSUS_API_KEY = os.environ.get('CENSUS_API_KEY')
+    CDC_API_KEY = os.environ.get('CDC_API_KEY')
     
     # OpenAI Configuration
     USE_GPT4 = os.environ.get('USE_GPT4', 'True').lower() == 'true'
@@ -79,6 +86,16 @@ class Config:
                 warnings.append("Using GPT-4 for enhanced accuracy (higher cost)")
             else:
                 warnings.append("Using GPT-3.5-turbo (lower cost, good performance)")
+        
+        # Check for additional APIs
+        if not cls.NEWS_API_KEY:
+            warnings.append("News API key not set - news verification disabled")
+        
+        if not cls.SCRAPERAPI_KEY:
+            warnings.append("ScraperAPI key not set - web search verification limited")
+            
+        if not cls.FRED_API_KEY:
+            warnings.append("FRED API key not set - economic data verification disabled")
         
         if cls.DEBUG:
             warnings.append("Running in DEBUG mode - not for production")
