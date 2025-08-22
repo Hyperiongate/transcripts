@@ -3,10 +3,31 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Transcript Fact Checker - Verify Claims in Real-Time</title>
-    <link rel="icon" type="image/x-icon" href="/static/favicon.ico">
+    <title>Transcript Fact Checker - AI-Powered Political Fact Verification</title>
+    <meta name="description" content="Fact-check political speeches, interviews, and transcripts using AI and trusted APIs. Upload text, files, or YouTube URLs for instant verification.">
     
+    <!-- Inline CSS for immediate rendering -->
     <style>
+        /* CSS Variables */
+        :root {
+            --primary-color: #3b82f6;
+            --primary-dark: #2563eb;
+            --primary-light: #60a5fa;
+            --secondary-color: #6366f1;
+            --success-color: #10b981;
+            --warning-color: #f59e0b;
+            --danger-color: #ef4444;
+            --gray-100: #f3f4f6;
+            --gray-200: #e5e7eb;
+            --gray-300: #d1d5db;
+            --gray-400: #9ca3af;
+            --gray-500: #6b7280;
+            --gray-600: #4b5563;
+            --gray-700: #374151;
+            --gray-800: #1f2937;
+            --gray-900: #111827;
+        }
+
         /* Reset and Base Styles */
         * {
             margin: 0;
@@ -15,54 +36,48 @@
         }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
-            background: #f3f4f6;
-            color: #1f2937;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
             line-height: 1.6;
+            color: var(--gray-800);
+            background: linear-gradient(135deg, #f8fafc 0%, #e0e7ff 100%);
             min-height: 100vh;
         }
 
-        /* Header Styles */
+        /* Header */
         .header {
             background: white;
-            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
-            padding: 1rem 0;
+            box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
             position: sticky;
             top: 0;
-            z-index: 100;
+            z-index: 1000;
         }
 
         .nav-container {
             max-width: 1200px;
             margin: 0 auto;
-            padding: 0 20px;
+            padding: 16px 20px;
             display: flex;
             justify-content: space-between;
-            align-items: center;
-        }
-
-        .logo-section {
-            display: flex;
             align-items: center;
         }
 
         .logo {
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 12px;
             text-decoration: none;
-            color: #1f2937;
+            color: var(--gray-800);
             font-size: 24px;
             font-weight: 700;
-            transition: transform 0.2s;
+            transition: color 0.2s;
         }
 
         .logo:hover {
-            transform: translateY(-2px);
+            color: var(--primary-color);
         }
 
         .logo-icon {
-            color: #10b981;
+            color: var(--primary-color);
             font-size: 28px;
         }
 
@@ -76,21 +91,25 @@
         /* Hero Section */
         .hero-section {
             text-align: center;
-            padding: 60px 20px 40px;
+            margin-bottom: 40px;
+            padding: 40px 20px;
+            background: white;
+            border-radius: 16px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
         }
 
         .hero-section h1 {
             font-size: 48px;
             font-weight: 800;
-            margin-bottom: 16px;
-            background: linear-gradient(135deg, #3b82f6, #6366f1);
+            background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
             -webkit-background-clip: text;
             -webkit-text-fill-color: transparent;
+            margin-bottom: 16px;
         }
 
         .hero-section p {
             font-size: 20px;
-            color: #6b7280;
+            color: var(--gray-600);
             max-width: 600px;
             margin: 0 auto;
         }
@@ -107,13 +126,14 @@
         .dropdown-container {
             flex: 1;
             min-width: 300px;
+            position: relative;
         }
 
         .dropdown-button {
             width: 100%;
             padding: 20px;
             background: white;
-            border: 2px solid #e5e7eb;
+            border: 2px solid var(--gray-200);
             border-radius: 12px;
             cursor: pointer;
             transition: all 0.3s ease;
@@ -122,25 +142,25 @@
             gap: 12px;
             font-size: 18px;
             font-weight: 600;
-            color: #1f2937;
+            color: var(--gray-800);
             box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
         }
 
         .dropdown-button:hover {
-            border-color: #3b82f6;
+            border-color: var(--primary-color);
             transform: translateY(-2px);
             box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
         }
 
         .dropdown-button i:first-child {
             font-size: 24px;
-            color: #3b82f6;
+            color: var(--primary-color);
         }
 
         .dropdown-arrow {
             margin-left: auto;
             transition: transform 0.3s ease;
-            color: #6b7280;
+            color: var(--gray-500);
         }
 
         .dropdown-arrow.open {
@@ -148,16 +168,21 @@
         }
 
         .dropdown-content {
+            position: absolute;
+            top: 100%;
+            left: 0;
+            right: 0;
             display: none;
             background: white;
-            border: 2px solid #e5e7eb;
+            border: 2px solid var(--gray-200);
             border-top: none;
             border-radius: 0 0 12px 12px;
             padding: 24px;
             margin-top: -2px;
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
             max-height: 400px;
             overflow-y: auto;
+            z-index: 100;
         }
 
         .dropdown-content.show {
@@ -166,7 +191,7 @@
         }
 
         .dropdown-content h4 {
-            color: #1f2937;
+            color: var(--gray-800);
             margin-bottom: 12px;
             font-size: 18px;
         }
@@ -179,27 +204,27 @@
 
         .dropdown-content li {
             padding: 8px 0;
-            color: #4b5563;
+            color: var(--gray-600);
             line-height: 1.6;
         }
 
         .dropdown-content li strong {
-            color: #1f2937;
+            color: var(--gray-800);
         }
 
         .dropdown-content a {
-            color: #3b82f6;
+            color: var(--primary-color);
             text-decoration: none;
             transition: color 0.2s;
         }
 
         .dropdown-content a:hover {
-            color: #2563eb;
+            color: var(--primary-dark);
             text-decoration: underline;
         }
 
         .dropdown-content p {
-            color: #4b5563;
+            color: var(--gray-600);
             line-height: 1.6;
             margin: 12px 0;
         }
@@ -237,7 +262,7 @@
             font-size: 24px;
             font-weight: 700;
             margin-bottom: 24px;
-            color: #1f2937;
+            color: var(--gray-800);
         }
 
         /* Input Tabs */
@@ -246,7 +271,7 @@
             gap: 12px;
             margin-bottom: 24px;
             padding-bottom: 16px;
-            border-bottom: 2px solid #e5e7eb;
+            border-bottom: 2px solid var(--gray-200);
         }
 
         .tab-button {
@@ -259,20 +284,20 @@
             border-radius: 8px;
             font-size: 15px;
             font-weight: 500;
-            color: #6b7280;
+            color: var(--gray-500);
             cursor: pointer;
             transition: all 0.2s;
         }
 
         .tab-button:hover {
-            background: #f3f4f6;
-            color: #1f2937;
+            background: var(--gray-100);
+            color: var(--gray-800);
         }
 
         .tab-button.active {
             background: #eff6ff;
-            border-color: #3b82f6;
-            color: #3b82f6;
+            border-color: var(--primary-color);
+            color: var(--primary-color);
         }
 
         .tab-button i {
@@ -299,7 +324,7 @@
             width: 100%;
             min-height: 200px;
             padding: 16px;
-            border: 2px solid #e5e7eb;
+            border: 2px solid var(--gray-200);
             border-radius: 12px;
             font-size: 16px;
             font-family: inherit;
@@ -309,12 +334,12 @@
 
         .text-input:focus {
             outline: none;
-            border-color: #3b82f6;
+            border-color: var(--primary-color);
         }
 
         .input-info {
             margin-top: 8px;
-            color: #6b7280;
+            color: var(--gray-500);
             font-size: 14px;
             display: flex;
             justify-content: space-between;
@@ -322,41 +347,41 @@
 
         /* File Upload */
         .file-upload-area {
-            border: 2px dashed #d1d5db;
+            border: 2px dashed var(--gray-300);
             border-radius: 12px;
             padding: 60px 20px;
             text-align: center;
             cursor: pointer;
             transition: all 0.3s ease;
-            background: #f9fafb;
+            background: var(--gray-100);
         }
 
         .file-upload-area:hover {
-            border-color: #3b82f6;
+            border-color: var(--primary-color);
             background: #eff6ff;
         }
 
         .file-upload-area.dragover {
-            border-color: #3b82f6;
+            border-color: var(--primary-color);
             background: #eff6ff;
             transform: scale(1.02);
         }
 
         .file-upload-area i {
             font-size: 48px;
-            color: #3b82f6;
+            color: var(--primary-color);
             margin-bottom: 16px;
         }
 
         .file-upload-text {
             font-size: 18px;
             font-weight: 500;
-            color: #1f2937;
+            color: var(--gray-800);
             margin-bottom: 8px;
         }
 
         .file-types {
-            color: #6b7280;
+            color: var(--gray-500);
             font-size: 14px;
         }
 
@@ -365,14 +390,14 @@
             align-items: center;
             gap: 12px;
             padding: 16px;
-            background: #f3f4f6;
+            background: var(--gray-100);
             border-radius: 8px;
             margin-top: 16px;
         }
 
         .file-info i {
             font-size: 24px;
-            color: #6b7280;
+            color: var(--gray-500);
         }
 
         .file-name {
@@ -383,7 +408,7 @@
         .remove-file {
             background: none;
             border: none;
-            color: #ef4444;
+            color: var(--danger-color);
             cursor: pointer;
             font-size: 20px;
             padding: 4px 8px;
@@ -399,7 +424,7 @@
         .analyze-button {
             width: 100%;
             padding: 16px 32px;
-            background: linear-gradient(135deg, #3b82f6, #6366f1);
+            background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
             color: white;
             border: none;
             border-radius: 12px;
@@ -444,13 +469,13 @@
             font-size: 28px;
             font-weight: 700;
             margin-bottom: 30px;
-            color: #1f2937;
+            color: var(--gray-800);
         }
 
         .progress-bar {
             width: 100%;
             height: 24px;
-            background: #e5e7eb;
+            background: var(--gray-200);
             border-radius: 12px;
             overflow: hidden;
             margin: 30px 0;
@@ -458,7 +483,7 @@
 
         .progress-fill {
             height: 100%;
-            background: linear-gradient(90deg, #3b82f6, #6366f1);
+            background: linear-gradient(90deg, var(--primary-color), var(--secondary-color));
             width: 0%;
             transition: width 0.5s ease;
             position: relative;
@@ -492,81 +517,47 @@
         }
 
         .progress-text {
-            color: #6b7280;
+            color: var(--gray-500);
             font-size: 16px;
             margin-bottom: 30px;
         }
 
-        .progress-steps {
-            display: flex;
-            justify-content: space-around;
-            gap: 20px;
-            margin-top: 40px;
-        }
-
-        .step {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            gap: 8px;
-            color: #9ca3af;
-            transition: color 0.3s ease;
-        }
-
-        .step.active {
-            color: #3b82f6;
-        }
-
-        .step i {
-            font-size: 32px;
-        }
-
-        .step span {
-            font-size: 14px;
-            font-weight: 500;
-        }
-
         /* Results Section */
         .results-section {
-            max-width: 1200px;
+            max-width: 1000px;
             margin: 0 auto;
         }
 
-        .results-header {
-            text-align: center;
-            margin-bottom: 40px;
+        /* Summary Card */
+        .summary-card {
+            background: white;
+            border-radius: 16px;
+            padding: 30px;
+            margin-bottom: 30px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
         }
 
-        .results-header h2 {
-            font-size: 36px;
+        .summary-card h2 {
+            font-size: 28px;
             font-weight: 700;
-            margin-bottom: 16px;
-            color: #1f2937;
+            margin-bottom: 20px;
+            color: var(--gray-800);
         }
 
         /* Credibility Meter */
         .credibility-meter {
-            background: white;
-            border-radius: 16px;
-            padding: 40px;
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
-            text-align: center;
-            margin-bottom: 30px;
+            margin: 30px 0;
         }
 
         .meter-container {
-            width: 100%;
-            max-width: 500px;
-            height: 40px;
-            background: linear-gradient(90deg, 
-                #ef4444 0%, 
-                #f59e0b 33%, 
-                #fbbf24 66%, 
-                #10b981 100%
-            );
-            border-radius: 20px;
-            margin: 0 auto 20px;
             position: relative;
+            height: 40px;
+            background: linear-gradient(to right, 
+                var(--danger-color) 0%, 
+                var(--warning-color) 50%, 
+                var(--success-color) 100%);
+            border-radius: 20px;
+            overflow: hidden;
             box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.1);
         }
 
@@ -575,7 +566,7 @@
             top: -10px;
             width: 6px;
             height: 60px;
-            background: #1f2937;
+            background: var(--gray-800);
             border-radius: 3px;
             transition: left 1s ease;
             box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
@@ -584,344 +575,300 @@
         .meter-labels {
             display: flex;
             justify-content: space-between;
-            max-width: 500px;
-            margin: 0 auto 30px;
-            color: #6b7280;
+            margin-top: 10px;
+            color: var(--gray-600);
             font-size: 14px;
         }
 
         .credibility-score {
-            margin-top: 30px;
+            text-align: center;
+            margin-top: 20px;
         }
 
-        .credibility-value {
+        .score-value {
             font-size: 48px;
             font-weight: 800;
-            color: #1f2937;
-            line-height: 1;
+            background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
         }
 
-        .credibility-label {
+        .score-label {
             font-size: 20px;
-            font-weight: 500;
-            color: #6b7280;
+            color: var(--gray-600);
             margin-top: 8px;
         }
 
-        /* Summary Card */
-        .summary-card {
-            background: white;
-            border-radius: 16px;
-            padding: 30px;
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
-            margin-bottom: 30px;
-        }
-
-        .summary-card h3 {
-            font-size: 24px;
-            font-weight: 700;
-            margin-bottom: 16px;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-
-        .summary-card h3 i {
-            color: #3b82f6;
-        }
-
+        /* Stats Grid */
         .stats-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
             gap: 20px;
-            margin-top: 24px;
+            margin: 30px 0;
         }
 
-        .stat {
-            text-align: center;
+        .stat-card {
+            background: var(--gray-100);
             padding: 20px;
-            background: #f3f4f6;
             border-radius: 12px;
+            text-align: center;
+        }
+
+        .stat-icon {
+            font-size: 32px;
+            margin-bottom: 8px;
         }
 
         .stat-value {
-            font-size: 32px;
+            font-size: 28px;
             font-weight: 700;
-            color: #1f2937;
-            display: block;
+            color: var(--gray-800);
         }
 
         .stat-label {
             font-size: 14px;
-            color: #6b7280;
+            color: var(--gray-600);
             margin-top: 4px;
         }
 
         /* Fact Checks */
-        .fact-checks {
+        .fact-checks-section {
             background: white;
             border-radius: 16px;
             padding: 30px;
             box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
-            margin-bottom: 30px;
         }
 
-        .fact-checks h3 {
+        .fact-checks-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+            flex-wrap: wrap;
+            gap: 16px;
+        }
+
+        .fact-checks-header h3 {
             font-size: 24px;
             font-weight: 700;
-            margin-bottom: 24px;
+            color: var(--gray-800);
+        }
+
+        /* Export Buttons */
+        .export-buttons {
+            display: flex;
+            gap: 12px;
+        }
+
+        .export-buttons button {
+            padding: 8px 16px;
+            background: white;
+            border: 2px solid var(--gray-200);
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
             display: flex;
             align-items: center;
-            gap: 10px;
+            gap: 6px;
+            font-size: 14px;
+            font-weight: 500;
+            color: var(--gray-600);
         }
 
-        .fact-checks h3 i {
-            color: #3b82f6;
+        .export-buttons button:hover {
+            border-color: var(--primary-color);
+            color: var(--primary-color);
+            transform: translateY(-1px);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
         }
 
+        /* Fact Check Items */
         .fact-check-item {
-            border: 2px solid #e5e7eb;
+            border: 2px solid var(--gray-200);
             border-radius: 12px;
-            margin-bottom: 16px;
+            padding: 24px;
+            margin-bottom: 20px;
             transition: all 0.3s ease;
         }
 
         .fact-check-item:hover {
-            border-color: #d1d5db;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
-        }
-
-        .fact-check-item.true {
-            border-color: #10b981;
-            background: #f0fdf4;
-        }
-
-        .fact-check-item.false {
-            border-color: #ef4444;
-            background: #fef2f2;
-        }
-
-        .fact-check-item.unverified {
-            border-color: #f59e0b;
-            background: #fffbeb;
+            border-color: var(--primary-color);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.05);
         }
 
         .fact-check-header {
             display: flex;
             justify-content: space-between;
-            align-items: start;
-            gap: 20px;
-            margin-bottom: 12px;
+            align-items: flex-start;
+            margin-bottom: 16px;
+            flex-wrap: wrap;
+            gap: 12px;
         }
 
-        .fact-check-claim {
-            flex: 1;
+        .fact-check-number {
+            background: var(--gray-100);
+            color: var(--gray-600);
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 14px;
             font-weight: 600;
-            color: #1f2937;
-            line-height: 1.5;
         }
 
         .fact-check-verdict {
             display: flex;
             align-items: center;
-            gap: 6px;
-            padding: 6px 12px;
+            gap: 8px;
+            padding: 6px 16px;
+            border-radius: 20px;
+            font-weight: 600;
+            font-size: 14px;
+            text-transform: uppercase;
+        }
+
+        /* Verdict Colors */
+        .verdict-true .fact-check-verdict {
+            background: #d1fae5;
+            color: #065f46;
+        }
+
+        .verdict-false .fact-check-verdict {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .verdict-mixed .fact-check-verdict {
+            background: #fef3c7;
+            color: #92400e;
+        }
+
+        .verdict-unverified .fact-check-verdict {
+            background: var(--gray-100);
+            color: var(--gray-600);
+        }
+
+        .verdict-opinion .fact-check-verdict {
+            background: #e9d5ff;
+            color: #6b21a8;
+        }
+
+        .fact-check-speaker {
+            background: #dbeafe;
+            color: #1e40af;
+            padding: 4px 12px;
             border-radius: 20px;
             font-size: 14px;
             font-weight: 500;
-            white-space: nowrap;
         }
 
-        .fact-check-verdict.true {
-            background: #10b981;
-            color: white;
+        .fact-check-content {
+            margin-left: 0;
         }
 
-        .fact-check-verdict.false {
-            background: #ef4444;
-            color: white;
-        }
-
-        .fact-check-verdict.unverified {
-            background: #f59e0b;
-            color: white;
-        }
-
-        .fact-check-details {
-            color: #6b7280;
-            font-size: 15px;
+        .fact-check-claim {
+            font-size: 16px;
             line-height: 1.6;
+            color: var(--gray-800);
+            margin-bottom: 12px;
+            font-style: italic;
         }
 
-        .fact-check-details p {
+        .fact-check-explanation {
+            color: var(--gray-600);
+            line-height: 1.6;
+            margin-bottom: 12px;
+        }
+
+        .fact-check-confidence {
+            font-size: 14px;
+            color: var(--gray-500);
             margin-bottom: 8px;
         }
 
         .fact-check-source {
-            margin-top: 12px;
-            padding-top: 12px;
-            border-top: 1px solid #e5e7eb;
             font-size: 14px;
-            color: #6b7280;
-        }
-
-        .fact-check-source a {
-            color: #3b82f6;
-            text-decoration: none;
-            font-weight: 500;
-        }
-
-        .fact-check-source a:hover {
-            text-decoration: underline;
-        }
-
-        /* Export Options */
-        .export-options {
-            background: white;
-            border-radius: 16px;
-            padding: 30px;
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.08);
-            text-align: center;
-        }
-
-        .export-options h3 {
-            font-size: 24px;
-            font-weight: 700;
-            margin-bottom: 20px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 10px;
-        }
-
-        .export-options h3 i {
-            color: #3b82f6;
-        }
-
-        .export-buttons {
-            display: flex;
-            gap: 12px;
-            justify-content: center;
-            flex-wrap: wrap;
-        }
-
-        .export-buttons button {
-            padding: 12px 24px;
-            background: white;
-            border: 2px solid #e5e7eb;
-            border-radius: 8px;
-            font-size: 16px;
-            font-weight: 500;
-            cursor: pointer;
-            transition: all 0.2s;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .export-buttons button:hover {
-            background: #f3f4f6;
-            border-color: #3b82f6;
-            color: #3b82f6;
-        }
-
-        .export-buttons button i {
-            font-size: 18px;
+            color: var(--gray-500);
+            padding-top: 12px;
+            border-top: 1px solid var(--gray-200);
         }
 
         /* New Analysis Button */
         .new-analysis-button {
-            margin: 30px auto 0;
-            padding: 16px 32px;
-            background: white;
-            border: 2px solid #e5e7eb;
-            border-radius: 12px;
-            font-size: 16px;
-            font-weight: 600;
+            padding: 12px 24px;
+            background: linear-gradient(135deg, var(--primary-color), var(--secondary-color));
+            color: white;
+            border: none;
+            border-radius: 8px;
             cursor: pointer;
             transition: all 0.3s ease;
-            display: flex;
+            display: inline-flex;
             align-items: center;
-            justify-content: center;
-            gap: 10px;
-            color: #1f2937;
+            gap: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            margin-top: 30px;
         }
 
         .new-analysis-button:hover {
-            background: #f3f4f6;
-            border-color: #3b82f6;
-            color: #3b82f6;
             transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(59, 130, 246, 0.35);
+        }
+
+        /* Error Messages */
+        .error-message {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 16px 24px;
+            background: var(--danger-color);
+            color: white;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+            animation: slideIn 0.3s ease;
+            z-index: 1000;
+        }
+
+        @keyframes slideIn {
+            from {
+                transform: translateX(100%);
+                opacity: 0;
+            }
+            to {
+                transform: translateX(0);
+                opacity: 1;
+            }
         }
 
         /* Footer */
         .footer {
-            background: white;
-            margin-top: 80px;
-            padding: 40px 0;
             text-align: center;
-            border-top: 1px solid #e5e7eb;
-        }
-
-        .footer p {
-            color: #6b7280;
+            padding: 40px 20px;
+            color: var(--gray-600);
             font-size: 14px;
+            margin-top: 60px;
         }
 
-        /* Additional styles for speaker and topic info */
-        .speaker-info,
-        .topic-info {
-            margin-top: 12px;
-            padding: 8px 12px;
-            background-color: #f3f4f6;
-            border-radius: 6px;
-            font-size: 14px;
-            color: #4b5563;
+        .footer a {
+            color: var(--primary-color);
+            text-decoration: none;
         }
 
-        .speaker-info strong,
-        .topic-info strong {
-            color: #1f2937;
-            margin-right: 6px;
+        .footer a:hover {
+            text-decoration: underline;
         }
 
-        /* Demo mode notice styling */
-        .analysis-notes {
-            margin-top: 20px;
-            padding: 16px;
-            background-color: #fef3c7;
-            border-radius: 8px;
-            border-left: 4px solid #f59e0b;
+        /* Loading Spinner */
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 4px solid var(--gray-200);
+            border-top-color: var(--primary-color);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
         }
 
-        .analysis-notes h4 {
-            font-size: 16px;
-            font-weight: 600;
-            margin-bottom: 8px;
-            color: #92400e;
-        }
-
-        .analysis-notes ul {
-            margin: 0;
-            padding-left: 20px;
-        }
-
-        .analysis-notes li {
-            color: #78350f;
-            margin-bottom: 4px;
-        }
-
-        /* Fix for fact check items in demo mode */
-        .fact-check-item .demo-badge {
-            display: inline-block;
-            padding: 2px 8px;
-            background-color: #f59e0b;
-            color: white;
-            font-size: 11px;
-            font-weight: 600;
-            border-radius: 4px;
-            margin-left: 8px;
-            text-transform: uppercase;
+        @keyframes spin {
+            to { transform: rotate(360deg); }
         }
 
         /* Animation for dropdown */
@@ -934,10 +881,6 @@
                 opacity: 1;
                 transform: translateY(0);
             }
-        }
-
-        .fact-check-details-wrapper[style*="block"] {
-            animation: slideDown 0.3s ease;
         }
 
         /* Responsive Design */
@@ -954,12 +897,8 @@
                 font-size: 18px;
             }
             
-            .nav-pills {
-                display: none;
-            }
-            
-            .features-grid {
-                grid-template-columns: 1fr;
+            .info-dropdowns {
+                flex-direction: column;
             }
             
             .input-tabs {
@@ -1020,7 +959,8 @@
         <!-- Hero Section -->
         <div class="hero-section">
             <h1>Transcript Fact Checker</h1>
-            <p>AI-powered fact-checking for speeches, interviews, and transcripts. Verify claims in real-time with advanced NLP and trusted fact-check APIs.</p>
+            <p>AI-powered fact-checking for political speeches, interviews, and debates.<br>
+            Verify claims in real-time with advanced NLP and trusted fact-check APIs.</p>
         </div>
 
         <!-- Info Dropdowns -->
@@ -1033,60 +973,49 @@
                     <i class="fas fa-chevron-down dropdown-arrow" id="resources-arrow"></i>
                 </button>
                 <div class="dropdown-content" id="resources-dropdown">
-                    <h4>Services We Use for Fact-Checking</h4>
+                    <h4>How We Verify Claims</h4>
                     <ul>
                         <li><strong>Google Fact Check API</strong> - Primary fact-checking database</li>
-                        <li><strong>Federal Reserve Economic Data (FRED)</strong> - Official economic statistics</li>
-                        <li><strong>OpenAI</strong> - AI-powered claim analysis</li>
-                        <li><strong>News APIs</strong> - NewsAPI & MediaStack for current events</li>
-                        <li><strong>Pattern Analysis</strong> - Identifies common false claim patterns</li>
-                        <li><strong>Wikipedia API</strong> - General knowledge verification</li>
-                        <li><strong>Semantic Scholar</strong> - Academic paper verification</li>
-                        <li><strong>CDC Data API</strong> - Health statistics and COVID data</li>
-                        <li><strong>US Census API</strong> - Demographic and population data</li>
-                        <li><strong>NOAA Climate Data</strong> - Weather and climate statistics</li>
-                        <li><strong>Context Resolution</strong> - Handles pronouns and temporal references</li>
-                        <li><strong>Speaker History Tracking</strong> - Maintains credibility records</li>
+                        <li><strong>Web Search Verification</strong> - Cross-references multiple sources</li>
+                        <li><strong>AI Analysis</strong> - Identifies verifiable elements in claims</li>
+                        <li><strong>Pattern Recognition</strong> - Detects common false claim patterns</li>
                     </ul>
-                    <h4>How It Works</h4>
-                    <p>We extract factual claims from transcripts using NLP, then verify each claim against multiple sources. Each claim receives a verdict (true, false, misleading, etc.) with confidence scores and explanations.</p>
+                    <h4>Our Verdict System</h4>
+                    <ul>
+                        <li><strong>Verified True</strong> - Confirmed by multiple reliable sources</li>
+                        <li><strong>Verified False</strong> - Proven incorrect by reliable sources</li>
+                        <li><strong>Partially Accurate</strong> - Mix of true and false elements</li>
+                        <li><strong>Unverifiable</strong> - Cannot verify with available information</li>
+                        <li><strong>Opinion</strong> - Subjective statement, not factual claim</li>
+                    </ul>
                 </div>
             </div>
 
-            <!-- Free Transcript Services Dropdown -->
+            <!-- Transcript Sources Dropdown -->
             <div class="dropdown-container">
                 <button class="dropdown-button" onclick="toggleDropdown('transcripts-dropdown')">
                     <i class="fas fa-file-alt"></i>
-                    <span>Find Transcripts</span>
+                    <span>Transcript Sources</span>
                     <i class="fas fa-chevron-down dropdown-arrow" id="transcripts-arrow"></i>
                 </button>
                 <div class="dropdown-content" id="transcripts-dropdown">
-                    <h4>Political Speech Transcripts</h4>
-                    <p>Official sources for political speeches and statements:</p>
+                    <h4>Political Transcript Resources</h4>
+                    <p>Direct sources for political speeches and transcripts:</p>
                     <ul>
-                        <li><a href="https://www.congress.gov/congressional-record" target="_blank"><strong>Congress.gov</strong></a> - Official House and Senate floor speeches</li>
-                        <li><a href="https://www.whitehouse.gov/briefing-room/" target="_blank"><strong>WhiteHouse.gov</strong></a> - Presidential speeches and briefings</li>
-                        <li><a href="https://www.senate.gov/floor/" target="_blank"><strong>Senate.gov</strong></a> - Senate floor proceedings and speeches</li>
-                        <li><a href="https://www.house.gov/legislative-activity" target="_blank"><strong>House.gov</strong></a> - House floor proceedings and speeches</li>
-                        <li><a href="https://www.state.gov/speeches/" target="_blank"><strong>State Department</strong></a> - Foreign policy speeches</li>
-                        <li><a href="https://www.govinfo.gov/app/collection/CREC" target="_blank"><strong>Congressional Record</strong></a> - Daily official record of Congress</li>
-                        <li><a href="https://millercenter.org/the-presidency/presidential-speeches" target="_blank"><strong>Miller Center</strong></a> - Presidential speeches archive</li>
-                        <li><a href="https://www.presidency.ucsb.edu/" target="_blank"><strong>American Presidency Project</strong></a> - Campaign and presidential speeches</li>
-                        <li><a href="https://www.c-span.org/search/?searchtype=Videos" target="_blank"><strong>C-SPAN Video Library</strong></a> - Congressional hearings and political events</li>
+                        <li><a href="https://www.whitehouse.gov/briefing-room/" target="_blank"><strong>WhiteHouse.gov</strong></a> - Presidential speeches, remarks, and press briefings</li>
+                        <li><a href="https://www.rev.com/blog/transcripts" target="_blank"><strong>Rev.com Transcripts</strong></a> - Major political speeches, debates, and interviews</li>
+                        <li><a href="https://www.c-span.org/search/?searchtype=Videos" target="_blank"><strong>C-SPAN Video Library</strong></a> - Congressional hearings and political events with transcripts</li>
+                        <li><a href="https://millercenter.org/the-presidency/presidential-speeches" target="_blank"><strong>Miller Center</strong></a> - Historical presidential speeches archive</li>
+                        <li><a href="https://www.presidency.ucsb.edu/" target="_blank"><strong>American Presidency Project</strong></a> - Presidential documents and speeches</li>
                     </ul>
                     
-                    <h4 style="margin-top: 20px;">General Transcript Services</h4>
-                    <p>Other sources for speeches, interviews, and debates:</p>
+                    <h4 style="margin-top: 20px;">News Interview Transcripts</h4>
                     <ul>
-                        <li><a href="https://www.rev.com/blog/transcripts" target="_blank"><strong>Rev.com/blog</strong></a> - Popular speeches, interviews, and debates</li>
-                        <li><a href="http://transcripts.cnn.com/" target="_blank"><strong>CNN Transcripts</strong></a> - CNN show transcripts and interviews</li>
-                        <li><a href="https://www.nbcnews.com/meet-the-press/meet-press-transcripts-n51976" target="_blank"><strong>Meet the Press Archives</strong></a> - NBC Meet the Press transcripts</li>
-                        <li><a href="https://abcnews.go.com/ThisWeek/transcripts" target="_blank"><strong>ABC This Week</strong></a> - ABC This Week transcripts</li>
-                        <li><a href="https://www.foxnews.com/transcript" target="_blank"><strong>Fox News Transcripts</strong></a> - Fox News show transcripts</li>
-                        <li><a href="https://transcripts.facethenation.com/" target="_blank"><strong>Face the Nation</strong></a> - CBS Face the Nation transcripts</li>
-                        <li><a href="https://www.pbs.org/newshour/show/" target="_blank"><strong>PBS NewsHour</strong></a> - PBS NewsHour transcripts</li>
-                        <li><a href="https://www.npr.org/transcripts" target="_blank"><strong>NPR Transcripts</strong></a> - NPR show and interview transcripts</li>
-                        <li><a href="https://www.factcheck.org/transcripts/" target="_blank"><strong>FactCheck.org</strong></a> - Fact-checked political transcripts</li>
+                        <li><a href="http://transcripts.cnn.com/" target="_blank"><strong>CNN Transcripts</strong></a> - CNN shows and political interviews</li>
+                        <li><a href="https://www.nbcnews.com/meet-the-press/meet-press-transcripts-n51976" target="_blank"><strong>Meet the Press</strong></a> - NBC's Sunday political show</li>
+                        <li><a href="https://abcnews.go.com/ThisWeek/transcripts" target="_blank"><strong>ABC This Week</strong></a> - ABC's political interview show</li>
+                        <li><a href="https://www.foxnews.com/transcript" target="_blank"><strong>Fox News Transcripts</strong></a> - Fox News programs</li>
+                        <li><a href="https://www.pbs.org/newshour/show/" target="_blank"><strong>PBS NewsHour</strong></a> - In-depth political interviews</li>
                     </ul>
                 </div>
             </div>
@@ -1141,150 +1070,153 @@
             </div>
 
             <!-- Analyze Button -->
-            <div style="display: flex; gap: 12px; margin-top: 24px;">
+            <div style="display: flex; gap: 12px; margin-top: 24px; align-items: center;">
                 <button class="analyze-button" id="analyze-button" onclick="startAnalysis()" style="flex: 1; margin-top: 0;">
                     <i class="fas fa-search"></i>
                     <span>Analyze Transcript</span>
                 </button>
-                <button class="reset-button" onclick="resetForm()" style="padding: 16px 32px; background: white; border: 2px solid #e5e7eb; color: #6b7280; border-radius: 12px; font-size: 18px; font-weight: 600; cursor: pointer; transition: all 0.3s ease; display: flex; align-items: center; justify-content: center; gap: 10px;">
-                    <i class="fas fa-redo"></i>
+                <button onclick="resetForm()" style="padding: 12px 20px; background: #6b7280; color: white; border: none; border-radius: 8px; cursor: pointer; transition: all 0.2s ease; display: flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 500; white-space: nowrap;">
+                    <i class="fas fa-redo" style="font-size: 14px;"></i>
                     <span>Reset</span>
                 </button>
             </div>
         </div>
 
-        <!-- Progress Section -->
-        <div class="progress-section" id="progress-section" style="display: none;">
-            <h2>Analyzing Transcript...</h2>
-            <p class="progress-text" id="progress-text">Initializing...</p>
+        <!-- Progress Section (Initially Hidden) -->
+        <div class="progress-section hidden" id="progress-section">
+            <h2>Analyzing Transcript</h2>
             <div class="progress-bar">
                 <div class="progress-fill" id="progress-fill"></div>
             </div>
-            <div class="progress-steps">
-                <div class="step" id="step-1">
-                    <i class="fas fa-file-alt"></i>
-                    <span>Processing</span>
-                </div>
-                <div class="step" id="step-2">
-                    <i class="fas fa-brain"></i>
-                    <span>Extracting Claims</span>
-                </div>
-                <div class="step" id="step-3">
-                    <i class="fas fa-search"></i>
-                    <span>Fact Checking</span>
-                </div>
-                <div class="step" id="step-4">
-                    <i class="fas fa-chart-line"></i>
-                    <span>Generating Report</span>
-                </div>
-            </div>
+            <p class="progress-text" id="progress-text">Starting analysis...</p>
+            <div class="spinner"></div>
         </div>
 
-        <!-- Results Section -->
-        <div class="results-section" id="results-section" style="display: none;">
-            <div class="results-header">
-                <h2>Fact Check Results</h2>
+        <!-- Results Section (Initially Hidden) -->
+        <div class="results-section hidden" id="results-section">
+            <!-- Summary Card -->
+            <div class="summary-card">
+                <h2>Fact-Check Analysis Complete</h2>
+                
+                <!-- Credibility Meter -->
+                <div class="credibility-meter">
+                    <div class="meter-container">
+                        <div class="meter-pointer" id="credibility-pointer"></div>
+                    </div>
+                    <div class="meter-labels">
+                        <span>Low</span>
+                        <span>Medium</span>
+                        <span>High</span>
+                    </div>
+                </div>
+                
+                <div class="credibility-score">
+                    <div class="score-value" id="credibility-value">0</div>
+                    <div class="score-label" id="credibility-label">Calculating...</div>
+                </div>
+                
+                <!-- Summary Text -->
+                <div style="margin-top: 30px; padding: 20px; background: var(--gray-100); border-radius: 12px;">
+                    <p id="summary-text" style="line-height: 1.8; color: var(--gray-700);"></p>
+                </div>
+                
+                <!-- Stats Grid -->
+                <div class="stats-grid">
+                    <div class="stat-card">
+                        <i class="fas fa-check-circle stat-icon" style="color: var(--success-color);"></i>
+                        <div class="stat-value" id="verified-true-count">0</div>
+                        <div class="stat-label">Verified True</div>
+                    </div>
+                    <div class="stat-card">
+                        <i class="fas fa-times-circle stat-icon" style="color: var(--danger-color);"></i>
+                        <div class="stat-value" id="verified-false-count">0</div>
+                        <div class="stat-label">Verified False</div>
+                    </div>
+                    <div class="stat-card">
+                        <i class="fas fa-exclamation-triangle stat-icon" style="color: var(--warning-color);"></i>
+                        <div class="stat-value" id="partially-accurate-count">0</div>
+                        <div class="stat-label">Partially Accurate</div>
+                    </div>
+                    <div class="stat-card">
+                        <i class="fas fa-question-circle stat-icon" style="color: var(--gray-500);"></i>
+                        <div class="stat-value" id="unverifiable-count">0</div>
+                        <div class="stat-label">Unverifiable</div>
+                    </div>
+                </div>
             </div>
             
-            <!-- Credibility Score -->
-            <div class="credibility-meter">
-                <h3>Overall Credibility Score</h3>
-                <div class="meter-container">
-                    <div class="meter-pointer" id="credibility-pointer"></div>
-                </div>
-                <div class="meter-labels">
-                    <span>Very Low</span>
-                    <span>Low</span>
-                    <span>Moderate</span>
-                    <span>High</span>
-                </div>
-                <div class="credibility-score">
-                    <div class="credibility-value">
-                        <span id="credibility-value">0</span>%
-                    </div>
-                    <p class="credibility-label" id="credibility-label">Calculating...</p>
-                </div>
-            </div>
-
-            <!-- Summary -->
-            <div class="summary-card">
-                <h3><i class="fas fa-info-circle"></i> Summary</h3>
-                <p id="analysis-summary"></p>
-                <div class="stats-grid">
-                    <div class="stat">
-                        <span class="stat-value" id="total-claims">0</span>
-                        <span class="stat-label">Total Claims</span>
-                    </div>
-                    <div class="stat">
-                        <span class="stat-value" id="verified-claims">0</span>
-                        <span class="stat-label">Verified</span>
-                    </div>
-                    <div class="stat">
-                        <span class="stat-value" id="false-claims">0</span>
-                        <span class="stat-label">False</span>
-                    </div>
-                    <div class="stat">
-                        <span class="stat-value" id="unverified-claims">0</span>
-                        <span class="stat-label">Unverified</span>
+            <!-- Fact Checks Detail -->
+            <div class="fact-checks-section">
+                <div class="fact-checks-header">
+                    <h3>Detailed Fact Checks</h3>
+                    <div class="export-buttons">
+                        <button onclick="exportResults('json')">
+                            <i class="fas fa-file-code"></i>
+                            JSON
+                        </button>
+                        <button onclick="exportResults('csv')">
+                            <i class="fas fa-file-csv"></i>
+                            CSV
+                        </button>
+                        <button onclick="exportResults('pdf')">
+                            <i class="fas fa-file-pdf"></i>
+                            PDF
+                        </button>
                     </div>
                 </div>
-            </div>
-
-            <!-- Fact Checks -->
-            <div class="fact-checks">
-                <h3><i class="fas fa-list-check"></i> Detailed Fact Checks</h3>
-                <div id="fact-check-list"></div>
-            </div>
-
-            <!-- Export Options -->
-            <div class="export-options">
-                <h3><i class="fas fa-download"></i> Export Report</h3>
-                <div class="export-buttons">
-                    <button onclick="exportResults('pdf')">
-                        <i class="fas fa-file-pdf"></i> Download PDF Report
+                
+                <!-- Speaker Analysis (if available) -->
+                <div id="speaker-analysis-container" style="margin-bottom: 30px;"></div>
+                
+                <!-- Individual Fact Checks -->
+                <div id="fact-checks-container"></div>
+                
+                <!-- New Analysis Button -->
+                <div style="text-align: center;">
+                    <button class="new-analysis-button" onclick="newAnalysis()">
+                        <i class="fas fa-plus-circle"></i>
+                        New Analysis
                     </button>
                 </div>
             </div>
-
-            <!-- New Analysis Button -->
-            <button class="new-analysis-button" onclick="resetAnalysis()">
-                <i class="fas fa-plus"></i> New Analysis
-            </button>
         </div>
     </div>
 
     <!-- Footer -->
     <footer class="footer">
-        <div class="container">
-            <p>&copy; 2024 Transcript Fact Checker. Powered by Google Fact Check API and Advanced NLP.</p>
-        </div>
+        <p>&copy; 2024 Transcript Fact Checker. Powered by AI and trusted fact-checking APIs.</p>
     </footer>
 
-    <!-- JavaScript - IMPORTANT: Load enhanced.js FIRST, then app.js -->
-    <script src="/static/js/enhanced.js"></script>
+    <!-- JavaScript -->
     <script src="/static/js/app.js"></script>
     <script>
-        // Toggle dropdown function
+        // Toggle dropdown function with auto-close
         function toggleDropdown(dropdownId) {
             const dropdown = document.getElementById(dropdownId);
             const arrow = document.getElementById(dropdownId.replace('-dropdown', '-arrow'));
+            const isOpen = dropdown.classList.contains('show');
             
-            // Close other dropdowns
+            // Close all dropdowns first
             document.querySelectorAll('.dropdown-content').forEach(d => {
-                if (d.id !== dropdownId) {
-                    d.classList.remove('show');
-                }
+                d.classList.remove('show');
             });
-            
             document.querySelectorAll('.dropdown-arrow').forEach(a => {
-                if (a.id !== arrow.id) {
-                    a.classList.remove('open');
-                }
+                a.classList.remove('open');
             });
             
-            // Toggle current dropdown
-            dropdown.classList.toggle('show');
-            arrow.classList.toggle('open');
+            // If this dropdown wasn't open, open it
+            if (!isOpen) {
+                dropdown.classList.add('show');
+                arrow.classList.add('open');
+                
+                // Auto-close after 10 seconds
+                setTimeout(() => {
+                    if (dropdown.classList.contains('show')) {
+                        dropdown.classList.remove('show');
+                        arrow.classList.remove('open');
+                    }
+                }, 10000);
+            }
         }
         
         // Close dropdowns when clicking outside
@@ -1299,6 +1231,18 @@
             }
         });
         
+        // Close dropdowns when clicking on a link inside
+        document.querySelectorAll('.dropdown-content a').forEach(link => {
+            link.addEventListener('click', function() {
+                document.querySelectorAll('.dropdown-content').forEach(d => {
+                    d.classList.remove('show');
+                });
+                document.querySelectorAll('.dropdown-arrow').forEach(a => {
+                    a.classList.remove('open');
+                });
+            });
+        });
+        
         // Reset form function
         function resetForm() {
             // Clear text input
@@ -1309,6 +1253,7 @@
             document.getElementById('file-input').value = '';
             document.getElementById('file-info').style.display = 'none';
             document.getElementById('file-name').textContent = '';
+            document.getElementById('file-drop-zone').style.display = 'block';
             
             // Reset to text input tab
             document.querySelectorAll('.tab-button').forEach(btn => {
