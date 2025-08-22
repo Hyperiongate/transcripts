@@ -480,3 +480,4 @@ CONFIDENCE: [0-100]"""
             summary += f"- {verdict_info['label']}: {count}\n"
         
         return summary
+        
