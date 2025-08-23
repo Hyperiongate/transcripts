@@ -68,7 +68,6 @@ class FactChecker:
             'openai': getattr(config, 'OPENAI_API_KEY', None),
             'google': getattr(config, 'GOOGLE_FACTCHECK_API_KEY', None),
             'news': getattr(config, 'NEWS_API_KEY', None),
-            'scraperapi': getattr(config, 'SCRAPERAPI_KEY', None),
         }
         
         # Initialize OpenAI
@@ -96,10 +95,10 @@ class FactChecker:
             # Extract verifiable elements
             verifiable_elements = self._extract_verifiable_elements(claim)
             if not verifiable_elements:
-                # Try web search anyway
-                web_result = self._verify_with_web_search(claim)
-                if web_result and web_result.get('verified') is not None:
-                    return self._create_verdict_from_result(web_result, claim)
+                # Try direct verification anyway
+                verification_results = self._verify_claim_directly(claim)
+                if verification_results:
+                    return self._synthesize_results(claim, verification_results)
                 return self._create_verdict('unverifiable', 'No verifiable facts found in claim')
             
             # Run verification
@@ -156,6 +155,30 @@ class FactChecker:
         
         return elements
     
+    def _verify_claim_directly(self, claim: str) -> List[Dict]:
+        """Verify claim directly without element extraction"""
+        results = []
+        
+        # Try Google Fact Check first
+        if self.api_keys['google']:
+            google_result = self._check_google_factcheck(claim)
+            if google_result:
+                results.append(google_result)
+        
+        # Try News API for current events
+        if self.api_keys['news'] and self._is_current_event(claim):
+            news_result = self._check_news_api(claim)
+            if news_result:
+                results.append(news_result)
+        
+        # Try AI verification if no other results
+        if not results and self.openai_client:
+            ai_result = self._verify_with_ai(claim)
+            if ai_result:
+                results.append(ai_result)
+        
+        return results
+    
     def _verify_elements(self, elements: List[Dict], full_claim: str) -> List[Dict]:
         """Verify each extracted element"""
         results = []
@@ -166,11 +189,11 @@ class FactChecker:
             if google_result:
                 results.append(google_result)
         
-        # Try web search
-        if self.api_keys['scraperapi']:
-            web_result = self._verify_with_web_search(full_claim)
-            if web_result:
-                results.append(web_result)
+        # Check News API for current events
+        if self.api_keys['news'] and self._is_current_event(full_claim):
+            news_result = self._check_news_api(full_claim)
+            if news_result:
+                results.append(news_result)
         
         # If no results yet, try AI
         if not results and self.openai_client:
@@ -189,7 +212,7 @@ class FactChecker:
             url = "https://factchecktools.googleapis.com/v1alpha1/claims:search"
             params = {
                 'key': self.api_keys['google'],
-                'query': claim,
+                'query': claim[:200],  # Google has query length limit
                 'languageCode': 'en'
             }
             
@@ -223,69 +246,47 @@ class FactChecker:
         
         return None
     
-    def _verify_with_web_search(self, claim: str) -> Optional[Dict]:
-        """Search web for verification"""
-        if not self.api_keys['scraperapi']:
+    def _check_news_api(self, claim: str) -> Optional[Dict]:
+        """Check News API for recent events"""
+        if not self.api_keys['news']:
             return None
         
         try:
-            # Search for fact-checking of this claim
-            query = f'"{claim}" fact check OR false OR true OR verified'
+            # Extract key terms from claim
+            key_terms = self._extract_key_terms(claim)
+            query = ' '.join(key_terms[:3])
             
-            url = "https://api.scraperapi.com/structured/google/search"
+            url = "https://newsapi.org/v2/everything"
             params = {
-                'api_key': self.api_keys['scraperapi'],
-                'query': query,
-                'num': 5
+                'apiKey': self.api_keys['news'],
+                'q': query,
+                'sortBy': 'relevancy',
+                'pageSize': 5,
+                'language': 'en'
             }
             
-            response = requests.get(url, params=params, timeout=15)
+            response = requests.get(url, params=params, timeout=10)
             if response.status_code == 200:
                 data = response.json()
-                results = data.get('organic_results', [])
                 
-                # Analyze results
-                verification_found = False
-                is_true = 0
-                is_false = 0
-                explanations = []
-                
-                for result in results:
-                    title = result.get('title', '').lower()
-                    snippet = result.get('snippet', '').lower()
-                    content = f"{title} {snippet}"
+                if data.get('articles'):
+                    # Analyze articles for verification
+                    matching_articles = 0
+                    for article in data['articles']:
+                        if self._article_matches_claim(article, claim):
+                            matching_articles += 1
                     
-                    # Look for verification indicators
-                    if any(word in content for word in ['fact check', 'verified', 'debunked', 'confirmed']):
-                        verification_found = True
-                        
-                        if any(word in content for word in ['false', 'incorrect', 'debunked', 'myth', 'no evidence']):
-                            is_false += 1
-                            explanations.append(f"{result.get('title')}: Indicates false")
-                        elif any(word in content for word in ['true', 'correct', 'confirmed', 'accurate', 'verified']):
-                            is_true += 1
-                            explanations.append(f"{result.get('title')}: Indicates true")
-                
-                if verification_found:
-                    if is_false > is_true:
+                    if matching_articles >= 2:
                         return {
                             'element': claim,
-                            'verified': False,
-                            'explanation': ' | '.join(explanations),
-                            'source': 'Web Search',
-                            'confidence': min(70 + (is_false * 10), 90)
-                        }
-                    elif is_true > is_false:
-                        return {
-                            'element': claim,
-                            'verified': True,
-                            'explanation': ' | '.join(explanations),
-                            'source': 'Web Search',
-                            'confidence': min(70 + (is_true * 10), 90)
+                            'verified': 'mixed',
+                            'explanation': f'Found {matching_articles} news articles discussing this topic',
+                            'source': 'News API',
+                            'confidence': 60
                         }
                         
         except Exception as e:
-            logger.error(f"Web search error: {e}")
+            logger.error(f"News API error: {e}")
         
         return None
     
@@ -360,6 +361,7 @@ CONFIDENCE: [0-100]"""
         # Count verification outcomes
         verified_true = sum(1 for r in verification_results if r.get('verified') is True)
         verified_false = sum(1 for r in verification_results if r.get('verified') is False)
+        mixed_results = sum(1 for r in verification_results if r.get('verified') == 'mixed')
         
         # Collect all explanations and sources
         explanations = []
@@ -381,20 +383,23 @@ CONFIDENCE: [0-100]"""
         # Determine final verdict
         if verified_false > 0 and verified_true == 0:
             verdict = 'verified_false'
-            explanation = "Claim verified as false. " + " ".join(explanations)
+            explanation = "Claim verified as false. " + " | ".join(explanations)
         elif verified_true > 0 and verified_false == 0:
             verdict = 'verified_true'
-            explanation = "Claim verified as true. " + " ".join(explanations)
+            explanation = "Claim verified as true. " + " | ".join(explanations)
         elif verified_true > 0 and verified_false > 0:
             verdict = 'partially_accurate'
-            explanation = "Claim contains both true and false elements. " + " ".join(explanations)
+            explanation = "Claim contains both true and false elements. " + " | ".join(explanations)
+        elif mixed_results > 0:
+            verdict = 'partially_accurate'
+            explanation = "Mixed evidence found. " + " | ".join(explanations)
         else:
             verdict = 'unverifiable'
-            explanation = "Insufficient evidence to verify. " + " ".join(explanations)
+            explanation = "Insufficient evidence to verify. " + " | ".join(explanations)
         
         return self._create_verdict(
             verdict,
-            explanation,
+            explanation[:500],  # Limit explanation length
             confidence=int(avg_confidence),
             sources=list(set(sources))
         )
@@ -433,6 +438,56 @@ CONFIDENCE: [0-100]"""
                     return True
         
         return False
+    
+    def _is_current_event(self, claim: str) -> bool:
+        """Check if claim is about current events"""
+        # Look for temporal indicators
+        current_indicators = [
+            r'\b(today|yesterday|this week|last week|this month|recently)\b',
+            r'\b20\d{2}\b',  # Recent years
+            r'\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{1,2}\b'
+        ]
+        
+        claim_lower = claim.lower()
+        for pattern in current_indicators:
+            if re.search(pattern, claim_lower, re.IGNORECASE):
+                return True
+        
+        return False
+    
+    def _extract_key_terms(self, claim: str) -> List[str]:
+        """Extract key terms for searching"""
+        # Remove common words
+        stop_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 
+                     'of', 'with', 'by', 'from', 'is', 'was', 'are', 'were', 'been', 'be'}
+        
+        words = claim.split()
+        key_terms = []
+        
+        # Keep proper nouns
+        for word in words:
+            if word[0].isupper() and word.lower() not in stop_words:
+                key_terms.append(word)
+        
+        # Keep remaining important words
+        remaining_words = [w for w in words if w.lower() not in stop_words and w not in key_terms]
+        key_terms.extend(remaining_words[:3])
+        
+        return key_terms[:5]
+    
+    def _article_matches_claim(self, article: Dict, claim: str) -> bool:
+        """Check if news article matches the claim"""
+        title = article.get('title', '').lower()
+        description = article.get('description', '').lower()
+        content = f"{title} {description}"
+        
+        # Extract key terms from claim
+        key_terms = self._extract_key_terms(claim)
+        
+        # Check if key terms appear in article
+        matches = sum(1 for term in key_terms if term.lower() in content)
+        
+        return matches >= 2
     
     def _create_verdict(self, verdict: str, explanation: str, confidence: int = 50, sources: List[str] = None) -> Dict:
         """Create standardized verdict"""
@@ -480,4 +535,3 @@ CONFIDENCE: [0-100]"""
             summary += f"- {verdict_info['label']}: {count}\n"
         
         return summary
-        
