@@ -1,7 +1,7 @@
 // Main application JavaScript
-// Updated for enhanced verification system
+// Complete version with all functionality
 
-// Updated verdict mappings for new system
+// Verdict mappings for new system
 const VERDICT_MAPPINGS = {
     'verified_true': {
         label: 'Verified True',
@@ -32,6 +32,43 @@ const VERDICT_MAPPINGS = {
         class: 'opinion',
         icon: 'fa-comment',
         color: '#8b5cf6'
+    },
+    // Legacy verdict mappings for compatibility
+    'true': {
+        label: 'True',
+        class: 'true',
+        icon: 'fa-check-circle',
+        color: '#10b981'
+    },
+    'false': {
+        label: 'False',
+        class: 'false',
+        icon: 'fa-times-circle',
+        color: '#ef4444'
+    },
+    'mostly_true': {
+        label: 'Mostly True',
+        class: 'true',
+        icon: 'fa-check-circle',
+        color: '#34d399'
+    },
+    'mostly_false': {
+        label: 'Mostly False',
+        class: 'false',
+        icon: 'fa-times-circle',
+        color: '#f87171'
+    },
+    'misleading': {
+        label: 'Misleading',
+        class: 'mixed',
+        icon: 'fa-exclamation-triangle',
+        color: '#f59e0b'
+    },
+    'needs_context': {
+        label: 'Needs Context',
+        class: 'unverified',
+        icon: 'fa-question-circle',
+        color: '#6b7280'
     }
 };
 
@@ -217,10 +254,6 @@ async function submitTranscript(transcript) {
         showError('Error: ' + error.message);
         resetAnalysis();
     }
-}} catch (error) {
-        showError('Error: ' + error.message);
-        resetAnalysis();
-    }
 }
 
 // Poll job status
@@ -328,7 +361,7 @@ function displayResults(results) {
     displayFactChecks(results.fact_checks || []);
     
     // Display speaker analysis if available
-    if (results.speaker_analysis) {
+    if (results.speaker_analysis && Object.keys(results.speaker_analysis).length > 0) {
         displaySpeakerAnalysis(results.speaker_analysis);
     }
 }
@@ -339,7 +372,7 @@ function displayFactChecks(factChecks) {
     container.innerHTML = '';
     
     if (factChecks.length === 0) {
-        container.innerHTML = '<p class="no-claims">No claims found to fact-check.</p>';
+        container.innerHTML = '<p class="no-claims" style="text-align: center; color: #6b7280; padding: 40px;">No claims found to fact-check.</p>';
         return;
     }
     
@@ -356,15 +389,15 @@ function displayFactChecks(factChecks) {
                     <i class="fas ${verdictInfo.icon}"></i>
                     ${verdictInfo.label}
                 </div>
-                ${check.speaker ? `<div class="fact-check-speaker">${check.speaker}</div>` : ''}
+                ${check.speaker && check.speaker !== 'Unknown' ? `<div class="fact-check-speaker">${check.speaker}</div>` : ''}
             </div>
             <div class="fact-check-content">
-                <p class="fact-check-claim">"${check.claim}"</p>
-                <p class="fact-check-explanation">${check.explanation || 'No explanation available.'}</p>
+                <p class="fact-check-claim">"${escapeHtml(check.claim || check.text || '')}"</p>
+                <p class="fact-check-explanation">${escapeHtml(check.explanation || 'No explanation available.')}</p>
                 ${check.confidence ? `<p class="fact-check-confidence">Confidence: ${check.confidence}%</p>` : ''}
                 ${check.sources && check.sources.length > 0 ? 
                     `<div class="fact-check-source">
-                        <strong>Sources:</strong> ${check.sources.join(', ')}
+                        <strong>Sources:</strong> ${check.sources.map(s => escapeHtml(s)).join(', ')}
                     </div>` : ''}
             </div>
         `;
@@ -378,32 +411,35 @@ function displaySpeakerAnalysis(speakerAnalysis) {
     const container = document.getElementById('speaker-analysis-container');
     if (!container) return;
     
-    container.innerHTML = '';
+    container.innerHTML = '<h4 style="margin-bottom: 20px;">Speaker Analysis</h4>';
     
     Object.entries(speakerAnalysis).forEach(([speaker, stats]) => {
         const speakerDiv = document.createElement('div');
         speakerDiv.className = 'speaker-stats';
+        speakerDiv.style.cssText = 'background: #f3f4f6; padding: 20px; border-radius: 12px; margin-bottom: 16px;';
         
-        const accuracy = stats.accuracy_rate !== null ? `${stats.accuracy_rate}%` : 'N/A';
+        const accuracy = stats.accuracy_rate !== null && stats.accuracy_rate !== undefined 
+            ? `${stats.accuracy_rate}%` 
+            : 'N/A';
         
         speakerDiv.innerHTML = `
-            <h4>${speaker}</h4>
-            <div class="speaker-stats-grid">
+            <h5 style="margin-bottom: 16px; font-size: 18px; font-weight: 600;">${escapeHtml(speaker)}</h5>
+            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 16px;">
                 <div class="stat">
-                    <span class="stat-label">Total Claims:</span>
-                    <span class="stat-value">${stats.total_claims}</span>
+                    <span style="display: block; color: #6b7280; font-size: 14px;">Total Claims:</span>
+                    <span style="display: block; font-size: 20px; font-weight: 600;">${stats.total_claims || 0}</span>
                 </div>
                 <div class="stat">
-                    <span class="stat-label">Accuracy Rate:</span>
-                    <span class="stat-value">${accuracy}</span>
+                    <span style="display: block; color: #6b7280; font-size: 14px;">Accuracy Rate:</span>
+                    <span style="display: block; font-size: 20px; font-weight: 600;">${accuracy}</span>
                 </div>
                 <div class="stat">
-                    <span class="stat-label">Verified True:</span>
-                    <span class="stat-value">${stats.verified_true}</span>
+                    <span style="display: block; color: #6b7280; font-size: 14px;">Verified True:</span>
+                    <span style="display: block; font-size: 20px; font-weight: 600; color: #10b981;">${stats.verified_true || 0}</span>
                 </div>
                 <div class="stat">
-                    <span class="stat-label">Verified False:</span>
-                    <span class="stat-value">${stats.verified_false}</span>
+                    <span style="display: block; color: #6b7280; font-size: 14px;">Verified False:</span>
+                    <span style="display: block; font-size: 20px; font-weight: 600; color: #ef4444;">${stats.verified_false || 0}</span>
                 </div>
             </div>
         `;
@@ -494,11 +530,6 @@ function resetAnalysis() {
     document.getElementById('progress-section').style.display = 'none';
     document.getElementById('results-section').style.display = 'none';
     
-    // Clear inputs
-    document.getElementById('text-input').value = '';
-    document.getElementById('char-count').textContent = '0';
-    removeFile();
-    
     currentJobId = null;
     if (pollInterval) {
         clearInterval(pollInterval);
@@ -506,7 +537,43 @@ function resetAnalysis() {
     }
 }
 
+// Reset form
+function resetForm() {
+    // Clear text input
+    document.getElementById('text-input').value = '';
+    document.getElementById('char-count').textContent = '0';
+    
+    // Clear file input
+    document.getElementById('file-input').value = '';
+    document.getElementById('file-info').style.display = 'none';
+    document.getElementById('file-name').textContent = '';
+    document.getElementById('file-drop-zone').style.display = 'block';
+    
+    // Reset to text input tab
+    document.querySelectorAll('.tab-button').forEach(btn => {
+        btn.classList.remove('active');
+    });
+    document.querySelectorAll('.input-panel').forEach(panel => {
+        panel.classList.remove('active');
+    });
+    document.querySelector('[data-tab="text"]').classList.add('active');
+    document.getElementById('text-panel').classList.add('active');
+}
+
 // New analysis button
 function newAnalysis() {
     resetAnalysis();
+    resetForm();
+}
+
+// Utility function to escape HTML
+function escapeHtml(text) {
+    const map = {
+        '&': '&amp;',
+        '<': '&lt;',
+        '>': '&gt;',
+        '"': '&quot;',
+        "'": '&#039;'
+    };
+    return text.replace(/[&<>"']/g, m => map[m]);
 }
