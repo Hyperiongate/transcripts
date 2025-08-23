@@ -51,6 +51,13 @@ VERDICT_CATEGORIES = {
         'color': '#8b5cf6',
         'score': None,
         'description': 'Subjective statement, not a factual claim'
+    },
+    'not_a_claim': {
+        'label': 'Not a Claim',
+        'icon': '🚫',
+        'color': '#9ca3af',
+        'score': None,
+        'description': 'Not a factual claim requiring verification'
     }
 }
 
@@ -75,14 +82,30 @@ class EnhancedFactChecker:
                 logger.info("OpenAI initialized for fact-checking")
             except Exception as e:
                 logger.error(f"Failed to initialize OpenAI: {e}")
+        
+        # Initialize non-claim patterns (backup check)
+        self.non_claim_phrases = {
+            'thank you', 'thanks', 'thank you very much', 'thanks very much',
+            'thank you so much', 'thanks so much', 'thanks a lot',
+            'you\'re welcome', 'youre welcome', 'no problem', 'my pleasure',
+            'hello', 'hi', 'hey', 'goodbye', 'bye',
+            'good morning', 'good afternoon', 'good evening', 'good night',
+            'please', 'sorry', 'excuse me', 'pardon me',
+            'yes', 'no', 'okay', 'ok', 'sure', 'alright'
+        }
     
     def check_claim_with_verdict(self, claim: str, context: Optional[Dict] = None) -> Dict:
         """Check a claim and return verification result"""
         try:
             # Clean and validate claim
             claim = claim.strip()
+            
+            # First check if this is even a claim (backup filter)
+            if self._is_non_claim(claim):
+                return self._create_verdict('not_a_claim', 'This is not a factual claim')
+            
             if len(claim.split()) < 3:
-                return self._create_verdict('unverifiable', 'Statement too short to verify')
+                return self._create_verdict('not_a_claim', 'Statement too short to be a claim')
             
             # Check if pure opinion
             if self._is_pure_opinion(claim):
@@ -106,6 +129,47 @@ class EnhancedFactChecker:
         except Exception as e:
             logger.error(f"Error in fact check: {e}")
             return self._create_verdict('unverifiable', f'Error during verification: {str(e)}')
+    
+    def _is_non_claim(self, claim: str) -> bool:
+        """Check if this is not a claim at all (pleasantry, greeting, etc.)"""
+        claim_lower = claim.lower().strip()
+        
+        # Direct phrase match
+        if claim_lower in self.non_claim_phrases:
+            return True
+        
+        # Check if it's just a thank you with a name
+        thank_patterns = [
+            r'^(thank\s+you|thanks)(\s+(very\s+)?much)?\s*\w*[.,!?]?$',
+            r'^(much\s+)?appreciated?\s*[.,!?]?$',
+            r'^(you\'?re\s+)?(welcome|no\s+problem)\s*[.,!?]?$'
+        ]
+        
+        for pattern in thank_patterns:
+            if re.match(pattern, claim_lower):
+                return True
+        
+        # Check if it's just a greeting
+        greeting_patterns = [
+            r'^(hello|hi|hey|good\s+(morning|afternoon|evening|night))(\s+\w+)?[.,!?]?$',
+            r'^(goodbye|bye|farewell|see\s+you)(\s+\w+)?[.,!?]?$'
+        ]
+        
+        for pattern in greeting_patterns:
+            if re.match(pattern, claim_lower):
+                return True
+        
+        # Check if it's just an acknowledgment
+        if claim_lower in ['yes', 'no', 'okay', 'ok', 'sure', 'alright', 'understood', 'got it']:
+            return True
+        
+        # Check if it's a very short pleasantry
+        if len(claim.split()) <= 3:
+            pleasantry_words = ['please', 'sorry', 'excuse', 'pardon', 'thanks', 'thank', 'welcome']
+            if any(word in claim_lower for word in pleasantry_words):
+                return True
+        
+        return False
     
     def _extract_verifiable_elements(self, claim: str) -> List[Dict]:
         """Extract specific facts that can be verified"""
@@ -143,7 +207,7 @@ class EnhancedFactChecker:
         
         # Extract proper nouns (people, places, organizations)
         # Use AI to extract if available
-        if self.openai_client:
+        if self.openai_client and len(claim.split()) >= 5:
             entities = self._extract_entities_with_ai(claim)
             elements.extend(entities)
         
@@ -188,9 +252,13 @@ Only include entities that can be fact-checked. Be specific."""
             )
             
             result = response.choices[0].message.content.strip()
+            # Ensure we have valid JSON
+            if not result.startswith('['):
+                return []
+            
             entities = json.loads(result)
             return [{'type': 'entity', 'subtype': e['type'], 'value': e['name'], 'context': e.get('context', claim)} 
-                   for e in entities]
+                   for e in entities if isinstance(e, dict) and 'name' in e]
             
         except Exception as e:
             logger.error(f"Entity extraction error: {e}")
@@ -444,6 +512,7 @@ CONFIDENCE: [0-100]"""
         """Check if claim is pure opinion"""
         opinion_indicators = [
             r'\b(i think|i believe|i feel|in my opinion|seems to me|appears to be)\b',
+            r'\b(probably|maybe|perhaps|possibly|likely)\b',
             r'\b(should|ought to|must|need to)\b',
             r'\b(best|worst|greatest|terrible|awesome|horrible)\b'
         ]
@@ -479,7 +548,8 @@ CONFIDENCE: [0-100]"""
         """Extract key terms for searching"""
         # Remove common words
         stop_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 
-                     'of', 'with', 'by', 'from', 'is', 'was', 'are', 'were', 'been', 'be'}
+                     'of', 'with', 'by', 'from', 'is', 'was', 'are', 'were', 'been', 'be',
+                     'has', 'have', 'had', 'will', 'would', 'could', 'should', 'may', 'might'}
         
         words = claim.split()
         key_terms = []
@@ -487,6 +557,11 @@ CONFIDENCE: [0-100]"""
         # Keep proper nouns
         for word in words:
             if word[0].isupper() and word.lower() not in stop_words:
+                key_terms.append(word)
+        
+        # Keep numbers
+        for word in words:
+            if any(char.isdigit() for char in word):
                 key_terms.append(word)
         
         # Keep remaining important words
