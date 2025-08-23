@@ -204,15 +204,20 @@ async function submitTranscript(transcript) {
             body: JSON.stringify({ transcript })
         });
         
-        const data = await response.json();
-        
-        if (response.ok) {
-            currentJobId = data.job_id;
-            pollJobStatus();
-        } else {
-            throw new Error(data.error || 'Failed to start analysis');
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.error || 'Failed to start analysis');
         }
+        
+        const data = await response.json();
+        currentJobId = data.job_id;
+        pollJobStatus();
+        
     } catch (error) {
+        showError('Error: ' + error.message);
+        resetAnalysis();
+    }
+}} catch (error) {
         showError('Error: ' + error.message);
         resetAnalysis();
     }
@@ -220,17 +225,26 @@ async function submitTranscript(transcript) {
 
 // Poll job status
 function pollJobStatus() {
+    let pollCount = 0;
     pollInterval = setInterval(async () => {
         try {
             const response = await fetch(`/api/status/${currentJobId}`);
             const data = await response.json();
             
             if (response.ok) {
-                updateProgress(data.progress, data.message);
+                console.log('Status:', data); // Debug log
+                
+                // Update progress if still processing
+                if (data.progress && data.status === 'processing') {
+                    updateProgress(data.progress, data.message);
+                }
                 
                 if (data.status === 'completed') {
                     clearInterval(pollInterval);
-                    getResults();
+                    // Add a small delay to ensure server has saved results
+                    setTimeout(() => {
+                        getResults();
+                    }, 100);
                 } else if (data.status === 'failed') {
                     clearInterval(pollInterval);
                     showError(data.error || 'Analysis failed');
@@ -239,6 +253,14 @@ function pollJobStatus() {
             } else {
                 clearInterval(pollInterval);
                 showError('Error checking status. Please try again.');
+                resetAnalysis();
+            }
+            
+            // Timeout after 60 seconds
+            pollCount++;
+            if (pollCount > 60) {
+                clearInterval(pollInterval);
+                showError('Analysis timed out. Please try again.');
                 resetAnalysis();
             }
         } catch (error) {
@@ -256,11 +278,13 @@ async function getResults() {
         const results = await response.json();
         
         if (response.ok) {
+            console.log('Results received:', results); // Debug log
             displayResults(results);
         } else {
             throw new Error(results.error || 'Failed to get results');
         }
     } catch (error) {
+        console.error('Error getting results:', error); // Debug log
         showError('Error getting results: ' + error.message);
         resetAnalysis();
     }
