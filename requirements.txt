@@ -1,7 +1,16 @@
 # Core Flask dependencies
 Flask==2.3.3
 Flask-CORS==4.0.0
+Flask-Login==0.6.2
+Flask-Migrate==4.0.5
+Flask-SQLAlchemy==3.0.5
 gunicorn==21.2.0
+
+# Security
+Werkzeug==2.3.7
+
+# Database
+SQLAlchemy==2.0.21
 
 # Environment variables
 python-dotenv==1.0.0
@@ -33,8 +42,10 @@ reportlab==4.0.4
 # Image processing
 Pillow==10.1.0
 
+# Async support
+aiohttp==3.9.1
+asyncio==3.4.3
+
 # Optional: Database support (only if using MongoDB/Redis)
 pymongo==4.5.0
 redis==5.0.0
-
-aiohttp==3.9.1
