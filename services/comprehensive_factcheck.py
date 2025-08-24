@@ -1,4 +1,5 @@
-from collections import defaultdict"""
+from collections import defaultdict
+"""
 Comprehensive Fact-Checking Service that uses ALL available APIs
 """
 import re
@@ -12,7 +13,6 @@ from datetime import datetime
 import time
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import quote
-from collections import defaultdict
 
 # Import all our services
 from .api_checkers import APICheckers
