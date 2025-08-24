@@ -1,535 +1,560 @@
+#!/usr/bin/env python3
 """
-Main Flask Application for Political Fact Checker
-Updated with enhanced verification system
+Main application file for Workforce Scheduler
+FINAL VERSION - All issues fixed after complete dry run
 """
-import os
-import json
-import logging
-import threading
-import time
-import uuid
-from datetime import datetime
-from typing import Dict, List, Optional
-from flask import Flask, render_template, request, jsonify, send_file
-from flask_cors import CORS
-from werkzeug.utils import secure_filename
-import traceback
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+from flask import Flask, render_template, redirect, url_for, flash, jsonify, request
+from flask_login import LoginManager, login_required, current_user
+from flask_migrate import Migrate
+import os
+import logging
+from datetime import datetime, date, timedelta
+from sqlalchemy import text, inspect
+from sqlalchemy.pool import NullPool
+from sqlalchemy.exc import OperationalError, ProgrammingError
+from werkzeug.security import generate_password_hash
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Flask app setup
+# Create Flask app
 app = Flask(__name__)
-CORS(app)
+app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'your-secret-key-here')
 
-# Configuration
-class Config:
-    # Required API keys - update in Render
-    OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
-    GOOGLE_FACTCHECK_API_KEY = os.getenv('GOOGLE_FACTCHECK_API_KEY')
-    NEWS_API_KEY = os.getenv('NEWS_API_KEY')
-    SCRAPERAPI_KEY = os.getenv('SCRAPERAPI_KEY')
-    WOLFRAM_ALPHA_API_KEY = os.getenv('WOLFRAM_ALPHA_API_KEY')
+# Database configuration
+database_url = os.environ.get('DATABASE_URL')
+if database_url:
+    if database_url.startswith('postgres://'):
+        database_url = database_url.replace('postgres://', 'postgresql://', 1)
     
-    # Model config
-    OPENAI_MODEL = os.getenv('OPENAI_MODEL', 'gpt-3.5-turbo')
-    USE_GPT4 = os.getenv('USE_GPT4', 'False').lower() == 'true'
-    
-    # File handling
-    UPLOAD_FOLDER = os.getenv('UPLOAD_FOLDER', '/tmp/uploads')
-    EXPORT_FOLDER = os.getenv('EXPORT_FOLDER', '/tmp/exports')
-    MAX_CONTENT_LENGTH = 10 * 1024 * 1024  # 10MB
-    
-    # Optional storage
-    MONGODB_URI = os.getenv('MONGODB_URI')
-    REDIS_URL = os.getenv('REDIS_URL')
-
-# Apply config
-app.config.from_object(Config)
-
-# Ensure directories exist
-os.makedirs(Config.UPLOAD_FOLDER, exist_ok=True)
-os.makedirs(Config.EXPORT_FOLDER, exist_ok=True)
-
-# Storage setup
-in_memory_jobs = {}
-mongo_client = None
-redis_client = None
-
-# Try to connect to MongoDB if configured
-if Config.MONGODB_URI:
-    try:
-        from pymongo import MongoClient
-        mongo_client = MongoClient(Config.MONGODB_URI, serverSelectionTimeoutMS=5000)
-        mongo_client.server_info()
-        logger.info("MongoDB connected successfully")
-    except Exception as e:
-        logger.warning(f"MongoDB connection failed: {str(e)}. Using in-memory storage.")
-        mongo_client = None
+    app.config['SQLALCHEMY_DATABASE_URI'] = database_url
+    app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+        'pool_pre_ping': True,
+        'pool_recycle': 300,
+        'poolclass': NullPool,
+        'connect_args': {
+            'sslmode': 'require',
+            'keepalives': 1,
+            'keepalives_idle': 30,
+            'keepalives_interval': 5,
+            'keepalives_count': 5
+        }
+    }
 else:
-    logger.info("MongoDB URI not configured. Using in-memory storage.")
+    app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///workforce.db'
 
-# Try to connect to Redis if configured
-if Config.REDIS_URL:
-    try:
-        import redis
-        redis_client = redis.from_url(Config.REDIS_URL, socket_connect_timeout=5)
-        redis_client.ping()
-        logger.info("Redis connected successfully")
-    except Exception as e:
-        logger.warning(f"Redis connection failed: {str(e)}. Using in-memory storage.")
-        redis_client = None
-else:
-    logger.info("Redis URL not configured. Using in-memory storage.")
+app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-# Import services - REQUIRED for app to function
+# Upload configuration
+app.config['UPLOAD_FOLDER'] = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'upload_files')
+app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB max file size
+app.config['ALLOWED_EXTENSIONS'] = {'xls', 'xlsx'}
+
+# Ensure upload folder exists
 try:
-    from services.transcript import TranscriptProcessor
-    from services.claims import ClaimExtractor
-    # Use comprehensive fact checker with all APIs
-    from services.comprehensive_factcheck import ComprehensiveFactChecker as FactChecker, VERDICT_CATEGORIES
-    
-    # Initialize services
-    transcript_processor = TranscriptProcessor()
-    claim_extractor = ClaimExtractor(openai_api_key=Config.OPENAI_API_KEY)
-    fact_checker = FactChecker(Config)
-    logger.info("Services initialized successfully")
-except ImportError as e:
-    logger.error(f"CRITICAL: Failed to import required services: {str(e)}")
-    logger.error("Please ensure services directory exists with required files")
-    raise SystemExit(f"Cannot start application without services: {str(e)}")
+    if os.path.exists(app.config['UPLOAD_FOLDER']):
+        if not os.path.isdir(app.config['UPLOAD_FOLDER']):
+            os.remove(app.config['UPLOAD_FOLDER'])
+            os.makedirs(app.config['UPLOAD_FOLDER'])
+    else:
+        os.makedirs(app.config['UPLOAD_FOLDER'])
+except Exception as e:
+    logger.warning(f"Could not create upload folder: {e}")
+    import tempfile
+    app.config['UPLOAD_FOLDER'] = tempfile.gettempdir()
 
-# Enhanced speaker database
-SPEAKER_DATABASE = {
-    'donald trump': {
-        'full_name': 'Donald J. Trump',
-        'role': '45th and 47th President of the United States',
-        'party': 'Republican',
-        'known_for': 'Real estate, reality TV, politics'
-    },
-    'joe biden': {
-        'full_name': 'Joseph R. Biden Jr.',
-        'role': '46th President of the United States',
-        'party': 'Democrat',
-        'known_for': 'Long Senate career, Vice President under Obama'
-    }
-}
+# Initialize extensions
+from models import db
+db.init_app(app)
+migrate = Migrate(app, db)
+login_manager = LoginManager(app)
+login_manager.login_view = 'auth.login'
 
-# Job management functions
-def create_job(transcript: str) -> str:
-    """Create a new job"""
-    job_id = str(uuid.uuid4())
-    job_data = {
-        'id': job_id,
-        'status': 'processing',
-        'progress': 0,
-        'message': 'Starting analysis...',
-        'created': datetime.now().isoformat(),
-        'transcript': transcript[:1000],  # Store preview
-        'results': None
-    }
-    
-    # Store job
-    try:
-        if mongo_client:
-            mongo_client.factchecker.jobs.insert_one(job_data)
-        elif redis_client:
-            redis_client.setex(f"job:{job_id}", 3600, json.dumps(job_data))
-        else:
-            in_memory_jobs[job_id] = job_data
-    except Exception as e:
-        logger.error(f"Error storing job: {e}")
-        in_memory_jobs[job_id] = job_data
-    
-    return job_id
+# Import models after db initialization
+from models import Employee, TimeOffRequest, ShiftSwapRequest
 
-def get_job(job_id: str) -> Optional[Dict]:
-    """Get job data"""
-    try:
-        if mongo_client:
-            job = mongo_client.factchecker.jobs.find_one({'id': job_id})
-            if job:
-                job.pop('_id', None)
-            return job
-        elif redis_client:
-            data = redis_client.get(f"job:{job_id}")
-            return json.loads(data) if data else None
-        else:
-            return in_memory_jobs.get(job_id)
-    except Exception as e:
-        logger.error(f"Error getting job: {e}")
-        return in_memory_jobs.get(job_id)
+@login_manager.user_loader
+def load_user(user_id):
+    return Employee.query.get(int(user_id))
 
-def update_job(job_id: str, updates: Dict):
-    """Update job data"""
-    try:
-        if mongo_client:
-            mongo_client.factchecker.jobs.update_one(
-                {'id': job_id},
-                {'$set': updates}
-            )
-        elif redis_client:
-            job = get_job(job_id)
-            if job:
-                job.update(updates)
-                redis_client.setex(f"job:{job_id}", 3600, json.dumps(job))
-        else:
-            if job_id in in_memory_jobs:
-                in_memory_jobs[job_id].update(updates)
-    except Exception as e:
-        logger.error(f"Error updating job: {e}")
-        if job_id in in_memory_jobs:
-            in_memory_jobs[job_id].update(updates)
-
-# Routes
-@app.route('/')
-def index():
-    """Home page"""
-    return render_template('index.html')
-
-@app.route('/api/analyze', methods=['POST'])
-def analyze():
-    """Start fact-checking analysis"""
-    try:
-        data = request.get_json()
-        transcript = data.get('transcript', '').strip()
-        
-        if not transcript:
-            return jsonify({'error': 'No transcript provided'}), 400
-        
-        if len(transcript) > 50000:
-            return jsonify({'error': 'Transcript too long. Maximum 50,000 characters.'}), 400
-        
-        # Create job
-        job_id = create_job(transcript)
-        
-        # Start processing in background
-        thread = threading.Thread(target=process_transcript, args=(job_id, transcript))
-        thread.start()
-        
-        return jsonify({
-            'job_id': job_id,
-            'message': 'Analysis started'
-        })
-        
-    except Exception as e:
-        logger.error(f"Analysis error: {e}")
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/status/<job_id>')
-def get_status(job_id: str):
-    """Get job status"""
-    job = get_job(job_id)
-    if not job:
-        return jsonify({'error': 'Job not found'}), 404
-    
-    return jsonify({
-        'status': job.get('status'),
-        'progress': job.get('progress', 0),
-        'message': job.get('message', ''),
-        'error': job.get('error')
-    })
-
-@app.route('/api/results/<job_id>')
-def get_results(job_id: str):
-    """Get analysis results"""
-    job = get_job(job_id)
-    if not job:
-        return jsonify({'error': 'Job not found'}), 404
-    
-    if job.get('status') != 'completed':
-        return jsonify({'error': 'Analysis not complete'}), 400
-    
-    return jsonify(job.get('results', {}))
-
-@app.route('/api/export/<job_id>/<format>')
-def export_results(job_id: str, format: str):
-    """Export results in various formats"""
-    if format not in ['json', 'txt', 'pdf']:
-        return jsonify({'error': 'Invalid format'}), 400
-    
-    job = get_job(job_id)
-    if not job or job.get('status') != 'completed':
-        return jsonify({'error': 'Results not available'}), 404
-    
-    results = job.get('results', {})
+# FINAL FIXED DATABASE REPAIR ROUTE
+@app.route('/fix-db-now')
+def fix_db_now():
+    """Complete database fix - final version after dry run"""
+    fixes_applied = []
+    errors = []
     
     try:
-        if format == 'json':
-            return jsonify(results)
+        # Step 1: Clear any aborted transaction
+        db.session.rollback()
+        db.session.close()
+        logger.info("Cleared any existing transaction issues")
         
-        elif format == 'txt':
-            # Generate text report
-            report = generate_text_report(results)
-            return report, 200, {
-                'Content-Type': 'text/plain',
-                'Content-Disposition': f'attachment; filename=fact_check_{job_id}.txt'
-            }
+        # Step 2: Add ALL missing columns based on Employee model
+        with db.engine.begin() as conn:
+            # Get current columns
+            result = conn.execute(text("""
+                SELECT column_name 
+                FROM information_schema.columns 
+                WHERE table_name = 'employee'
+            """))
+            existing_columns = {row[0] for row in result}
+            logger.info(f"Existing columns: {existing_columns}")
+            
+            # Define all columns from the Employee model
+            required_columns = [
+                # Core fields
+                ('email', 'VARCHAR(120)', 'UNIQUE NOT NULL'),
+                ('password_hash', 'VARCHAR(255)', ''),
+                ('name', 'VARCHAR(100)', 'NOT NULL'),
+                ('employee_id', 'VARCHAR(50)', 'UNIQUE'),
+                ('phone', 'VARCHAR(20)', ''),
+                
+                # Work info
+                ('position_id', 'INTEGER', ''),
+                ('department', 'VARCHAR(50)', ''),
+                ('crew', 'VARCHAR(1)', ''),
+                ('is_supervisor', 'BOOLEAN', 'DEFAULT FALSE'),
+                ('is_admin', 'BOOLEAN', 'DEFAULT FALSE'),
+                ('hire_date', 'DATE', ''),
+                
+                # Availability
+                ('is_active', 'BOOLEAN', 'DEFAULT TRUE'),
+                ('max_hours_per_week', 'INTEGER', 'DEFAULT 48'),
+                
+                # Timestamps
+                ('created_at', 'TIMESTAMP', 'DEFAULT CURRENT_TIMESTAMP'),
+                ('updated_at', 'TIMESTAMP', 'DEFAULT CURRENT_TIMESTAMP')
+            ]
+            
+            # Add each missing column
+            for col_name, col_type, constraints in required_columns:
+                if col_name not in existing_columns:
+                    try:
+                        if constraints:
+                            sql = f"ALTER TABLE employee ADD COLUMN {col_name} {col_type} {constraints}"
+                        else:
+                            sql = f"ALTER TABLE employee ADD COLUMN {col_name} {col_type}"
+                        
+                        conn.execute(text(sql))
+                        fixes_applied.append(f"Added {col_name}")
+                        logger.info(f"Added column {col_name}")
+                    except Exception as e:
+                        error_msg = str(e).lower()
+                        if "already exists" not in error_msg and "duplicate column" not in error_msg:
+                            errors.append(f"{col_name}: {str(e)}")
+                            logger.error(f"Error adding {col_name}: {e}")
         
-        elif format == 'pdf':
-            # TODO: Implement PDF export
-            return jsonify({'error': 'PDF export not yet implemented'}), 501
+        # Step 3: Create or update admin user
+        with db.engine.begin() as conn:
+            try:
+                # Generate password hash
+                password_hash = generate_password_hash('admin123')
+                
+                # Check if admin exists
+                result = conn.execute(text("""
+                    SELECT id, email, name, is_admin, is_supervisor 
+                    FROM employee 
+                    WHERE email = 'admin@workforce.com'
+                """))
+                admin_row = result.fetchone()
+                
+                if admin_row:
+                    # Update existing admin
+                    conn.execute(text("""
+                        UPDATE employee 
+                        SET password_hash = :password_hash,
+                            name = :name,
+                            employee_id = :employee_id,
+                            is_supervisor = :is_supervisor,
+                            is_admin = :is_admin,
+                            is_active = :is_active,
+                            department = :department,
+                            crew = :crew
+                        WHERE email = :email
+                    """), {
+                        'password_hash': password_hash,
+                        'name': 'Admin User',
+                        'employee_id': 'ADMIN001',
+                        'is_supervisor': True,
+                        'is_admin': True,
+                        'is_active': True,
+                        'department': 'Administration',
+                        'crew': 'A',
+                        'email': 'admin@workforce.com'
+                    })
+                    fixes_applied.append("Updated admin user")
+                    logger.info("Updated existing admin user")
+                else:
+                    # Create new admin - only required fields are email and name
+                    conn.execute(text("""
+                        INSERT INTO employee (
+                            email, 
+                            password_hash, 
+                            name,
+                            employee_id,
+                            is_supervisor, 
+                            is_admin, 
+                            is_active,
+                            department,
+                            crew
+                        ) VALUES (
+                            :email,
+                            :password_hash,
+                            :name,
+                            :employee_id,
+                            :is_supervisor,
+                            :is_admin,
+                            :is_active,
+                            :department,
+                            :crew
+                        )
+                    """), {
+                        'email': 'admin@workforce.com',
+                        'password_hash': password_hash,
+                        'name': 'Admin User',
+                        'employee_id': 'ADMIN001',
+                        'is_supervisor': True,
+                        'is_admin': True,
+                        'is_active': True,
+                        'department': 'Administration',
+                        'crew': 'A'
+                    })
+                    fixes_applied.append("Created admin user")
+                    logger.info("Created new admin user")
+                    
+            except Exception as e:
+                errors.append(f"Admin user: {str(e)}")
+                logger.error(f"Error with admin user: {e}")
+        
+        # Build response
+        success = len(errors) == 0
+        
+        return f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Database Fix - {'Success' if success else 'Partial Success'}</title>
+            <style>
+                body {{ 
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                    margin: 0;
+                    padding: 0;
+                    background: #f5f7fa;
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+                    min-height: 100vh;
+                }}
+                .container {{
+                    background: white;
+                    padding: 40px;
+                    border-radius: 12px;
+                    box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+                    max-width: 600px;
+                    width: 90%;
+                }}
+                h1 {{ 
+                    color: {'#28a745' if success else '#ffc107'};
+                    margin: 0 0 24px 0;
+                    font-size: 28px;
+                }}
+                .status-icon {{
+                    font-size: 48px;
+                    margin-bottom: 16px;
+                }}
+                .info-box {{
+                    background: #e7f3ff;
+                    border-left: 4px solid #2196F3;
+                    padding: 20px;
+                    margin: 24px 0;
+                    border-radius: 4px;
+                }}
+                .info-box h3 {{
+                    margin: 0 0 12px 0;
+                    color: #1976D2;
+                }}
+                .success-list {{
+                    background: #d4edda;
+                    border: 1px solid #c3e6cb;
+                    color: #155724;
+                    padding: 16px;
+                    border-radius: 4px;
+                    margin: 16px 0;
+                }}
+                .error-list {{
+                    background: #f8d7da;
+                    border: 1px solid #f5c6cb;
+                    color: #721c24;
+                    padding: 16px;
+                    border-radius: 4px;
+                    margin: 16px 0;
+                }}
+                ul {{
+                    margin: 8px 0;
+                    padding-left: 24px;
+                }}
+                li {{
+                    margin: 4px 0;
+                }}
+                .btn {{
+                    display: inline-block;
+                    padding: 12px 32px;
+                    background: #007bff;
+                    color: white;
+                    text-decoration: none;
+                    border-radius: 6px;
+                    margin-top: 24px;
+                    font-weight: 500;
+                    transition: all 0.3s;
+                }}
+                .btn:hover {{
+                    background: #0056b3;
+                    transform: translateY(-1px);
+                    box-shadow: 0 4px 12px rgba(0,123,255,0.3);
+                }}
+                .note {{
+                    color: #6c757d;
+                    font-size: 14px;
+                    margin-top: 12px;
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <div class="status-icon">{'✅' if success else '⚠️'}</div>
+                <h1>Database Fix {'Complete' if success else 'Completed with Warnings'}</h1>
+                
+                {f'''
+                <div class="success-list">
+                    <strong>Successfully Applied Fixes:</strong>
+                    <ul>
+                        {"".join(f"<li>{fix}</li>" for fix in fixes_applied) if fixes_applied else "<li>No fixes needed - database already up to date</li>"}
+                    </ul>
+                </div>
+                ''' if fixes_applied else ''}
+                
+                {f'''
+                <div class="error-list">
+                    <strong>Errors Encountered:</strong>
+                    <ul>
+                        {"".join(f"<li>{error}</li>" for error in errors)}
+                    </ul>
+                </div>
+                ''' if errors else ''}
+                
+                <div class="info-box">
+                    <h3>Admin Login Credentials:</h3>
+                    <p><strong>Email:</strong> admin@workforce.com<br>
+                    <strong>Password:</strong> admin123</p>
+                    <p class="note">Please change this password after your first login!</p>
+                </div>
+                
+                <a href="/login" class="btn">Go to Login Page →</a>
+            </div>
+        </body>
+        </html>
+        """
             
     except Exception as e:
-        logger.error(f"Export error: {e}")
-        return jsonify({'error': str(e)}), 500
+        # Critical error
+        db.session.rollback()
+        logger.error(f"Critical error in fix_db_now: {e}")
+        
+        return f"""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Database Fix - Error</title>
+            <style>
+                body {{ 
+                    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                    margin: 0;
+                    padding: 0;
+                    background: #f5f7fa;
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+                    min-height: 100vh;
+                }}
+                .container {{
+                    background: white;
+                    padding: 40px;
+                    border-radius: 12px;
+                    box-shadow: 0 4px 20px rgba(0,0,0,0.08);
+                    max-width: 600px;
+                    width: 90%;
+                }}
+                h1 {{ 
+                    color: #dc3545;
+                    margin: 0 0 24px 0;
+                }}
+                pre {{
+                    background: #f8f9fa;
+                    padding: 20px;
+                    border-radius: 6px;
+                    overflow-x: auto;
+                    border: 1px solid #dee2e6;
+                    font-size: 14px;
+                    white-space: pre-wrap;
+                    word-wrap: break-word;
+                }}
+                .btn {{
+                    display: inline-block;
+                    padding: 12px 32px;
+                    background: #6c757d;
+                    color: white;
+                    text-decoration: none;
+                    border-radius: 6px;
+                    margin-top: 24px;
+                    font-weight: 500;
+                }}
+                .btn:hover {{
+                    background: #5a6268;
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="container">
+                <h1>❌ Critical Error</h1>
+                <p>A critical error occurred while attempting to fix the database:</p>
+                <pre>{str(e)}</pre>
+                <p>Please check the server logs for more details.</p>
+                <a href="/fix-db-now" class="btn">Try Again</a>
+            </div>
+        </body>
+        </html>
+        """
 
-@app.route('/health')
-def health():
-    """Health check endpoint"""
-    return jsonify({
-        'status': 'healthy',
-        'timestamp': datetime.now().isoformat()
-    })
+# Import blueprints
+from blueprints.auth import auth_bp
+from blueprints.main import main_bp
+from blueprints.employee import employee_bp
+from blueprints.supervisor import supervisor_bp
+from blueprints.schedule import schedule_bp
+from blueprints.employee_import import employee_import_bp
+from blueprints.reset_database import reset_db_bp
 
-# Processing functions
-def process_transcript(job_id: str, transcript: str):
-    """Process transcript in background"""
-    try:
-        # Update progress
-        update_job(job_id, {
-            'status': 'processing',
-            'progress': 10,
-            'message': 'Extracting claims...'
-        })
-        
-        # Extract claims
-        extraction_result = claim_extractor.extract(transcript)
-        logger.info(f"Extraction result keys: {extraction_result.keys() if extraction_result else 'None'}")
-        logger.info(f"Extraction result: {extraction_result}")
-        
-        claims = extraction_result.get('claims', [])
-        speakers = extraction_result.get('speakers', [])
-        topics = extraction_result.get('topics', [])
-        
-        logger.info(f"Claims found: {len(claims)}")
-        logger.info(f"First claim: {claims[0] if claims else 'No claims'}")
-        
-        if not claims:
-            update_job(job_id, {
-                'status': 'completed',
-                'progress': 100,
-                'message': 'No verifiable claims found',
-                'results': {
-                    'claims': [],
-                    'summary': 'No verifiable claims were found in the transcript.',
-                    'credibility_score': None
-                }
-            })
-            return
-        
-        # Update progress
-        update_job(job_id, {
-            'progress': 30,
-            'message': f'Fact-checking {len(claims)} claims...'
-        })
-        
-        # Fact check each claim
-        fact_checks = []
-        for i, claim in enumerate(claims):
-            try:
-                # Update progress
-                progress = 30 + int((i / len(claims)) * 60)
-                update_job(job_id, {
-                    'progress': progress,
-                    'message': f'Checking claim {i+1} of {len(claims)}...'
-                })
-                
-                # Check claim
-                result = fact_checker.check_claim_with_verdict(
-                    claim.get('text', ''),
-                    context={
-                        'speaker': claim.get('speaker'),
-                        'transcript': transcript
-                    }
-                )
-                
-                # Make sure we have the claim text in the result
-                result['claim'] = claim.get('text', '')
-                result['speaker'] = claim.get('speaker', 'Unknown')
-                
-                fact_checks.append(result)
-                
-            except Exception as e:
-                logger.error(f"Error checking claim {i}: {e}")
-                fact_checks.append({
-                    'claim': claim.get('text', ''),
-                    'speaker': claim.get('speaker', 'Unknown'),
-                    'verdict': 'unverifiable',
-                    'explanation': f'Error during verification: {str(e)}',
-                    'confidence': 0,
-                    'sources': []
-                })
-        
-        # Calculate credibility score
-        credibility_score = calculate_credibility_score(fact_checks)
-        
-        # Generate summary
-        summary = generate_summary(fact_checks, credibility_score, speakers, topics)
-        
-        logger.info(f"Fact checking completed: {len(fact_checks)} claims checked")
-        logger.info(f"Sample fact check result: {fact_checks[0] if fact_checks else 'None'}")
-        
-        # Store results
-        results = {
-            'transcript_preview': transcript[:500] + '...' if len(transcript) > 500 else transcript,
-            'claims': fact_checks,  # Store fact_checks as 'claims' for frontend compatibility
-            'fact_checks': fact_checks,  # Also store as fact_checks
-            'speakers': speakers,
-            'topics': topics,
-            'credibility_score': credibility_score,
-            'summary': summary,
-            'total_claims': len(claims),
-            'extraction_method': extraction_result.get('extraction_method', 'unknown')
-        }
-        
-        logger.info(f"Results prepared with {len(results.get('fact_checks', []))} fact checks")
-        
-        update_job(job_id, {
-            'status': 'completed',
-            'progress': 100,
-            'message': 'Analysis complete',
-            'results': results
-        })
-        
-    except Exception as e:
-        logger.error(f"Processing error: {e}")
-        logger.error(traceback.format_exc())
-        update_job(job_id, {
-            'status': 'failed',
-            'error': str(e),
-            'message': 'Analysis failed'
-        })
+# Register blueprints
+app.register_blueprint(auth_bp)
+app.register_blueprint(main_bp)
+app.register_blueprint(employee_bp)
+app.register_blueprint(supervisor_bp)
+app.register_blueprint(schedule_bp)
+app.register_blueprint(employee_import_bp)
+app.register_blueprint(reset_db_bp)
 
-def calculate_credibility_score(fact_checks: List[Dict]) -> Dict:
-    """Calculate overall credibility score"""
-    if not fact_checks:
-        return {'score': 0, 'label': 'No claims'}
-    
-    # Count verdicts
-    verdict_counts = {}
-    total_score = 0
-    scored_claims = 0
-    
-    for fc in fact_checks:
-        verdict = fc.get('verdict', 'unverifiable')
-        verdict_counts[verdict] = verdict_counts.get(verdict, 0) + 1
-        
-        # Get score from verdict
-        verdict_info = VERDICT_CATEGORIES.get(verdict, {})
-        if verdict_info.get('score') is not None:
-            total_score += verdict_info['score']
-            scored_claims += 1
-    
-    # Calculate average score
-    if scored_claims > 0:
-        score = int(total_score / scored_claims)
-    else:
-        score = 50  # Default for unverifiable claims
-    
-    # Determine label
-    if score >= 90:
-        label = 'Highly Credible'
-    elif score >= 70:
-        label = 'Mostly Credible'
-    elif score >= 50:
-        label = 'Mixed Credibility'
-    elif score >= 30:
-        label = 'Low Credibility'
-    else:
-        label = 'Very Low Credibility'
-    
-    return {
-        'score': score,
-        'label': label,
-        'verdict_breakdown': verdict_counts,
-        'total_claims': len(fact_checks),
-        'scored_claims': scored_claims
-    }
-
-def generate_summary(fact_checks: List[Dict], credibility_score: Dict, speakers: List[str], topics: List[str]) -> str:
-    """Generate analysis summary"""
-    total = len(fact_checks)
-    score = credibility_score.get('score', 0)
-    label = credibility_score.get('label', 'Unknown')
-    
-    # Count key verdicts
-    verified_true = sum(1 for fc in fact_checks if fc.get('verdict') == 'verified_true')
-    verified_false = sum(1 for fc in fact_checks if fc.get('verdict') == 'verified_false')
-    partially_accurate = sum(1 for fc in fact_checks if fc.get('verdict') == 'partially_accurate')
-    
-    summary = f"Analysis of {total} claims reveals {label} ({score}/100).\n\n"
-    
-    if verified_true > 0:
-        summary += f"✓ {verified_true} claims verified as true\n"
-    if verified_false > 0:
-        summary += f"✗ {verified_false} claims verified as false\n"
-    if partially_accurate > 0:
-        summary += f"⚠ {partially_accurate} claims partially accurate\n"
-    
-    if topics:
-        summary += f"\nMain topics: {', '.join(topics)}"
-    
-    return summary
-
-def generate_text_report(results: Dict) -> str:
-    """Generate text format report"""
-    report = []
-    report.append("FACT CHECK REPORT")
-    report.append("=" * 50)
-    report.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-    report.append("")
-    
-    # Summary
-    report.append("SUMMARY")
-    report.append("-" * 20)
-    report.append(results.get('summary', 'No summary available'))
-    report.append("")
-    
-    # Credibility Score
-    cred = results.get('credibility_score', {})
-    report.append("CREDIBILITY SCORE")
-    report.append("-" * 20)
-    report.append(f"Score: {cred.get('score', 'N/A')}/100")
-    report.append(f"Label: {cred.get('label', 'Unknown')}")
-    report.append("")
-    
-    # Claims
-    report.append("FACT CHECKS")
-    report.append("-" * 20)
-    
-    for i, fc in enumerate(results.get('claims', []), 1):
-        report.append(f"\n{i}. CLAIM: {fc.get('claim', 'Unknown')}")
-        report.append(f"   Speaker: {fc.get('speaker', 'Unknown')}")
-        report.append(f"   Verdict: {fc.get('verdict', 'Unknown').upper()}")
-        report.append(f"   Explanation: {fc.get('explanation', 'No explanation')}")
-        if fc.get('sources'):
-            report.append(f"   Sources: {', '.join(fc['sources'])}")
-    
-    return "\n".join(report)
-
-# Error handlers
+# Add 404 handler
 @app.errorhandler(404)
-def not_found(error):
-    return jsonify({'error': 'Not found'}), 404
+def not_found_error(error):
+    logger.warning(f"404 error: {request.url}")
+    if request.endpoint and 'api' in request.endpoint:
+        return jsonify({'error': 'Not found'}), 404
+    return render_template('404.html'), 404
 
+# Add 500 handler
 @app.errorhandler(500)
-def server_error(error):
-    return jsonify({'error': 'Internal server error'}), 500
+def internal_error(error):
+    logger.error(f"500 error: {error}")
+    db.session.rollback()
+    if request.endpoint and 'api' in request.endpoint:
+        return jsonify({'error': 'Internal server error'}), 500
+    return render_template('500.html'), 500
 
-# Main
+# Health check endpoint
+@app.route('/health')
+def health_check():
+    """Health check endpoint"""
+    try:
+        with db.engine.connect() as conn:
+            result = conn.execute(text('SELECT 1'))
+            result.fetchone()
+        
+        return jsonify({
+            'status': 'healthy',
+            'database': 'connected',
+            'timestamp': datetime.utcnow().isoformat()
+        }), 200
+    except Exception as e:
+        return jsonify({
+            'status': 'unhealthy',
+            'database': 'disconnected',
+            'error': str(e),
+            'timestamp': datetime.utcnow().isoformat()
+        }), 503
+
+# Context processors
+@app.context_processor
+def inject_user_permissions():
+    """Inject user permissions into all templates"""
+    return dict(
+        is_supervisor=lambda: current_user.is_authenticated and current_user.is_supervisor
+    )
+
+@app.context_processor
+def inject_pending_counts():
+    """Inject pending counts into all templates for navbar"""
+    pending_time_off = 0
+    pending_swaps = 0
+    
+    if current_user.is_authenticated and current_user.is_supervisor:
+        try:
+            pending_time_off = TimeOffRequest.query.filter_by(status='pending').count()
+        except Exception as e:
+            logger.warning(f"Could not get pending time off count: {e}")
+            
+        try:
+            pending_swaps = ShiftSwapRequest.query.filter_by(status='pending').count()
+        except Exception as e:
+            logger.warning(f"Could not get pending swaps count: {e}")
+    
+    return dict(
+        pending_time_off=pending_time_off,
+        pending_swaps=pending_swaps
+    )
+
+# Utility functions
+def allowed_file(filename):
+    return '.' in filename and \
+           filename.rsplit('.', 1)[1].lower() in app.config['ALLOWED_EXTENSIONS']
+
+# ==========================================
+# AUTO-FIX DATABASE ON STARTUP
+# ==========================================
+
+print("Starting database schema check...")
+with app.app_context():
+    try:
+        # First ensure all tables exist
+        db.create_all()
+        print("✓ Database tables verified/created")
+        
+        # Then run the column fixes if available
+        try:
+            from fix_db_columns import fix_database_schema
+            print("Checking for missing columns...")
+            fixes = fix_database_schema()
+            if fixes > 0:
+                print(f"✅ Applied {fixes} database fixes successfully!")
+            else:
+                print("✅ Database schema is up to date")
+        except ImportError:
+            print("⚠️  fix_db_columns.py not found - skipping database fixes")
+        except Exception as e:
+            print(f"⚠️  Could not run database fixes: {e}")
+            
+    except Exception as e:
+        print(f"⚠️  Could not run database fixes: {e}")
+        print("The app will continue but some features may not work correctly")
+
+# ==========================================
+# END OF DATABASE FIX SECTION
+# ==========================================
+
+# Run the application
 if __name__ == '__main__':
-    # Check for required environment variables
-    required_vars = ['OPENAI_API_KEY']
-    missing_vars = [var for var in required_vars if not os.getenv(var)]
-    
-    if missing_vars:
-        logger.warning(f"Missing environment variables: {missing_vars}")
-        logger.warning("Fact checking will have limited functionality without these keys")
-    
-    port = int(os.getenv('PORT', 5000))
-    app.run(host='0.0.0.0', port=port, debug=False)
+    port = int(os.environ.get('PORT', 5000))
+    debug = os.environ.get('FLASK_ENV') == 'development'
+    app.run(host='0.0.0.0', port=port, debug=debug)
