@@ -1,19 +1,26 @@
 """
-Main Flask Application for Political Fact Checker
-Updated with enhanced verification system and insights
+AI-Powered Transcript Fact Checker
+Main Flask application
 """
 import os
-import json
 import logging
-import threading
-import time
-import uuid
-from datetime import datetime
-from typing import Dict, List, Optional
-from flask import Flask, render_template, request, jsonify, send_file
+from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for
 from flask_cors import CORS
 from werkzeug.utils import secure_filename
-import traceback
+import uuid
+from datetime import datetime
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+import json
+from typing import Dict, List, Optional, Any, Tuple
+
+# Import all services
+from services.audio_processor import AudioProcessor
+from services.transcript_analyzer import TranscriptAnalyzer
+from services.comprehensive_factcheck import ComprehensiveFactChecker
+from services.export import PDFExporter
+from services.job_manager import JobManager
+from services.context_aware_summarizer import ContextAwareSummarizer
 
 # Configure logging
 logging.basicConfig(
@@ -22,217 +29,392 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# Flask app setup
+# Initialize Flask app
 app = Flask(__name__)
 CORS(app)
 
 # Configuration
-class Config:
-    # Required API keys - update in Render
-    OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
-    GOOGLE_FACTCHECK_API_KEY = os.getenv('GOOGLE_FACTCHECK_API_KEY')
-    NEWS_API_KEY = os.getenv('NEWS_API_KEY')
-    SCRAPERAPI_KEY = os.getenv('SCRAPERAPI_KEY')
-    SCRAPINGBEE_API_KEY = os.getenv('SCRAPINGBEE_API_KEY')
-    WOLFRAM_ALPHA_API_KEY = os.getenv('WOLFRAM_ALPHA_API_KEY')
-    FRED_API_KEY = os.getenv('FRED_API_KEY')
-    MEDIASTACK_API_KEY = os.getenv('MEDIASTACK_API_KEY')
-    NOAA_TOKEN = os.getenv('NOAA_TOKEN')
-    CENSUS_API_KEY = os.getenv('CENSUS_API_KEY')
-    CDC_API_KEY = os.getenv('CDC_API_KEY')
-    
-    # Model config
-    OPENAI_MODEL = os.getenv('OPENAI_MODEL', 'gpt-3.5-turbo')
-    USE_GPT4 = os.getenv('USE_GPT4', 'False').lower() == 'true'
-    if USE_GPT4:
-        OPENAI_MODEL = 'gpt-4'
-    
-    # File handling
-    UPLOAD_FOLDER = os.getenv('UPLOAD_FOLDER', '/tmp/uploads')
-    EXPORT_FOLDER = os.getenv('EXPORT_FOLDER', '/tmp/exports')
-    MAX_CONTENT_LENGTH = 10 * 1024 * 1024  # 10MB
-    
-    # Optional storage
-    MONGODB_URI = os.getenv('MONGODB_URI')
-    REDIS_URL = os.getenv('REDIS_URL')
+app.config['MAX_CONTENT_LENGTH'] = 100 * 1024 * 1024  # 100MB max file size
+app.config['UPLOAD_FOLDER'] = 'uploads'
+app.config['EXPORT_FOLDER'] = 'exports'
 
-# Apply config
-app.config.from_object(Config)
+# Ensure required directories exist
+for folder in ['uploads', 'exports', 'temp']:
+    os.makedirs(folder, exist_ok=True)
 
-# Ensure directories exist
-os.makedirs(Config.UPLOAD_FOLDER, exist_ok=True)
-os.makedirs(Config.EXPORT_FOLDER, exist_ok=True)
+# Initialize services
+audio_processor = AudioProcessor()
+transcript_analyzer = TranscriptAnalyzer()
+fact_checker = ComprehensiveFactChecker()
+pdf_exporter = PDFExporter()
+job_manager = JobManager()
+summarizer = ContextAwareSummarizer()
 
-# Storage setup
-in_memory_jobs = {}
-mongo_client = None
-redis_client = None
+# Thread pool for async operations
+executor = ThreadPoolExecutor(max_workers=4)
 
-# Try to connect to MongoDB if configured
-if Config.MONGODB_URI:
-    try:
-        from pymongo import MongoClient
-        mongo_client = MongoClient(Config.MONGODB_URI, serverSelectionTimeoutMS=5000)
-        mongo_client.server_info()
-        logger.info("MongoDB connected successfully")
-    except Exception as e:
-        logger.warning(f"MongoDB connection failed: {str(e)}. Using in-memory storage.")
-        mongo_client = None
-else:
-    logger.info("MongoDB URI not configured. Using in-memory storage.")
+# Helper functions
+def allowed_file(filename):
+    """Check if file extension is allowed"""
+    ALLOWED_EXTENSIONS = {'mp3', 'mp4', 'wav', 'avi', 'mov', 'flac', 'm4a', 'webm'}
+    return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-# Try to connect to Redis if configured
-if Config.REDIS_URL:
-    try:
-        import redis
-        redis_client = redis.from_url(Config.REDIS_URL, socket_connect_timeout=5)
-        redis_client.ping()
-        logger.info("Redis connected successfully")
-    except Exception as e:
-        logger.warning(f"Redis connection failed: {str(e)}. Using in-memory storage.")
-        redis_client = None
-else:
-    logger.info("Redis URL not configured. Using in-memory storage.")
-
-# Import services - REQUIRED for app to function
-try:
-    from services.transcript import TranscriptProcessor
-    from services.claims import ClaimExtractor
-    from services.enhanced_factcheck import FactChecker, VERDICT_CATEGORIES
-    
-    # Initialize services
-    transcript_processor = TranscriptProcessor()
-    claim_extractor = ClaimExtractor(openai_api_key=Config.OPENAI_API_KEY)
-    fact_checker = FactChecker(Config)
-    logger.info("Services initialized successfully")
-except ImportError as e:
-    logger.error(f"CRITICAL: Failed to import required services: {str(e)}")
-    logger.error("Please ensure services directory exists with required files")
-    raise SystemExit(f"Cannot start application without services: {str(e)}")
-
-# Enhanced speaker database
-SPEAKER_DATABASE = {
-    'donald trump': {
-        'full_name': 'Donald J. Trump',
-        'role': '45th and 47th President of the United States',
-        'party': 'Republican',
-        'known_for': 'Real estate, reality TV, politics'
-    },
-    'joe biden': {
-        'full_name': 'Joseph R. Biden Jr.',
-        'role': '46th President of the United States',
-        'party': 'Democrat',
-        'known_for': 'Long Senate career, Vice President under Obama'
-    },
-    'kamala harris': {
-        'full_name': 'Kamala D. Harris',
-        'role': 'Vice President of the United States (2021-2025)',
-        'party': 'Democrat',
-        'known_for': 'First female VP, former Senator from California'
-    },
-    'jd vance': {
-        'full_name': 'James David Vance',
-        'role': 'Vice President of the United States (2025-)',
-        'party': 'Republican',
-        'known_for': 'Author of Hillbilly Elegy, Senator from Ohio'
-    }
-}
-
-# Job management functions
-def create_job(transcript: str) -> str:
-    """Create a new job"""
-    job_id = str(uuid.uuid4())
-    job_data = {
-        'id': job_id,
-        'status': 'processing',
-        'progress': 0,
-        'message': 'Starting analysis...',
-        'created': datetime.now().isoformat(),
-        'transcript': transcript[:1000],  # Store preview
-        'results': None
-    }
-    
-    # Store job
-    try:
-        if mongo_client:
-            mongo_client.factchecker.jobs.insert_one(job_data)
-        elif redis_client:
-            redis_client.setex(f"job:{job_id}", 3600, json.dumps(job_data))
-        else:
-            in_memory_jobs[job_id] = job_data
-    except Exception as e:
-        logger.error(f"Error storing job: {e}")
-        in_memory_jobs[job_id] = job_data
-    
-    return job_id
-
-def get_job(job_id: str) -> Optional[Dict]:
-    """Get job data"""
-    try:
-        if mongo_client:
-            job = mongo_client.factchecker.jobs.find_one({'id': job_id})
-            return job if job else None
-        elif redis_client:
-            data = redis_client.get(f"job:{job_id}")
-            return json.loads(data) if data else None
-        else:
-            return in_memory_jobs.get(job_id)
-    except Exception as e:
-        logger.error(f"Error getting job: {e}")
-        return in_memory_jobs.get(job_id)
-
-def update_job(job_id: str, updates: Dict):
-    """Update job data"""
-    try:
-        if mongo_client:
-            mongo_client.factchecker.jobs.update_one(
-                {'id': job_id},
-                {'$set': updates}
-            )
-        elif redis_client:
-            job_data = get_job(job_id)
-            if job_data:
-                job_data.update(updates)
-                redis_client.setex(f"job:{job_id}", 3600, json.dumps(job_data))
-        else:
-            if job_id in in_memory_jobs:
-                in_memory_jobs[job_id].update(updates)
-    except Exception as e:
-        logger.error(f"Error updating job {job_id}: {e}")
-        if job_id in in_memory_jobs:
-            in_memory_jobs[job_id].update(updates)
-
-def update_job_progress(job_id: str, progress: int, message: str):
+def update_job_progress(job_id: str, progress: int, status_message: str):
     """Update job progress"""
-    update_job(job_id, {
+    job_manager.update_job(job_id, {
         'progress': progress,
-        'message': message,
-        'status': 'failed' if progress < 0 else 'processing'
+        'status_message': status_message,
+        'last_updated': datetime.now().isoformat()
     })
 
+def run_async(coro):
+    """Run async coroutine in sync context"""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
+# Routes
+@app.route('/')
+def index():
+    """Main page"""
+    return render_template('index.html')
+
+@app.route('/upload', methods=['POST'])
+def upload_file():
+    """Handle file upload and start processing"""
+    try:
+        # Check if file was uploaded
+        if 'file' not in request.files:
+            return jsonify({'error': 'No file provided'}), 400
+        
+        file = request.files['file']
+        if file.filename == '':
+            return jsonify({'error': 'No file selected'}), 400
+        
+        if not allowed_file(file.filename):
+            return jsonify({'error': 'Invalid file type. Please upload an audio or video file.'}), 400
+        
+        # Save uploaded file
+        filename = secure_filename(file.filename)
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        unique_filename = f"{timestamp}_{filename}"
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], unique_filename)
+        file.save(filepath)
+        
+        # Create job
+        job_id = str(uuid.uuid4())
+        job_data = {
+            'id': job_id,
+            'status': 'processing',
+            'progress': 0,
+            'filename': filename,
+            'filepath': filepath,
+            'created': datetime.now().isoformat(),
+            'status_message': 'Starting processing...'
+        }
+        job_manager.create_job(job_id, job_data)
+        
+        # Start processing in background
+        executor.submit(process_transcript, job_id, filepath)
+        
+        return jsonify({
+            'success': True,
+            'job_id': job_id,
+            'message': 'File uploaded successfully. Processing started.'
+        })
+        
+    except Exception as e:
+        logger.error(f"Upload error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/analyze_text', methods=['POST'])
+def analyze_text():
+    """Analyze pasted text transcript"""
+    try:
+        data = request.get_json()
+        transcript = data.get('transcript', '').strip()
+        
+        if not transcript:
+            return jsonify({'error': 'No transcript provided'}), 400
+        
+        if len(transcript) < 50:
+            return jsonify({'error': 'Transcript too short. Please provide more content.'}), 400
+        
+        # Create job
+        job_id = str(uuid.uuid4())
+        job_data = {
+            'id': job_id,
+            'status': 'processing',
+            'progress': 0,
+            'source_type': 'text',
+            'created': datetime.now().isoformat(),
+            'status_message': 'Starting analysis...'
+        }
+        job_manager.create_job(job_id, job_data)
+        
+        # Start processing in background
+        executor.submit(process_text_transcript, job_id, transcript)
+        
+        return jsonify({
+            'success': True,
+            'job_id': job_id,
+            'message': 'Analysis started.'
+        })
+        
+    except Exception as e:
+        logger.error(f"Text analysis error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/job/<job_id>')
+def get_job_status(job_id):
+    """Get job status and results"""
+    try:
+        job = job_manager.get_job(job_id)
+        if not job:
+            return jsonify({'error': 'Job not found'}), 404
+        
+        return jsonify(job)
+        
+    except Exception as e:
+        logger.error(f"Job status error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/results/<job_id>')
+def view_results(job_id):
+    """View results page"""
+    try:
+        job = job_manager.get_job(job_id)
+        if not job:
+            return render_template('error.html', error="Results not found"), 404
+        
+        if job['status'] != 'completed':
+            return redirect(url_for('processing', job_id=job_id))
+        
+        return render_template('results.html', results=job, job_id=job_id)
+        
+    except Exception as e:
+        logger.error(f"Results view error: {e}")
+        return render_template('error.html', error=str(e)), 500
+
+@app.route('/processing/<job_id>')
+def processing(job_id):
+    """Processing status page"""
+    return render_template('processing.html', job_id=job_id)
+
+@app.route('/export/<job_id>')
+def export_results(job_id):
+    """Export results as PDF"""
+    try:
+        job = job_manager.get_job(job_id)
+        if not job or job['status'] != 'completed':
+            return jsonify({'error': 'Results not ready for export'}), 400
+        
+        # Generate PDF
+        pdf_path = pdf_exporter.export_to_pdf(job)
+        
+        return send_file(
+            pdf_path,
+            as_attachment=True,
+            download_name=f'fact_check_report_{job_id}.pdf',
+            mimetype='application/pdf'
+        )
+        
+    except Exception as e:
+        logger.error(f"Export error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/demo')
+def demo():
+    """Demo page with example transcripts"""
+    return render_template('demo.html')
+
+@app.route('/api/check_claim', methods=['POST'])
+def api_check_claim():
+    """API endpoint for single claim checking"""
+    try:
+        data = request.get_json()
+        claim = data.get('claim', '').strip()
+        
+        if not claim:
+            return jsonify({'error': 'No claim provided'}), 400
+        
+        # Check single claim
+        result = run_async(fact_checker.check_claim_comprehensive(claim, {}))
+        
+        return jsonify({
+            'success': True,
+            'result': result
+        })
+        
+    except Exception as e:
+        logger.error(f"API check error: {e}")
+        return jsonify({'error': str(e)}), 500
+
+# Processing functions
+def process_transcript(job_id: str, filepath: str):
+    """Process uploaded audio/video file"""
+    try:
+        # Update progress
+        update_job_progress(job_id, 10, "Extracting audio from file...")
+        
+        # Extract transcript
+        transcript_data = audio_processor.extract_transcript(filepath)
+        
+        if not transcript_data or not transcript_data.get('transcript'):
+            raise Exception("Failed to extract transcript from audio")
+        
+        transcript = transcript_data['transcript']
+        
+        # Continue with text processing
+        process_text_transcript(job_id, transcript, source_type='audio')
+        
+    except Exception as e:
+        logger.error(f"Processing error for job {job_id}: {e}")
+        job_manager.update_job(job_id, {
+            'status': 'failed',
+            'error': str(e),
+            'completed': datetime.now().isoformat()
+        })
+    finally:
+        # Cleanup uploaded file
+        try:
+            if os.path.exists(filepath):
+                os.remove(filepath)
+        except:
+            pass
+
+def process_text_transcript(job_id: str, transcript: str, source_type: str = 'text'):
+    """Process text transcript"""
+    try:
+        # Update progress
+        update_job_progress(job_id, 20, "Analyzing transcript structure...")
+        
+        # Analyze transcript
+        claims_data = transcript_analyzer.extract_claims_enhanced(transcript)
+        
+        if not claims_data.get('claims'):
+            raise Exception("No verifiable claims found in transcript")
+        
+        # Extract data
+        claims = claims_data.get('claims', [])
+        speakers = claims_data.get('speakers', {})
+        topics = claims_data.get('topics', [])
+        
+        logger.info(f"Extracted {len(claims)} claims from {len(speakers)} speakers")
+        update_job_progress(job_id, 30, f"Verifying {len(claims)} claims...")
+        
+        # Fact check each claim
+        fact_checks = []
+        for i, claim in enumerate(claims):
+            try:
+                # Update progress
+                progress = 30 + int((i / len(claims)) * 60)
+                update_job_progress(job_id, progress, f"Verifying claim {i+1} of {len(claims)}...")
+                
+                # Fact check with enhanced verification
+                result = run_async(fact_checker.check_claim_comprehensive(
+                    claim['text'],
+                    {
+                        'speaker': claim.get('speaker', 'Unknown'),
+                        'context': claim.get('context', '')
+                    }
+                ))
+                
+                result['speaker'] = claim.get('speaker', 'Unknown')
+                result['claim'] = claim['text']
+                result['context'] = claim.get('context', '')
+                fact_checks.append(result)
+                
+            except Exception as e:
+                logger.error(f"Error checking claim {i}: {e}")
+                fact_checks.append({
+                    'claim': claim['text'],
+                    'verdict': 'unverifiable',
+                    'explanation': f"Error during verification: {str(e)}",
+                    'sources': [],
+                    'speaker': claim.get('speaker', 'Unknown')
+                })
+        
+        # Calculate credibility score
+        update_job_progress(job_id, 90, "Calculating credibility score...")
+        credibility_score = calculate_credibility_score_enhanced(fact_checks)
+        
+        # Generate enhanced summary
+        summary_results = {
+            'credibility_score': credibility_score,
+            'fact_checks': fact_checks,
+            'total_claims': len(claims),
+            'speakers': speakers,
+            'topics': topics
+        }
+        enhanced_summary = summarizer.generate_summary(summary_results)
+        
+        # Prepare final results
+        results = {
+            'job_id': job_id,
+            'status': 'completed',
+            'created': datetime.now().isoformat(),
+            'source_type': source_type,
+            'transcript_preview': transcript[:500] + '...' if len(transcript) > 500 else transcript,
+            'total_claims': len(claims),
+            'checked_claims': len(fact_checks),
+            'speakers': speakers,
+            'topics': topics,
+            'fact_checks': fact_checks,
+            'credibility_score': credibility_score,
+            'enhanced_summary': enhanced_summary,
+            'completed': datetime.now().isoformat()
+        }
+        
+        # Save results
+        job_manager.update_job(job_id, results)
+        
+        logger.info(f"Job {job_id} completed successfully")
+        
+    except Exception as e:
+        logger.error(f"Processing error for job {job_id}: {e}")
+        job_manager.update_job(job_id, {
+            'status': 'failed',
+            'error': str(e),
+            'completed': datetime.now().isoformat()
+        })
+
 def calculate_credibility_score_enhanced(fact_checks: List[Dict]) -> Dict:
-    """Calculate overall credibility score with enhanced verdicts"""
+    """Calculate enhanced credibility score based on verdicts"""
     if not fact_checks:
         return {
             'score': 0,
-            'label': 'No claims verified',
+            'label': 'No claims to evaluate',
             'verdict_counts': {},
-            'breakdown': {}
+            'total_claims': 0
         }
     
-    # Count each verdict type
+    # Count verdicts
     verdict_counts = {}
     total_score = 0
     scorable_claims = 0
+    
+    # Verdict scoring weights
+    verdict_scores = {
+        'verified_true': 100,
+        'verified_false': 0,
+        'partially_accurate': 50,
+        'misleading': 20,
+        'opinion': None,  # Don't score opinions
+        'unverifiable': None,  # Don't score unverifiable
+        'needs_context': None
+    }
     
     for fc in fact_checks:
         verdict = fc.get('verdict', 'unverifiable')
         verdict_counts[verdict] = verdict_counts.get(verdict, 0) + 1
         
-        # Get score for this verdict
-        verdict_info = VERDICT_CATEGORIES.get(verdict, VERDICT_CATEGORIES['unverifiable'])
-        if verdict_info.get('score') is not None:
-            total_score += verdict_info['score']
+        # Calculate score
+        if verdict in verdict_scores and verdict_scores[verdict] is not None:
+            total_score += verdict_scores[verdict]
             scorable_claims += 1
     
     # Calculate weighted score
@@ -241,26 +423,17 @@ def calculate_credibility_score_enhanced(fact_checks: List[Dict]) -> Dict:
     else:
         score = 50  # Default to middle if no scorable claims
     
-    # Determine overall label based on new verdict system
+    # Determine overall label
     verified_false = verdict_counts.get('verified_false', 0)
     verified_true = verdict_counts.get('verified_true', 0)
-    mostly_true = verdict_counts.get('mostly_true', 0)
-    mostly_false = verdict_counts.get('mostly_false', 0)
-    misleading = verdict_counts.get('misleading', 0)
-    lacks_context = verdict_counts.get('lacks_context', 0)
     partially_accurate = verdict_counts.get('partially_accurate', 0)
     unverifiable = verdict_counts.get('unverifiable', 0)
     
-    # Enhanced label determination
-    if verified_true + mostly_true > 0 and verified_false + mostly_false + misleading == 0 and score >= 85:
+    if verified_true > 0 and verified_false == 0 and score >= 85:
         label = 'Highly Credible - Claims Verified'
-    elif verified_true + mostly_true > verified_false + mostly_false + misleading and score >= 70:
+    elif verified_true > verified_false and score >= 70:
         label = 'Generally Credible - Mostly Verified'
-    elif misleading >= 2:
-        label = 'Deceptive - Multiple Misleading Claims'
-    elif lacks_context >= 2:
-        label = 'Missing Context - Important Information Omitted'
-    elif verified_false + mostly_false > verified_true + mostly_true:
+    elif verified_false > verified_true:
         label = 'Not Credible - Multiple False Claims'
     elif unverifiable > (verified_true + verified_false):
         label = 'Difficult to Verify - Limited Evidence'
@@ -276,30 +449,55 @@ def calculate_credibility_score_enhanced(fact_checks: List[Dict]) -> Dict:
         'total_claims': len(fact_checks),
         'breakdown': {
             'verified_true': verified_true,
-            'mostly_true': mostly_true,
             'verified_false': verified_false,
-            'mostly_false': mostly_false,
-            'misleading': misleading,
-            'lacks_context': lacks_context,
             'partially_accurate': partially_accurate,
             'unverifiable': unverifiable,
-            'opinion': verdict_counts.get('opinion', 0)
+            'opinion': verdict_counts.get('opinion', 0),
+            'misleading': verdict_counts.get('misleading', 0),
+            'needs_context': verdict_counts.get('needs_context', 0)
         }
     }
 
-def generate_enhanced_conversational_summary(results: Dict) -> str:
-    """Generate a comprehensive summary with insights"""
+# Error handlers
+@app.errorhandler(404)
+def not_found(error):
+    return render_template('error.html', error="Page not found"), 404
+
+@app.errorhandler(500)
+def server_error(error):
+    return render_template('error.html', error="Internal server error"), 500
+
+@app.errorhandler(413)
+def request_too_large(error):
+    return jsonify({'error': 'File too large. Maximum size is 100MB.'}), 413
+
+# Health check endpoint
+@app.route('/health')
+def health_check():
+    """Health check endpoint for monitoring"""
+    return jsonify({
+        'status': 'healthy',
+        'timestamp': datetime.now().isoformat(),
+        'version': '1.0.0'
+    })
+
+# Main entry point
+if __name__ == '__main__':
+    # Check for required environment variables
+    required_vars = ['OPENAI_API_KEY']
+    missing_vars = [var for var in required_vars if not os.getenv(var)]
     
-    cred_score = results.get('credibility_score', {})
-    score = cred_score.get('score', 0)
-    label = cred_score.get('label', 'Unknown')
-    verdict_counts = cred_score.get('verdict_counts', {})
-    total_claims = results.get('total_claims', 0)
+    if missing_vars:
+        logger.error(f"Missing required environment variables: {missing_vars}")
+        logger.error("Please set these in your .env file or environment")
+        exit(1)
     
-    # Build summary
-    summary_parts = []
+    # Get port from environment or default
+    port = int(os.getenv('PORT', 5000))
     
-    # Opening assessment
-    summary_parts.append(f"📊 Fact-Check Analysis: {label}")
-    summary_parts.append(f"Overall Accuracy Score: {score}%")
-    summary_parts.append(f"Total Claims Analyzed: {total_claims}")
+    # Run the app
+    app.run(
+        host='0.0.0.0',
+        port=port,
+        debug=False  # Never use debug=True in production
+    )
