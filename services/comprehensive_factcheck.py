@@ -13,7 +13,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import quote
 
-# Import all our unused services
+# Import all our services
 from .api_checkers import APICheckers
 from .context_resolver import ContextResolver
 from .factcheck_history import FactCheckHistory
@@ -93,15 +93,13 @@ class ComprehensiveFactChecker:
     def __init__(self, config):
         self.config = config
         
-        # Initialize all API keys
+        # Initialize all API keys (excluding scraper)
         self.api_keys = {
             'google': getattr(config, 'GOOGLE_FACTCHECK_API_KEY', None),
             'openai': getattr(config, 'OPENAI_API_KEY', None),
             'fred': getattr(config, 'FRED_API_KEY', None),
             'news': getattr(config, 'NEWS_API_KEY', None),
             'mediastack': getattr(config, 'MEDIASTACK_API_KEY', None),
-            'scraperapi': getattr(config, 'SCRAPERAPI_KEY', None),
-            'scrapingbee': getattr(config, 'SCRAPINGBEE_API_KEY', None),
             'noaa': getattr(config, 'NOAA_TOKEN', None),
             'census': getattr(config, 'CENSUS_API_KEY', None),
             'cdc': getattr(config, 'CDC_API_KEY', None),
@@ -202,11 +200,7 @@ class ComprehensiveFactChecker:
             if 'climate' in claim.lower() or 'weather' in claim.lower():
                 tasks.append(('noaa', self.api_checkers.check_noaa_data(claim)))
         
-        # 7. Web search via ScraperAPI
-        if self.api_keys['scraperapi']:
-            tasks.append(('scraper', self._search_with_scraperapi(claim)))
-        
-        # 8. Academic sources
+        # 7. Academic sources
         if self._is_academic_claim(claim):
             tasks.append(('academic', self.api_checkers.check_semantic_scholar(claim)))
         
@@ -266,177 +260,145 @@ class ComprehensiveFactChecker:
             return self._create_verdict(
                 'needs_context',
                 'Unable to verify through available sources. Consider checking primary sources directly.',
-                sources=sources_used
+                confidence=30
             )
         
-        # Weight verdicts
-        verdict_scores = {}
+        # Calculate weighted verdict
+        verdict_scores = {
+            'true': 1.0,
+            'mostly_true': 0.8,
+            'nearly_true': 0.7,
+            'mixed': 0.5,
+            'misleading': 0.3,
+            'mostly_false': 0.2,
+            'false': 0.0
+        }
+        
+        weighted_score = 0
+        total_weight = 0
+        verdict_count = defaultdict(int)
+        
         for v in verdicts:
-            verdict_type = v['verdict']
-            score = v['confidence'] * v['weight']
+            verdict_type = self._normalize_verdict(v['verdict'])
+            weight = v['weight']
+            verdict_count[verdict_type] += 1
             
-            if verdict_type not in verdict_scores:
-                verdict_scores[verdict_type] = 0
-            verdict_scores[verdict_type] += score
+            if verdict_type in verdict_scores:
+                weighted_score += verdict_scores[verdict_type] * weight
+                total_weight += weight
+                total_confidence += v['confidence'] * weight
         
-        # Get consensus verdict
-        final_verdict = max(verdict_scores.items(), key=lambda x: x[1])[0]
-        
-        # Calculate confidence
-        total_weight = sum(v['weight'] for v in verdicts)
-        avg_confidence = sum(v['confidence'] * v['weight'] for v in verdicts) / total_weight if total_weight > 0 else 50
+        # Determine final verdict
+        if total_weight > 0:
+            final_score = weighted_score / total_weight
+            avg_confidence = int(total_confidence / total_weight)
+            
+            if final_score >= 0.85:
+                final_verdict = 'true'
+            elif final_score >= 0.70:
+                final_verdict = 'mostly_true'
+            elif final_score >= 0.60:
+                final_verdict = 'nearly_true'
+            elif final_score >= 0.40:
+                final_verdict = 'misleading'
+            elif final_score >= 0.20:
+                final_verdict = 'mostly_false'
+            else:
+                final_verdict = 'false'
+        else:
+            final_verdict = 'needs_context'
+            avg_confidence = 30
         
         # Build explanation
-        explanation = f"Based on {len(verdicts)} sources: " + " | ".join(explanations[:3])
+        explanation = ' '.join(explanations) if explanations else 'Based on available evidence.'
         
         # Add historical context
-        if historical:
-            if historical.get('previously_checked'):
-                explanation += f" (Previously checked {historical['check_count']} times)"
-            elif historical.get('source_history'):
-                reliability = historical['source_history'].get('reliability_score', 0)
-                if reliability < 0.5:
-                    explanation += f" (Note: {speaker} has low fact-check reliability: {reliability:.0%})"
+        if historical and historical.get('pattern'):
+            explanation += f" Note: {speaker} has a pattern of {historical['pattern']}."
         
         return self._create_verdict(
             final_verdict,
             explanation,
-            confidence=int(avg_confidence),
+            confidence=avg_confidence,
             sources=sources_used
         )
     
-    async def _search_with_scraperapi(self, claim: str) -> Dict:
-        """Enhanced web search using ScraperAPI"""
-        try:
-            # Build search query
-            search_query = quote(claim[:150])
-            fact_check_query = quote(f"{claim[:100]} fact check")
-            
-            # Search both general and fact-check specific
-            urls = [
-                f"https://www.google.com/search?q={search_query}",
-                f"https://www.google.com/search?q={fact_check_query}"
-            ]
-            
-            results_found = False
-            explanations = []
-            
-            async with aiohttp.ClientSession() as session:
-                for url in urls:
-                    scraper_url = f"http://api.scraperapi.com?api_key={self.api_keys['scraperapi']}&url={url}"
-                    
-                    async with session.get(scraper_url, timeout=aiohttp.ClientTimeout(total=15)) as response:
-                        if response.status == 200:
-                            content = await response.text()
-                            
-                            # Look for fact-checking indicators
-                            if 'fact-check' in content.lower():
-                                results_found = True
-                                
-                                if 'false' in content.lower() or 'incorrect' in content.lower():
-                                    return {
-                                        'found': True,
-                                        'verdict': 'false',
-                                        'confidence': 75,
-                                        'explanation': 'Multiple sources indicate this claim is false',
-                                        'source': 'Web Search',
-                                        'weight': 0.7
-                                    }
-                                elif 'true' in content.lower() or 'correct' in content.lower():
-                                    return {
-                                        'found': True,
-                                        'verdict': 'true',
-                                        'confidence': 75,
-                                        'explanation': 'Multiple sources support this claim',
-                                        'source': 'Web Search',
-                                        'weight': 0.7
-                                    }
-            
-            if results_found:
-                return {
-                    'found': True,
-                    'verdict': 'mixed',
-                    'confidence': 60,
-                    'explanation': 'Found mixed information about this claim',
-                    'source': 'Web Search',
-                    'weight': 0.6
-                }
-                
-        except Exception as e:
-            logger.error(f"ScraperAPI error: {e}")
-        
-        return {'found': False}
-    
     async def _check_with_ai_comprehensive(self, claim: str) -> Dict:
-        """Comprehensive AI analysis"""
+        """Use AI for comprehensive fact-checking"""
         try:
-            prompt = f"""You are a professional fact-checker with access to information up to early 2024.
+            prompt = f"""Fact-check this claim comprehensively:
+Claim: "{claim}"
 
-Analyze this claim: "{claim}"
+Analyze:
+1. Is this claim verifiable?
+2. What are the key facts to check?
+3. Is the claim true, false, or partially true?
+4. What context is important?
 
-Instructions:
-1. First, determine if this claim can be verified with known facts
-2. If verifiable, provide the verdict based on your knowledge
-3. Be specific about what makes it true, false, or misleading
-4. Cite specific facts, dates, or figures when possible
-5. Only say "needs_context" if you truly cannot evaluate it
+Provide a clear verdict (TRUE/FALSE/MIXED/CANNOT_VERIFY) and explanation.
+Focus on factual accuracy only."""
 
-Format your response as:
-VERDICT: [true/mostly_true/misleading/mostly_false/false/needs_context]
-CONFIDENCE: [0-100]
-EXPLANATION: [Detailed explanation with specific facts]
-KEY_FACTS: [Bullet points of verifiable facts]
-SEARCH_TERMS: [Terms to search for verification]"""
-
-            # Use asyncio-compatible method
-            loop = asyncio.get_event_loop()
-            response = await loop.run_in_executor(
-                None,
-                lambda: self.openai_client.chat.completions.create(
-                    model='gpt-4-1106-preview' if 'gpt-4' in str(self.config.OPENAI_MODEL) else 'gpt-3.5-turbo',
-                    messages=[
-                        {"role": "system", "content": "You are a professional fact-checker. Be specific and decisive."},
-                        {"role": "user", "content": prompt}
-                    ],
-                    temperature=0.2,
-                    max_tokens=500
-                )
+            response = await self.openai_client.chat.completions.acreate(
+                model='gpt-4' if self.config.USE_GPT4 else 'gpt-3.5-turbo',
+                messages=[
+                    {"role": "system", "content": "You are a fact-checker. Be objective and accurate."},
+                    {"role": "user", "content": prompt}
+                ],
+                temperature=0.1
             )
             
-            result = response.choices[0].message.content.strip()
+            result = response.choices[0].message.content
             
             # Parse response
-            verdict = self._extract_field(result, 'VERDICT')
-            confidence = int(self._extract_field(result, 'CONFIDENCE', '70'))
-            explanation = self._extract_field(result, 'EXPLANATION', '')
-            key_facts = self._extract_field(result, 'KEY_FACTS', '')
-            search_terms = self._extract_field(result, 'SEARCH_TERMS', '')
+            verdict = 'needs_context'
+            if 'TRUE' in result.upper():
+                verdict = 'true'
+            elif 'FALSE' in result.upper():
+                verdict = 'false'
+            elif 'MIXED' in result.upper() or 'PARTIALLY' in result.upper():
+                verdict = 'mixed'
             
-            if verdict and verdict.lower() != 'needs_context':
-                full_explanation = explanation
-                if key_facts:
-                    full_explanation += f" Key facts: {key_facts}"
-                
-                return {
-                    'found': True,
-                    'verdict': self._normalize_verdict(verdict),
-                    'confidence': confidence,
-                    'explanation': full_explanation[:500],
-                    'source': 'AI Analysis',
-                    'weight': 0.8,
-                    'search_terms': search_terms
-                }
-                
+            # Extract explanation
+            explanation = self._extract_explanation(result)
+            confidence = self._extract_confidence(result)
+            
+            return {
+                'found': True,
+                'verdict': verdict,
+                'explanation': explanation,
+                'confidence': confidence,
+                'source': 'AI Analysis',
+                'weight': 0.7
+            }
+            
         except Exception as e:
             logger.error(f"AI comprehensive check error: {e}")
-        
-        return {'found': False}
+            return {'found': False}
     
-    def _extract_field(self, text: str, field: str, default: str = '') -> str:
-        """Extract field from structured text"""
-        pattern = rf'{field}:\s*(.+?)(?=\n[A-Z]+:|$)'
+    def _extract_explanation(self, text: str, default: str = "See analysis") -> str:
+        """Extract explanation from text"""
+        # Try to find explanation section
+        pattern = r'(?:Explanation|Analysis|Reasoning|Evidence):\s*(.+?)(?=\n[A-Z]+:|$)'
         match = re.search(pattern, text, re.DOTALL)
         return match.group(1).strip() if match else default
+    
+    def _extract_confidence(self, text: str) -> int:
+        """Extract confidence from text"""
+        # Look for confidence mentions
+        pattern = r'(?:confidence|certainty):\s*(\d+)%?'
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            return int(match.group(1))
+        
+        # Default based on language
+        if any(word in text.lower() for word in ['definitely', 'certainly', 'clearly']):
+            return 90
+        elif any(word in text.lower() for word in ['likely', 'probably', 'appears']):
+            return 70
+        elif any(word in text.lower() for word in ['possibly', 'might', 'could']):
+            return 50
+        else:
+            return 60
     
     def _is_economic_claim(self, claim: str) -> bool:
         """Check if claim is about economic data"""
