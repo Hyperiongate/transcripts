@@ -1,4 +1,4 @@
-"""
+from collections import defaultdict"""
 Comprehensive Fact-Checking Service that uses ALL available APIs
 """
 import re
@@ -12,6 +12,7 @@ from datetime import datetime
 import time
 from concurrent.futures import ThreadPoolExecutor
 from urllib.parse import quote
+from collections import defaultdict
 
 # Import all our services
 from .api_checkers import APICheckers
@@ -338,8 +339,8 @@ Analyze:
 Provide a clear verdict (TRUE/FALSE/MIXED/CANNOT_VERIFY) and explanation.
 Focus on factual accuracy only."""
 
-            response = await self.openai_client.chat.completions.acreate(
-                model='gpt-4' if self.config.USE_GPT4 else 'gpt-3.5-turbo',
+            response = self.openai_client.chat.completions.create(
+                model='gpt-4' if hasattr(self.config, 'USE_GPT4') and self.config.USE_GPT4 else 'gpt-3.5-turbo',
                 messages=[
                     {"role": "system", "content": "You are a fact-checker. Be objective and accurate."},
                     {"role": "user", "content": prompt}
