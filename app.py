@@ -89,7 +89,8 @@ else:
 try:
     from services.transcript import TranscriptProcessor
     from services.claims import ClaimExtractor
-    from services.enhanced_factcheck import FactChecker, VERDICT_CATEGORIES
+    # Use comprehensive fact checker instead of the basic enhanced one
+    from services.comprehensive_factcheck import ComprehensiveFactChecker as FactChecker, VERDICT_CATEGORIES
     
     # Initialize services
     transcript_processor = TranscriptProcessor()
