@@ -37,6 +37,7 @@ class Config:
     
     # Model config
     OPENAI_MODEL = os.getenv('OPENAI_MODEL', 'gpt-3.5-turbo')
+    USE_GPT4 = os.getenv('USE_GPT4', 'False').lower() == 'true'
     
     # File handling
     UPLOAD_FOLDER = os.getenv('UPLOAD_FOLDER', '/tmp/uploads')
@@ -89,7 +90,7 @@ else:
 try:
     from services.transcript import TranscriptProcessor
     from services.claims import ClaimExtractor
-    # Use comprehensive fact checker instead of the basic enhanced one
+    # Use comprehensive fact checker with all APIs
     from services.comprehensive_factcheck import ComprehensiveFactChecker as FactChecker, VERDICT_CATEGORIES
     
     # Initialize services
