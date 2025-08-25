@@ -115,10 +115,23 @@ const VERDICT_MAPPINGS = {
 // Global variables
 let currentJobId = null;
 let pollInterval = null;
+let currentFile = null;
 
 // Initialize when DOM is loaded
 document.addEventListener('DOMContentLoaded', function() {
-    // Initialize tabs
+    initializeApp();
+});
+
+// Initialize application
+function initializeApp() {
+    initializeTabs();
+    initializeCharacterCounter();
+    initializeFileUpload();
+    initializeAnalyzeButton();
+}
+
+// Initialize tabs functionality
+function initializeTabs() {
     const tabButtons = document.querySelectorAll('.tab-button');
     const panels = document.querySelectorAll('.input-panel');
     
@@ -134,85 +147,157 @@ document.addEventListener('DOMContentLoaded', function() {
             document.getElementById(`${targetTab}-panel`).classList.add('active');
         });
     });
-    
-    // Character counter
+}
+
+// Initialize character counter
+function initializeCharacterCounter() {
     const textInput = document.getElementById('text-input');
     const charCount = document.getElementById('char-count');
     
-    if (textInput) {
+    if (textInput && charCount) {
         textInput.addEventListener('input', () => {
-            charCount.textContent = textInput.value.length;
+            const length = textInput.value.length;
+            charCount.textContent = length.toLocaleString();
             
             // Warn if approaching limit
-            if (textInput.value.length > 45000) {
+            if (length > 45000) {
                 charCount.style.color = '#ef4444';
             } else {
                 charCount.style.color = '#6b7280';
             }
         });
     }
-    
-    // YouTube input handler
-    const youtubeInput = document.getElementById('youtube-url');
-    if (youtubeInput) {
-        youtubeInput.addEventListener('paste', (e) => {
-            setTimeout(() => {
-                validateYouTubeUrl(e.target.value);
-            }, 100);
-        });
-    }
-});
+}
 
-// Validate YouTube URL
-function validateYouTubeUrl(url) {
-    const regex = /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})/;
-    const match = url.match(regex);
+// Initialize file upload functionality
+function initializeFileUpload() {
+    const fileInput = document.getElementById('file-input');
+    const dropZone = document.getElementById('file-drop-zone');
     
-    const errorDiv = document.getElementById('youtube-error');
-    const submitBtn = document.querySelector('.submit-button');
+    if (!fileInput || !dropZone) return;
     
-    if (match) {
-        errorDiv.style.display = 'none';
-        submitBtn.disabled = false;
-        return match[1];
-    } else if (url.length > 0) {
-        errorDiv.style.display = 'block';
-        errorDiv.textContent = 'Please enter a valid YouTube URL';
-        submitBtn.disabled = true;
-        return null;
+    // Click to browse
+    dropZone.addEventListener('click', () => {
+        fileInput.click();
+    });
+    
+    // File selected
+    fileInput.addEventListener('change', handleFileSelect);
+    
+    // Drag and drop
+    dropZone.addEventListener('dragover', (e) => {
+        e.preventDefault();
+        dropZone.classList.add('dragover');
+    });
+    
+    dropZone.addEventListener('dragleave', () => {
+        dropZone.classList.remove('dragover');
+    });
+    
+    dropZone.addEventListener('drop', (e) => {
+        e.preventDefault();
+        dropZone.classList.remove('dragover');
+        
+        const files = e.dataTransfer.files;
+        if (files.length > 0) {
+            handleFile(files[0]);
+        }
+    });
+}
+
+// Initialize analyze button
+function initializeAnalyzeButton() {
+    const analyzeButton = document.getElementById('analyze-button');
+    if (analyzeButton) {
+        analyzeButton.addEventListener('click', startAnalysis);
     }
 }
 
-// Submit transcript for analysis
-async function analyzeTranscript() {
+// Handle file selection
+function handleFileSelect(e) {
+    const file = e.target.files[0];
+    if (file) {
+        handleFile(file);
+    }
+}
+
+// Handle file processing
+function handleFile(file) {
+    // Validate file
+    const maxSize = 10 * 1024 * 1024; // 10MB
+    const allowedTypes = ['.txt', '.srt', '.vtt'];
+    const fileExtension = '.' + file.name.split('.').pop().toLowerCase();
+    
+    if (file.size > maxSize) {
+        showError('File too large. Maximum size is 10MB.');
+        return;
+    }
+    
+    if (!allowedTypes.includes(fileExtension)) {
+        showError('Invalid file type. Please upload TXT, SRT, or VTT files.');
+        return;
+    }
+    
+    currentFile = file;
+    showFileInfo(file);
+}
+
+// Show file information
+function showFileInfo(file) {
+    const fileInfo = document.getElementById('file-info');
+    const fileName = document.getElementById('file-name');
+    const dropZone = document.getElementById('file-drop-zone');
+    
+    if (fileInfo && fileName && dropZone) {
+        fileName.textContent = file.name;
+        fileInfo.style.display = 'flex';
+        dropZone.style.display = 'none';
+    }
+}
+
+// Remove selected file
+function removeFile() {
+    const fileInput = document.getElementById('file-input');
+    const fileInfo = document.getElementById('file-info');
+    const dropZone = document.getElementById('file-drop-zone');
+    
+    if (fileInput) fileInput.value = '';
+    if (fileInfo) fileInfo.style.display = 'none';
+    if (dropZone) dropZone.style.display = 'block';
+    
+    currentFile = null;
+}
+
+// Start analysis - main function called by button
+async function startAnalysis() {
     const activePanel = document.querySelector('.input-panel.active');
     const tabType = activePanel.id.replace('-panel', '');
     
     let transcript = '';
     
-    if (tabType === 'text') {
-        transcript = document.getElementById('text-input').value;
-        if (!transcript.trim()) {
-            showError('Please enter a transcript to analyze');
-            return;
+    try {
+        if (tabType === 'text') {
+            transcript = document.getElementById('text-input').value;
+            if (!transcript.trim()) {
+                showError('Please enter a transcript to analyze');
+                return;
+            }
+        } else if (tabType === 'file') {
+            if (!currentFile) {
+                showError('Please select a file to analyze');
+                return;
+            }
+            transcript = await readFileContent(currentFile);
         }
-    } else if (tabType === 'youtube') {
-        const url = document.getElementById('youtube-url').value;
-        const videoId = validateYouTubeUrl(url);
-        if (!videoId) {
-            showError('Please enter a valid YouTube URL');
+        
+        if (transcript.length > 50000) {
+            showError('Transcript too long. Maximum 50,000 characters allowed.');
             return;
         }
         
-        // TODO: Implement YouTube transcript extraction
-        showError('YouTube feature coming soon!');
-        return;
-    }
-    
-    // Show loading state
-    showLoading();
-    
-    try {
+        // Show loading state
+        showProgress();
+        
         const response = await fetch('/api/analyze', {
             method: 'POST',
             headers: {
@@ -222,7 +307,8 @@ async function analyzeTranscript() {
         });
         
         if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
+            const errorData = await response.json();
+            throw new Error(errorData.error || `HTTP error! status: ${response.status}`);
         }
         
         const data = await response.json();
@@ -232,9 +318,19 @@ async function analyzeTranscript() {
         pollForResults();
         
     } catch (error) {
-        hideLoading();
+        hideProgress();
         showError('Error starting analysis: ' + error.message);
     }
+}
+
+// Read file content
+function readFileContent(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = (e) => resolve(e.target.result);
+        reader.onerror = () => reject(new Error('Failed to read file'));
+        reader.readAsText(file);
+    });
 }
 
 // Poll for job results
@@ -245,6 +341,11 @@ function pollForResults() {
     pollInterval = setInterval(async () => {
         try {
             const response = await fetch(`/api/status/${currentJobId}`);
+            
+            if (!response.ok) {
+                throw new Error(`Status check failed: ${response.status}`);
+            }
+            
             const data = await response.json();
             
             // Update progress
@@ -253,25 +354,30 @@ function pollForResults() {
             if (data.status === 'completed') {
                 clearInterval(pollInterval);
                 const resultsResponse = await fetch(`/api/results/${currentJobId}`);
+                
+                if (!resultsResponse.ok) {
+                    throw new Error('Failed to get results');
+                }
+                
                 const results = await resultsResponse.json();
                 displayResults(results);
-                hideLoading();
+                hideProgress();
             } else if (data.status === 'failed') {
                 clearInterval(pollInterval);
-                hideLoading();
+                hideProgress();
                 showError('Analysis failed: ' + (data.error || 'Unknown error'));
             }
             
             attempts++;
             if (attempts > maxAttempts) {
                 clearInterval(pollInterval);
-                hideLoading();
+                hideProgress();
                 showError('Analysis timed out. Please try again.');
             }
             
         } catch (error) {
             clearInterval(pollInterval);
-            hideLoading();
+            hideProgress();
             showError('Error checking status: ' + error.message);
         }
     }, 1000); // Poll every second
@@ -279,103 +385,105 @@ function pollForResults() {
 
 // Display results with enhanced visuals
 function displayResults(results) {
+    hideProgress();
     document.getElementById('input-section').style.display = 'none';
     document.getElementById('results-section').style.display = 'block';
     
     // Display enhanced summary with markdown support
-    const summaryElement = document.getElementById('summary-text');
-    const summary = results.summary || 'No summary available';
+    displaySummary(results.summary || 'No summary available');
     
-    // Convert markdown to HTML
-    let summaryHtml = summary
-        .replace(/^### (.*$)/gim, '<h3>$1</h3>')
-        .replace(/^## (.*$)/gim, '<h2>$1</h2>')
-        .replace(/^# (.*$)/gim, '<h1>$1</h1>')
-        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-        .replace(/\*(.+?)\*/g, '<em>$1</em>')
-        .replace(/\n/g, '<br>')
-        .replace(/🟢/g, '<span class="score-icon green">🟢</span>')
-        .replace(/🟡/g, '<span class="score-icon yellow">🟡</span>')
-        .replace(/🟠/g, '<span class="score-icon orange">🟠</span>')
-        .replace(/🔴/g, '<span class="score-icon red">🔴</span>')
-        .replace(/⚪/g, '<span class="score-icon white">⚪</span>');
-    
-    summaryElement.innerHTML = summaryHtml;
+    // Display credibility score
+    displayCredibilityScore(results.credibility_score);
     
     // Update statistics with proper mapping
-    const breakdown = results.credibility_score?.breakdown || {};
-    document.getElementById('verified-true-count').textContent = breakdown.verified_true || 0;
-    document.getElementById('verified-false-count').textContent = breakdown.verified_false || 0;
-    document.getElementById('partially-accurate-count').textContent = breakdown.partially_accurate || 0;
-    document.getElementById('unverifiable-count').textContent = breakdown.unverifiable || 0;
-    
-    // Add visual indicators for rhetoric if present
-    if (breakdown.empty_rhetoric > 0) {
-        addRhetoricIndicator(breakdown.empty_rhetoric);
-    }
+    updateStatistics(results.credibility_score?.breakdown || {});
     
     // Display fact checks with enhanced visuals
     displayFactChecks(results.fact_checks || []);
     
     // Display speaker analysis if available
-    if (results.speaker_analysis && Object.keys(results.speaker_analysis).length > 0) {
-        displaySpeakerAnalysis(results.speaker_analysis);
+    if (results.speakers && results.speakers.length > 0) {
+        displaySpeakerInfo(results.speakers);
     }
+}
+
+// Display summary with markdown formatting
+function displaySummary(summary) {
+    const summaryElement = document.getElementById('summary-text');
+    if (!summaryElement) return;
     
-    // Add credibility score visual
-    displayCredibilityScore(results.credibility_score);
+    // Convert markdown to HTML
+    let summaryHtml = summary
+        .replace(/^### (.*$)/gim, '<h3 style="color: #1f2937; margin: 16px 0 8px 0; font-size: 18px;">$1</h3>')
+        .replace(/^## (.*$)/gim, '<h2 style="color: #1f2937; margin: 20px 0 12px 0; font-size: 20px;">$1</h2>')
+        .replace(/^# (.*$)/gim, '<h1 style="color: #1f2937; margin: 24px 0 16px 0; font-size: 24px;">$1</h1>')
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*(.+?)\*/g, '<em>$1</em>')
+        .replace(/\n\n/g, '</p><p>')
+        .replace(/\n/g, '<br>')
+        .replace(/🟢/g, '<span style="color: #10b981;">🟢</span>')
+        .replace(/🟡/g, '<span style="color: #f59e0b;">🟡</span>')
+        .replace(/🟠/g, '<span style="color: #f97316;">🟠</span>')
+        .replace(/🔴/g, '<span style="color: #ef4444;">🔴</span>')
+        .replace(/⚪/g, '<span style="color: #9ca3af;">⚪</span>');
+    
+    summaryElement.innerHTML = `<p>${summaryHtml}</p>`;
 }
 
-// Add rhetoric indicator to statistics
-function addRhetoricIndicator(count) {
-    const statsContainer = document.querySelector('.statistics-grid');
-    if (statsContainer) {
-        const rhetoricCard = document.createElement('div');
-        rhetoricCard.className = 'stat-card rhetoric';
-        rhetoricCard.innerHTML = `
-            <div class="stat-number" style="color: #94a3b8;">${count}</div>
-            <div class="stat-label">Empty Rhetoric</div>
-            <div class="stat-icon">💨</div>
-        `;
-        statsContainer.appendChild(rhetoricCard);
-    }
-}
-
-// Display credibility score with visual flair
+// Display credibility score with visual meter
 function displayCredibilityScore(credScore) {
     if (!credScore) return;
     
     const score = credScore.score || 0;
     const label = credScore.label || 'Unknown';
     
-    // Create visual score display
-    const scoreContainer = document.createElement('div');
-    scoreContainer.className = 'credibility-score-display';
-    scoreContainer.innerHTML = `
-        <div class="score-circle ${getScoreClass(score)}">
-            <div class="score-value">${score}</div>
-            <div class="score-label">/ 100</div>
-        </div>
-        <div class="score-assessment">${label}</div>
-        <div class="score-bar">
-            <div class="score-fill" style="width: ${score}%; background: ${getScoreColor(score)};"></div>
-        </div>
-    `;
+    // Update score display
+    const scoreElement = document.getElementById('credibility-value');
+    const labelElement = document.getElementById('credibility-label');
+    const pointerElement = document.getElementById('credibility-pointer');
     
-    // Insert after summary
-    const summarySection = document.querySelector('.summary-section');
-    if (summarySection) {
-        summarySection.appendChild(scoreContainer);
+    if (scoreElement) {
+        scoreElement.textContent = score;
+        scoreElement.style.color = getScoreColor(score);
     }
+    
+    if (labelElement) {
+        labelElement.textContent = label;
+    }
+    
+    // Update meter pointer
+    if (pointerElement) {
+        const percentage = Math.max(0, Math.min(100, score));
+        pointerElement.style.left = `calc(${percentage}% - 3px)`;
+    }
+}
+
+// Update statistics display
+function updateStatistics(breakdown) {
+    const elements = {
+        'verified-true-count': breakdown.verified_true || 0,
+        'verified-false-count': breakdown.verified_false || 0,
+        'partially-accurate-count': breakdown.partially_accurate || 0,
+        'unverifiable-count': breakdown.unverifiable || 0
+    };
+    
+    Object.entries(elements).forEach(([id, value]) => {
+        const element = document.getElementById(id);
+        if (element) {
+            element.textContent = value;
+        }
+    });
 }
 
 // Display fact checks with enhanced formatting
 function displayFactChecks(factChecks) {
     const container = document.getElementById('fact-checks-container');
+    if (!container) return;
+    
     container.innerHTML = '';
     
     if (factChecks.length === 0) {
-        container.innerHTML = '<p class="no-claims">No claims found to fact-check.</p>';
+        container.innerHTML = '<p style="text-align: center; color: #6b7280; font-style: italic;">No claims found to fact-check.</p>';
         return;
     }
     
@@ -388,21 +496,16 @@ function displayFactChecks(factChecks) {
         
         item.className = `fact-check-item verdict-${verdictInfo.class}`;
         
-        // Add special styling for empty rhetoric
-        if (check.verdict === 'empty_rhetoric') {
-            item.classList.add('empty-rhetoric');
-        }
-        
         item.innerHTML = `
             <div class="fact-check-header">
                 <div class="fact-check-number">#${index + 1}</div>
-                <div class="fact-check-verdict" style="background-color: ${verdictInfo.color}">
+                <div class="fact-check-verdict" style="background-color: ${verdictInfo.color}20; color: ${verdictInfo.color}; border: 1px solid ${verdictInfo.color};">
                     <i class="fas ${verdictInfo.icon}"></i>
                     ${verdictInfo.label}
                 </div>
                 ${check.speaker && check.speaker !== 'Unknown' ? 
                     `<div class="fact-check-speaker">
-                        <i class="fas fa-user"></i> ${check.speaker}
+                        <i class="fas fa-user"></i> ${escapeHtml(check.speaker)}
                     </div>` : ''}
             </div>
             <div class="fact-check-content">
@@ -411,16 +514,12 @@ function displayFactChecks(factChecks) {
                     ${formatExplanation(check.explanation || 'No explanation available.')}
                 </div>
                 ${check.confidence ? 
-                    `<div class="confidence-indicator">
-                        <span class="confidence-label">Confidence:</span>
-                        <div class="confidence-bar">
-                            <div class="confidence-fill" style="width: ${check.confidence}%"></div>
-                        </div>
-                        <span class="confidence-value">${check.confidence}%</span>
+                    `<div class="fact-check-confidence">
+                        <strong>Confidence:</strong> ${check.confidence}%
                     </div>` : ''}
                 ${check.sources && check.sources.length > 0 ?
-                    `<div class="fact-check-sources">
-                        <i class="fas fa-link"></i> Sources: ${check.sources.join(', ')}
+                    `<div class="fact-check-source">
+                        <i class="fas fa-link"></i> <strong>Sources:</strong> ${check.sources.join(', ')}
                     </div>` : ''}
             </div>
         `;
@@ -429,68 +528,43 @@ function displayFactChecks(factChecks) {
     });
 }
 
+// Display speaker information
+function displaySpeakerInfo(speakers) {
+    const container = document.getElementById('speaker-analysis-container');
+    if (!container || !speakers.length) return;
+    
+    container.innerHTML = `
+        <div style="background: #f8fafc; padding: 20px; border-radius: 12px; margin-bottom: 20px;">
+            <h4 style="margin: 0 0 12px 0; color: #374151;">
+                <i class="fas fa-users" style="color: #3b82f6; margin-right: 8px;"></i>
+                Speakers Analyzed
+            </h4>
+            <div style="display: flex; flex-wrap: wrap; gap: 12px;">
+                ${speakers.map(speaker => `
+                    <span style="background: white; padding: 6px 12px; border-radius: 6px; font-weight: 500; color: #374151; border: 1px solid #e5e7eb;">
+                        ${escapeHtml(speaker)}
+                    </span>
+                `).join('')}
+            </div>
+        </div>
+    `;
+}
+
 // Format explanation with better structure
 function formatExplanation(explanation) {
+    if (!explanation) return 'No explanation available.';
+    
     return explanation
         .replace(/\n\n/g, '</p><p>')
         .replace(/\n/g, '<br>')
         .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-        .replace(/PATTERN DETECTED:/g, '<span class="pattern-alert">⚠️ PATTERN DETECTED:</span>')
+        .replace(/PATTERN DETECTED:/g, '<span style="color: #ef4444; font-weight: bold;">⚠️ PATTERN DETECTED:</span>')
         .replace(/CONCLUSION:/g, '<strong>CONCLUSION:</strong>')
         .replace(/CONTEXT AND BALANCE:/g, '<strong>CONTEXT AND BALANCE:</strong>')
         .replace(/SPEAKER TRACK RECORD:/g, '<strong>SPEAKER TRACK RECORD:</strong>');
 }
 
-// Display speaker analysis
-function displaySpeakerAnalysis(speakerAnalysis) {
-    const container = document.getElementById('speaker-analysis');
-    if (!container) return;
-    
-    container.innerHTML = '<h2>Speaker Analysis</h2>';
-    
-    Object.entries(speakerAnalysis).forEach(([speaker, data]) => {
-        const speakerCard = document.createElement('div');
-        speakerCard.className = 'speaker-card';
-        
-        const accuracy = (data.true_claims / data.total_claims * 100).toFixed(1);
-        
-        speakerCard.innerHTML = `
-            <h3>${speaker}</h3>
-            <div class="speaker-stats">
-                <div class="stat">
-                    <span class="stat-label">Total Claims:</span>
-                    <span class="stat-value">${data.total_claims}</span>
-                </div>
-                <div class="stat">
-                    <span class="stat-label">Accuracy Rate:</span>
-                    <span class="stat-value ${accuracy >= 70 ? 'good' : accuracy >= 50 ? 'medium' : 'poor'}">${accuracy}%</span>
-                </div>
-                ${data.false_claims > 0 ? `
-                <div class="stat">
-                    <span class="stat-label">False Claims:</span>
-                    <span class="stat-value poor">${data.false_claims}</span>
-                </div>` : ''}
-                ${data.empty_rhetoric > 0 ? `
-                <div class="stat">
-                    <span class="stat-label">Empty Rhetoric:</span>
-                    <span class="stat-value rhetoric">${data.empty_rhetoric}</span>
-                </div>` : ''}
-            </div>
-        `;
-        
-        container.appendChild(speakerCard);
-    });
-}
-
 // Helper functions
-function getScoreClass(score) {
-    if (score >= 80) return 'excellent';
-    if (score >= 60) return 'good';
-    if (score >= 40) return 'fair';
-    if (score >= 20) return 'poor';
-    return 'very-poor';
-}
-
 function getScoreColor(score) {
     if (score >= 80) return '#10b981';
     if (score >= 60) return '#fbbf24';
@@ -500,6 +574,7 @@ function getScoreColor(score) {
 }
 
 function escapeHtml(unsafe) {
+    if (!unsafe) return '';
     return unsafe
         .replace(/&/g, "&amp;")
         .replace(/</g, "&lt;")
@@ -509,35 +584,43 @@ function escapeHtml(unsafe) {
 }
 
 // UI state management
-function showLoading() {
-    document.getElementById('loading-overlay').style.display = 'flex';
+function showProgress() {
+    document.getElementById('input-section').style.display = 'none';
+    document.getElementById('progress-section').style.display = 'block';
+    document.getElementById('results-section').style.display = 'none';
 }
 
-function hideLoading() {
-    document.getElementById('loading-overlay').style.display = 'none';
+function hideProgress() {
+    document.getElementById('progress-section').style.display = 'none';
 }
 
 function updateProgress(progress, message) {
-    const progressBar = document.getElementById('progress-bar');
+    const progressFill = document.getElementById('progress-fill');
     const progressText = document.getElementById('progress-text');
     
-    if (progressBar) progressBar.style.width = `${progress}%`;
-    if (progressText) progressText.textContent = message;
+    if (progressFill) {
+        progressFill.style.width = `${Math.max(0, Math.min(100, progress))}%`;
+    }
+    if (progressText) {
+        progressText.textContent = message;
+    }
 }
 
 function showError(message) {
     const errorDiv = document.createElement('div');
     errorDiv.className = 'error-message';
     errorDiv.innerHTML = `
-        <i class="fas fa-exclamation-circle"></i>
-        <span>${message}</span>
-        <button onclick="this.parentElement.remove()">×</button>
+        <i class="fas fa-exclamation-circle" style="margin-right: 8px;"></i>
+        <span>${escapeHtml(message)}</span>
+        <button onclick="this.parentElement.remove()" style="background: none; border: none; color: white; margin-left: 12px; cursor: pointer; font-size: 18px; padding: 0;">×</button>
     `;
     
     document.body.appendChild(errorDiv);
     
     setTimeout(() => {
-        errorDiv.remove();
+        if (errorDiv.parentNode) {
+            errorDiv.remove();
+        }
     }, 5000);
 }
 
@@ -552,28 +635,72 @@ async function exportResults(format) {
         const response = await fetch(`/api/export/${currentJobId}/${format}`);
         
         if (response.ok) {
-            const blob = await response.blob();
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `factcheck_${currentJobId}.${format}`;
-            document.body.appendChild(a);
-            a.click();
-            window.URL.revokeObjectURL(url);
-            document.body.removeChild(a);
+            if (format === 'json') {
+                const data = await response.json();
+                downloadJSON(data, `factcheck_${currentJobId}.json`);
+            } else {
+                const blob = await response.blob();
+                downloadBlob(blob, `factcheck_${currentJobId}.${format}`);
+            }
         } else {
-            throw new Error('Export failed');
+            const errorData = await response.json();
+            throw new Error(errorData.error || 'Export failed');
         }
     } catch (error) {
         showError('Error exporting results: ' + error.message);
     }
 }
 
-// Start new analysis
-function startNewAnalysis() {
-    currentJobId = null;
-    document.getElementById('results-section').style.display = 'none';
-    document.getElementById('input-section').style.display = 'block';
-    document.getElementById('text-input').value = '';
-    document.getElementById('youtube-url').value = '';
+// Download JSON data
+function downloadJSON(data, filename) {
+    const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+    downloadBlob(blob, filename);
 }
+
+// Download blob as file
+function downloadBlob(blob, filename) {
+    const url = window.URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    window.URL.revokeObjectURL(url);
+    document.body.removeChild(a);
+}
+
+// Start new analysis
+function newAnalysis() {
+    currentJobId = null;
+    currentFile = null;
+    
+    // Reset UI
+    document.getElementById('results-section').style.display = 'none';
+    document.getElementById('progress-section').style.display = 'none';
+    document.getElementById('input-section').style.display = 'block';
+    
+    // Clear inputs
+    const textInput = document.getElementById('text-input');
+    if (textInput) {
+        textInput.value = '';
+        document.getElementById('char-count').textContent = '0';
+    }
+    
+    // Clear file
+    removeFile();
+    
+    // Clear any polling
+    if (pollInterval) {
+        clearInterval(pollInterval);
+        pollInterval = null;
+    }
+    
+    // Scroll to top
+    window.scrollTo(0, 0);
+}
+
+// Global functions for HTML onclick handlers
+window.startAnalysis = startAnalysis;
+window.removeFile = removeFile;
+window.newAnalysis = newAnalysis;
+window.exportResults = exportResults;
