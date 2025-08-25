@@ -17,7 +17,6 @@ from config import Config
 # Import services
 from services.claims import ClaimExtractor
 from services.comprehensive_factcheck import FactChecker
-from services.youtube import YouTubeTranscriptExtractor
 from services.export import ExportService
 
 # Set up logging
@@ -41,7 +40,6 @@ if config_warnings:
 # Initialize services
 claim_extractor = ClaimExtractor(Config)
 fact_checker = FactChecker(Config)
-youtube_extractor = YouTubeTranscriptExtractor()
 export_service = ExportService()
 
 # In-memory job storage (replace with Redis in production)
