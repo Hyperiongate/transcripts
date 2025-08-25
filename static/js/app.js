@@ -1,8 +1,9 @@
 // Main application JavaScript
-// Complete version with all functionality
+// Enhanced with proper verdict mapping and visual improvements
 
-// Verdict mappings for new system
+// Updated verdict mappings to handle all verdict types
 const VERDICT_MAPPINGS = {
+    // Standard verdicts
     'verified_true': {
         label: 'Verified True',
         class: 'true',
@@ -27,13 +28,28 @@ const VERDICT_MAPPINGS = {
         icon: 'fa-question-circle',
         color: '#6b7280'
     },
-    'opinion': {
-        label: 'Opinion',
-        class: 'opinion',
-        icon: 'fa-comment',
-        color: '#8b5cf6'
+    
+    // Enhanced verdict types
+    'empty_rhetoric': {
+        label: 'Empty Rhetoric',
+        class: 'rhetoric',
+        icon: 'fa-wind',
+        color: '#94a3b8'
     },
-    // Legacy verdict mappings for compatibility
+    'unsubstantiated_prediction': {
+        label: 'Unsubstantiated Prediction',
+        class: 'prediction',
+        icon: 'fa-crystal-ball',
+        color: '#a78bfa'
+    },
+    'pattern_of_false_promises': {
+        label: 'Pattern of False Promises',
+        class: 'pattern',
+        icon: 'fa-history',
+        color: '#f97316'
+    },
+    
+    // Internal verdict mappings
     'true': {
         label: 'True',
         class: 'true',
@@ -52,23 +68,47 @@ const VERDICT_MAPPINGS = {
         icon: 'fa-check-circle',
         color: '#34d399'
     },
+    'nearly_true': {
+        label: 'Nearly True',
+        class: 'true',
+        icon: 'fa-check-circle',
+        color: '#6ee7b7'
+    },
+    'exaggeration': {
+        label: 'Exaggeration',
+        class: 'mixed',
+        icon: 'fa-expand-arrows-alt',
+        color: '#fbbf24'
+    },
+    'misleading': {
+        label: 'Misleading',
+        class: 'false',
+        icon: 'fa-exclamation-triangle',
+        color: '#f59e0b'
+    },
     'mostly_false': {
         label: 'Mostly False',
         class: 'false',
         icon: 'fa-times-circle',
         color: '#f87171'
     },
-    'misleading': {
-        label: 'Misleading',
-        class: 'mixed',
-        icon: 'fa-exclamation-triangle',
-        color: '#f59e0b'
-    },
     'needs_context': {
         label: 'Needs Context',
         class: 'unverified',
         icon: 'fa-question-circle',
-        color: '#6b7280'
+        color: '#8b5cf6'
+    },
+    'opinion': {
+        label: 'Opinion',
+        class: 'opinion',
+        icon: 'fa-comment',
+        color: '#6366f1'
+    },
+    'mixed': {
+        label: 'Mixed',
+        class: 'mixed',
+        icon: 'fa-adjust',
+        color: '#f59e0b'
     }
 };
 
@@ -112,292 +152,275 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     }
     
-    // File upload handling
-    const fileInput = document.getElementById('file-input');
-    const dropZone = document.getElementById('file-drop-zone');
-    
-    if (dropZone) {
-        dropZone.addEventListener('click', () => fileInput.click());
-        
-        dropZone.addEventListener('dragover', (e) => {
-            e.preventDefault();
-            dropZone.classList.add('dragover');
-        });
-        
-        dropZone.addEventListener('dragleave', () => {
-            dropZone.classList.remove('dragover');
-        });
-        
-        dropZone.addEventListener('drop', (e) => {
-            e.preventDefault();
-            dropZone.classList.remove('dragover');
-            
-            const files = e.dataTransfer.files;
-            if (files.length > 0) {
-                handleFileSelect(files[0]);
-            }
-        });
-    }
-    
-    if (fileInput) {
-        fileInput.addEventListener('change', (e) => {
-            if (e.target.files.length > 0) {
-                handleFileSelect(e.target.files[0]);
-            }
+    // YouTube input handler
+    const youtubeInput = document.getElementById('youtube-url');
+    if (youtubeInput) {
+        youtubeInput.addEventListener('paste', (e) => {
+            setTimeout(() => {
+                validateYouTubeUrl(e.target.value);
+            }, 100);
         });
     }
 });
 
-// File handling
-function handleFileSelect(file) {
-    const maxSize = 10 * 1024 * 1024; // 10MB
-    const allowedTypes = ['.txt', '.srt', '.vtt'];
-    const fileExt = file.name.toLowerCase().substr(file.name.lastIndexOf('.'));
+// Validate YouTube URL
+function validateYouTubeUrl(url) {
+    const regex = /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})/;
+    const match = url.match(regex);
     
-    if (!allowedTypes.includes(fileExt)) {
-        showError('Invalid file type. Please upload TXT, SRT, or VTT files.');
-        return;
+    const errorDiv = document.getElementById('youtube-error');
+    const submitBtn = document.querySelector('.submit-button');
+    
+    if (match) {
+        errorDiv.style.display = 'none';
+        submitBtn.disabled = false;
+        return match[1];
+    } else if (url.length > 0) {
+        errorDiv.style.display = 'block';
+        errorDiv.textContent = 'Please enter a valid YouTube URL';
+        submitBtn.disabled = true;
+        return null;
     }
-    
-    if (file.size > maxSize) {
-        showError('File too large. Maximum size is 10MB.');
-        return;
-    }
-    
-    // Show file info
-    document.getElementById('file-name').textContent = file.name;
-    document.getElementById('file-info').style.display = 'flex';
-    document.getElementById('file-drop-zone').style.display = 'none';
 }
 
-function removeFile() {
-    document.getElementById('file-input').value = '';
-    document.getElementById('file-info').style.display = 'none';
-    document.getElementById('file-drop-zone').style.display = 'block';
-}
-
-// Start analysis
-async function startAnalysis() {
-    const activePanel = document.querySelector('.input-panel.active').id;
-    const isTextInput = activePanel === 'text-panel';
+// Submit transcript for analysis
+async function analyzeTranscript() {
+    const activePanel = document.querySelector('.input-panel.active');
+    const tabType = activePanel.id.replace('-panel', '');
     
     let transcript = '';
     
-    if (isTextInput) {
-        transcript = document.getElementById('text-input').value.trim();
-        if (!transcript) {
-            showError('Please enter a transcript to analyze.');
+    if (tabType === 'text') {
+        transcript = document.getElementById('text-input').value;
+        if (!transcript.trim()) {
+            showError('Please enter a transcript to analyze');
             return;
         }
-        if (transcript.length > 50000) {
-            showError('Transcript too long. Maximum 50,000 characters.');
-            return;
-        }
-    } else {
-        const fileInput = document.getElementById('file-input');
-        if (!fileInput.files || fileInput.files.length === 0) {
-            showError('Please select a file to analyze.');
+    } else if (tabType === 'youtube') {
+        const url = document.getElementById('youtube-url').value;
+        const videoId = validateYouTubeUrl(url);
+        if (!videoId) {
+            showError('Please enter a valid YouTube URL');
             return;
         }
         
-        // Read file content
-        const file = fileInput.files[0];
-        try {
-            transcript = await readFileContent(file);
-        } catch (error) {
-            showError('Error reading file: ' + error.message);
-            return;
-        }
+        // TODO: Implement YouTube transcript extraction
+        showError('YouTube feature coming soon!');
+        return;
     }
     
-    // Hide input section, show progress
-    document.getElementById('input-section').style.display = 'none';
-    document.getElementById('progress-section').style.display = 'block';
+    // Show loading state
+    showLoading();
     
-    // Submit for analysis
-    submitTranscript(transcript);
-}
-
-// Read file content
-function readFileContent(file) {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = (e) => resolve(e.target.result);
-        reader.onerror = (e) => reject(new Error('Failed to read file'));
-        reader.readAsText(file);
-    });
-}
-
-// Submit transcript to API
-async function submitTranscript(transcript) {
     try {
-        updateProgress(10, 'Submitting transcript...');
-        
         const response = await fetch('/api/analyze', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
             },
-            body: JSON.stringify({ transcript })
+            body: JSON.stringify({ transcript: transcript })
         });
         
         if (!response.ok) {
-            const error = await response.json();
-            throw new Error(error.error || 'Failed to start analysis');
+            throw new Error(`HTTP error! status: ${response.status}`);
         }
         
         const data = await response.json();
         currentJobId = data.job_id;
-        pollJobStatus();
+        
+        // Start polling for results
+        pollForResults();
         
     } catch (error) {
-        showError('Error: ' + error.message);
-        resetAnalysis();
+        hideLoading();
+        showError('Error starting analysis: ' + error.message);
     }
 }
 
-// Poll job status
-function pollJobStatus() {
-    let pollCount = 0;
+// Poll for job results
+function pollForResults() {
+    let attempts = 0;
+    const maxAttempts = 300; // 5 minutes
+    
     pollInterval = setInterval(async () => {
         try {
             const response = await fetch(`/api/status/${currentJobId}`);
             const data = await response.json();
             
-            if (response.ok) {
-                console.log('Status:', data); // Debug log
-                
-                // Update progress if still processing
-                if (data.progress && data.status === 'processing') {
-                    updateProgress(data.progress, data.message);
-                }
-                
-                if (data.status === 'completed') {
-                    clearInterval(pollInterval);
-                    // Add a small delay to ensure server has saved results
-                    setTimeout(() => {
-                        getResults();
-                    }, 100);
-                } else if (data.status === 'failed') {
-                    clearInterval(pollInterval);
-                    showError(data.error || 'Analysis failed');
-                    resetAnalysis();
-                }
-            } else {
+            // Update progress
+            updateProgress(data.progress || 0, data.message || 'Processing...');
+            
+            if (data.status === 'completed') {
                 clearInterval(pollInterval);
-                showError('Error checking status. Please try again.');
-                resetAnalysis();
+                const resultsResponse = await fetch(`/api/results/${currentJobId}`);
+                const results = await resultsResponse.json();
+                displayResults(results);
+                hideLoading();
+            } else if (data.status === 'failed') {
+                clearInterval(pollInterval);
+                hideLoading();
+                showError('Analysis failed: ' + (data.error || 'Unknown error'));
             }
             
-            // Timeout after 60 seconds
-            pollCount++;
-            if (pollCount > 60) {
+            attempts++;
+            if (attempts > maxAttempts) {
                 clearInterval(pollInterval);
+                hideLoading();
                 showError('Analysis timed out. Please try again.');
-                resetAnalysis();
             }
+            
         } catch (error) {
             clearInterval(pollInterval);
-            showError('Connection error. Please try again.');
-            resetAnalysis();
+            hideLoading();
+            showError('Error checking status: ' + error.message);
         }
-    }, 1000);
+    }, 1000); // Poll every second
 }
 
-// Get results
-async function getResults() {
-    try {
-        const response = await fetch(`/api/results/${currentJobId}`);
-        const results = await response.json();
-        
-        if (response.ok) {
-            console.log('Results received:', results); // Debug log
-            displayResults(results);
-        } else {
-            throw new Error(results.error || 'Failed to get results');
-        }
-    } catch (error) {
-        console.error('Error getting results:', error); // Debug log
-        showError('Error getting results: ' + error.message);
-        resetAnalysis();
-    }
-}
-
-// Update progress
-function updateProgress(percent, message) {
-    document.getElementById('progress-fill').style.width = percent + '%';
-    document.getElementById('progress-text').textContent = message;
-}
-
-// Display results
+// Display results with enhanced visuals
 function displayResults(results) {
-    // Hide progress, show results
-    document.getElementById('progress-section').style.display = 'none';
+    document.getElementById('input-section').style.display = 'none';
     document.getElementById('results-section').style.display = 'block';
     
-    // Update credibility score
-    const score = results.credibility_score?.score || 0;
-    const label = results.credibility_score?.label || 'Unknown';
+    // Display enhanced summary with markdown support
+    const summaryElement = document.getElementById('summary-text');
+    const summary = results.summary || 'No summary available';
     
-    document.getElementById('credibility-value').textContent = score;
-    document.getElementById('credibility-label').textContent = label;
+    // Convert markdown to HTML
+    let summaryHtml = summary
+        .replace(/^### (.*$)/gim, '<h3>$1</h3>')
+        .replace(/^## (.*$)/gim, '<h2>$1</h2>')
+        .replace(/^# (.*$)/gim, '<h1>$1</h1>')
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*(.+?)\*/g, '<em>$1</em>')
+        .replace(/\n/g, '<br>')
+        .replace(/🟢/g, '<span class="score-icon green">🟢</span>')
+        .replace(/🟡/g, '<span class="score-icon yellow">🟡</span>')
+        .replace(/🟠/g, '<span class="score-icon orange">🟠</span>')
+        .replace(/🔴/g, '<span class="score-icon red">🔴</span>')
+        .replace(/⚪/g, '<span class="score-icon white">⚪</span>');
     
-    // Position meter pointer
-    const pointer = document.getElementById('credibility-pointer');
-    pointer.style.left = `calc(${score}% - 3px)`;
+    summaryElement.innerHTML = summaryHtml;
     
-    // Update summary
-    const summary = results.conversational_summary || results.summary || 'No summary available.';
-    document.getElementById('summary-text').innerHTML = summary.replace(/\n/g, '<br>');
-    
-    // Update statistics
+    // Update statistics with proper mapping
     const breakdown = results.credibility_score?.breakdown || {};
     document.getElementById('verified-true-count').textContent = breakdown.verified_true || 0;
     document.getElementById('verified-false-count').textContent = breakdown.verified_false || 0;
     document.getElementById('partially-accurate-count').textContent = breakdown.partially_accurate || 0;
     document.getElementById('unverifiable-count').textContent = breakdown.unverifiable || 0;
     
-    // Display fact checks
+    // Add visual indicators for rhetoric if present
+    if (breakdown.empty_rhetoric > 0) {
+        addRhetoricIndicator(breakdown.empty_rhetoric);
+    }
+    
+    // Display fact checks with enhanced visuals
     displayFactChecks(results.fact_checks || []);
     
     // Display speaker analysis if available
     if (results.speaker_analysis && Object.keys(results.speaker_analysis).length > 0) {
         displaySpeakerAnalysis(results.speaker_analysis);
     }
+    
+    // Add credibility score visual
+    displayCredibilityScore(results.credibility_score);
 }
 
-// Display fact checks
+// Add rhetoric indicator to statistics
+function addRhetoricIndicator(count) {
+    const statsContainer = document.querySelector('.statistics-grid');
+    if (statsContainer) {
+        const rhetoricCard = document.createElement('div');
+        rhetoricCard.className = 'stat-card rhetoric';
+        rhetoricCard.innerHTML = `
+            <div class="stat-number" style="color: #94a3b8;">${count}</div>
+            <div class="stat-label">Empty Rhetoric</div>
+            <div class="stat-icon">💨</div>
+        `;
+        statsContainer.appendChild(rhetoricCard);
+    }
+}
+
+// Display credibility score with visual flair
+function displayCredibilityScore(credScore) {
+    if (!credScore) return;
+    
+    const score = credScore.score || 0;
+    const label = credScore.label || 'Unknown';
+    
+    // Create visual score display
+    const scoreContainer = document.createElement('div');
+    scoreContainer.className = 'credibility-score-display';
+    scoreContainer.innerHTML = `
+        <div class="score-circle ${getScoreClass(score)}">
+            <div class="score-value">${score}</div>
+            <div class="score-label">/ 100</div>
+        </div>
+        <div class="score-assessment">${label}</div>
+        <div class="score-bar">
+            <div class="score-fill" style="width: ${score}%; background: ${getScoreColor(score)};"></div>
+        </div>
+    `;
+    
+    // Insert after summary
+    const summarySection = document.querySelector('.summary-section');
+    if (summarySection) {
+        summarySection.appendChild(scoreContainer);
+    }
+}
+
+// Display fact checks with enhanced formatting
 function displayFactChecks(factChecks) {
     const container = document.getElementById('fact-checks-container');
     container.innerHTML = '';
     
     if (factChecks.length === 0) {
-        container.innerHTML = '<p class="no-claims" style="text-align: center; color: #6b7280; padding: 40px;">No claims found to fact-check.</p>';
+        container.innerHTML = '<p class="no-claims">No claims found to fact-check.</p>';
         return;
     }
     
-    factChecks.forEach((check, index) => {
+    // Filter out null results
+    const validFactChecks = factChecks.filter(fc => fc !== null);
+    
+    validFactChecks.forEach((check, index) => {
         const item = document.createElement('div');
-        item.className = `fact-check-item verdict-${getVerdictClass(check.verdict)}`;
-        
         const verdictInfo = VERDICT_MAPPINGS[check.verdict] || VERDICT_MAPPINGS['unverifiable'];
+        
+        item.className = `fact-check-item verdict-${verdictInfo.class}`;
+        
+        // Add special styling for empty rhetoric
+        if (check.verdict === 'empty_rhetoric') {
+            item.classList.add('empty-rhetoric');
+        }
         
         item.innerHTML = `
             <div class="fact-check-header">
                 <div class="fact-check-number">#${index + 1}</div>
-                <div class="fact-check-verdict">
+                <div class="fact-check-verdict" style="background-color: ${verdictInfo.color}">
                     <i class="fas ${verdictInfo.icon}"></i>
                     ${verdictInfo.label}
                 </div>
-                ${check.speaker && check.speaker !== 'Unknown' ? `<div class="fact-check-speaker">${check.speaker}</div>` : ''}
+                ${check.speaker && check.speaker !== 'Unknown' ? 
+                    `<div class="fact-check-speaker">
+                        <i class="fas fa-user"></i> ${check.speaker}
+                    </div>` : ''}
             </div>
             <div class="fact-check-content">
                 <p class="fact-check-claim">"${escapeHtml(check.claim || check.text || '')}"</p>
-                <p class="fact-check-explanation">${escapeHtml(check.explanation || 'No explanation available.')}</p>
-                ${check.confidence ? `<p class="fact-check-confidence">Confidence: ${check.confidence}%</p>` : ''}
-                ${check.sources && check.sources.length > 0 ? 
-                    `<div class="fact-check-source">
-                        <strong>Sources:</strong> ${check.sources.map(s => escapeHtml(s)).join(', ')}
+                <div class="fact-check-explanation">
+                    ${formatExplanation(check.explanation || 'No explanation available.')}
+                </div>
+                ${check.confidence ? 
+                    `<div class="confidence-indicator">
+                        <span class="confidence-label">Confidence:</span>
+                        <div class="confidence-bar">
+                            <div class="confidence-fill" style="width: ${check.confidence}%"></div>
+                        </div>
+                        <span class="confidence-value">${check.confidence}%</span>
+                    </div>` : ''}
+                ${check.sources && check.sources.length > 0 ?
+                    `<div class="fact-check-sources">
+                        <i class="fas fa-link"></i> Sources: ${check.sources.join(', ')}
                     </div>` : ''}
             </div>
         `;
@@ -406,84 +429,119 @@ function displayFactChecks(factChecks) {
     });
 }
 
+// Format explanation with better structure
+function formatExplanation(explanation) {
+    return explanation
+        .replace(/\n\n/g, '</p><p>')
+        .replace(/\n/g, '<br>')
+        .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+        .replace(/PATTERN DETECTED:/g, '<span class="pattern-alert">⚠️ PATTERN DETECTED:</span>')
+        .replace(/CONCLUSION:/g, '<strong>CONCLUSION:</strong>')
+        .replace(/CONTEXT AND BALANCE:/g, '<strong>CONTEXT AND BALANCE:</strong>')
+        .replace(/SPEAKER TRACK RECORD:/g, '<strong>SPEAKER TRACK RECORD:</strong>');
+}
+
 // Display speaker analysis
 function displaySpeakerAnalysis(speakerAnalysis) {
-    const container = document.getElementById('speaker-analysis-container');
+    const container = document.getElementById('speaker-analysis');
     if (!container) return;
     
-    container.innerHTML = '<h4 style="margin-bottom: 20px;">Speaker Analysis</h4>';
+    container.innerHTML = '<h2>Speaker Analysis</h2>';
     
-    Object.entries(speakerAnalysis).forEach(([speaker, stats]) => {
-        const speakerDiv = document.createElement('div');
-        speakerDiv.className = 'speaker-stats';
-        speakerDiv.style.cssText = 'background: #f3f4f6; padding: 20px; border-radius: 12px; margin-bottom: 16px;';
+    Object.entries(speakerAnalysis).forEach(([speaker, data]) => {
+        const speakerCard = document.createElement('div');
+        speakerCard.className = 'speaker-card';
         
-        const accuracy = stats.accuracy_rate !== null && stats.accuracy_rate !== undefined 
-            ? `${stats.accuracy_rate}%` 
-            : 'N/A';
+        const accuracy = (data.true_claims / data.total_claims * 100).toFixed(1);
         
-        speakerDiv.innerHTML = `
-            <h5 style="margin-bottom: 16px; font-size: 18px; font-weight: 600;">${escapeHtml(speaker)}</h5>
-            <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 16px;">
+        speakerCard.innerHTML = `
+            <h3>${speaker}</h3>
+            <div class="speaker-stats">
                 <div class="stat">
-                    <span style="display: block; color: #6b7280; font-size: 14px;">Total Claims:</span>
-                    <span style="display: block; font-size: 20px; font-weight: 600;">${stats.total_claims || 0}</span>
+                    <span class="stat-label">Total Claims:</span>
+                    <span class="stat-value">${data.total_claims}</span>
                 </div>
                 <div class="stat">
-                    <span style="display: block; color: #6b7280; font-size: 14px;">Accuracy Rate:</span>
-                    <span style="display: block; font-size: 20px; font-weight: 600;">${accuracy}</span>
+                    <span class="stat-label">Accuracy Rate:</span>
+                    <span class="stat-value ${accuracy >= 70 ? 'good' : accuracy >= 50 ? 'medium' : 'poor'}">${accuracy}%</span>
                 </div>
+                ${data.false_claims > 0 ? `
                 <div class="stat">
-                    <span style="display: block; color: #6b7280; font-size: 14px;">Verified True:</span>
-                    <span style="display: block; font-size: 20px; font-weight: 600; color: #10b981;">${stats.verified_true || 0}</span>
-                </div>
+                    <span class="stat-label">False Claims:</span>
+                    <span class="stat-value poor">${data.false_claims}</span>
+                </div>` : ''}
+                ${data.empty_rhetoric > 0 ? `
                 <div class="stat">
-                    <span style="display: block; color: #6b7280; font-size: 14px;">Verified False:</span>
-                    <span style="display: block; font-size: 20px; font-weight: 600; color: #ef4444;">${stats.verified_false || 0}</span>
-                </div>
+                    <span class="stat-label">Empty Rhetoric:</span>
+                    <span class="stat-value rhetoric">${data.empty_rhetoric}</span>
+                </div>` : ''}
             </div>
         `;
         
-        container.appendChild(speakerDiv);
+        container.appendChild(speakerCard);
     });
 }
 
-// Get verdict class
-function getVerdictClass(verdict) {
-    const v = (verdict || 'unverifiable').toLowerCase().replace(' ', '_');
-    
-    if (VERDICT_MAPPINGS[v]) {
-        return VERDICT_MAPPINGS[v].class;
-    }
-    
-    // Fallback for any unmapped verdicts
-    return 'unverified';
+// Helper functions
+function getScoreClass(score) {
+    if (score >= 80) return 'excellent';
+    if (score >= 60) return 'good';
+    if (score >= 40) return 'fair';
+    if (score >= 20) return 'poor';
+    return 'very-poor';
 }
 
-// Get verdict icon
-function getVerdictIcon(verdict) {
-    const v = (verdict || 'unverifiable').toLowerCase().replace(' ', '_');
-    
-    if (VERDICT_MAPPINGS[v]) {
-        return VERDICT_MAPPINGS[v].icon;
-    }
-    
-    return 'fa-question-circle';
+function getScoreColor(score) {
+    if (score >= 80) return '#10b981';
+    if (score >= 60) return '#fbbf24';
+    if (score >= 40) return '#f59e0b';
+    if (score >= 20) return '#f87171';
+    return '#ef4444';
 }
 
-// Format verdict label
-function formatVerdict(verdict) {
-    const v = (verdict || 'unverifiable').toLowerCase().replace(' ', '_');
-    
-    if (VERDICT_MAPPINGS[v]) {
-        return VERDICT_MAPPINGS[v].label;
-    }
-    
-    // Fallback formatting
-    return verdict.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase());
+function escapeHtml(unsafe) {
+    return unsafe
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
 }
 
-// Export results
+// UI state management
+function showLoading() {
+    document.getElementById('loading-overlay').style.display = 'flex';
+}
+
+function hideLoading() {
+    document.getElementById('loading-overlay').style.display = 'none';
+}
+
+function updateProgress(progress, message) {
+    const progressBar = document.getElementById('progress-bar');
+    const progressText = document.getElementById('progress-text');
+    
+    if (progressBar) progressBar.style.width = `${progress}%`;
+    if (progressText) progressText.textContent = message;
+}
+
+function showError(message) {
+    const errorDiv = document.createElement('div');
+    errorDiv.className = 'error-message';
+    errorDiv.innerHTML = `
+        <i class="fas fa-exclamation-circle"></i>
+        <span>${message}</span>
+        <button onclick="this.parentElement.remove()">×</button>
+    `;
+    
+    document.body.appendChild(errorDiv);
+    
+    setTimeout(() => {
+        errorDiv.remove();
+    }, 5000);
+}
+
+// Export functionality
 async function exportResults(format) {
     if (!currentJobId) {
         showError('No results to export');
@@ -511,69 +569,11 @@ async function exportResults(format) {
     }
 }
 
-// Show error message
-function showError(message) {
-    const errorDiv = document.createElement('div');
-    errorDiv.className = 'error-message';
-    errorDiv.textContent = message;
-    
-    document.body.appendChild(errorDiv);
-    
-    setTimeout(() => {
-        errorDiv.remove();
-    }, 5000);
-}
-
-// Reset analysis
-function resetAnalysis() {
-    document.getElementById('input-section').style.display = 'block';
-    document.getElementById('progress-section').style.display = 'none';
-    document.getElementById('results-section').style.display = 'none';
-    
+// Start new analysis
+function startNewAnalysis() {
     currentJobId = null;
-    if (pollInterval) {
-        clearInterval(pollInterval);
-        pollInterval = null;
-    }
-}
-
-// Reset form
-function resetForm() {
-    // Clear text input
+    document.getElementById('results-section').style.display = 'none';
+    document.getElementById('input-section').style.display = 'block';
     document.getElementById('text-input').value = '';
-    document.getElementById('char-count').textContent = '0';
-    
-    // Clear file input
-    document.getElementById('file-input').value = '';
-    document.getElementById('file-info').style.display = 'none';
-    document.getElementById('file-name').textContent = '';
-    document.getElementById('file-drop-zone').style.display = 'block';
-    
-    // Reset to text input tab
-    document.querySelectorAll('.tab-button').forEach(btn => {
-        btn.classList.remove('active');
-    });
-    document.querySelectorAll('.input-panel').forEach(panel => {
-        panel.classList.remove('active');
-    });
-    document.querySelector('[data-tab="text"]').classList.add('active');
-    document.getElementById('text-panel').classList.add('active');
-}
-
-// New analysis button
-function newAnalysis() {
-    resetAnalysis();
-    resetForm();
-}
-
-// Utility function to escape HTML
-function escapeHtml(text) {
-    const map = {
-        '&': '&amp;',
-        '<': '&lt;',
-        '>': '&gt;',
-        '"': '&quot;',
-        "'": '&#039;'
-    };
-    return text.replace(/[&<>"']/g, m => map[m]);
+    document.getElementById('youtube-url').value = '';
 }
