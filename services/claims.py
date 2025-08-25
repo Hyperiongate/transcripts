@@ -10,10 +10,14 @@ import json
 logger = logging.getLogger(__name__)
 
 class ClaimExtractor:
-    """Extract factual claims from transcripts with a balanced approach"""
+    """Extract factual claims from transcripts with improved filtering"""
     
-    def __init__(self, openai_api_key: Optional[str] = None):
-        self.openai_api_key = openai_api_key
+    def __init__(self, config):
+        self.config = config
+        # Get max claims from config, default to 100 (was 30)
+        self.max_claims = getattr(config, 'MAX_CLAIMS_PER_TRANSCRIPT', 100)
+        
+        openai_api_key = getattr(config, 'OPENAI_API_KEY', None)
         self.openai_client = None
         
         if openai_api_key:
@@ -25,83 +29,77 @@ class ClaimExtractor:
                 logger.error(f"Failed to initialize OpenAI: {e}")
         
         # Initialize comprehensive non-claim patterns
-        self._initialize_non_claim_patterns()
+        self._initialize_filters()
     
-    def _initialize_non_claim_patterns(self):
-        """Initialize comprehensive patterns for non-claims"""
-        # Phrases that are definitely not claims
+    def _initialize_filters(self):
+        """Initialize comprehensive patterns for filtering out non-claims"""
+        
+        # Phrases that are definitely not factual claims
         self.non_claim_phrases = {
-            # Greetings
+            # Greetings & farewells
             'hello', 'hi', 'hey', 'good morning', 'good afternoon', 'good evening',
-            'good night', 'greetings', 'welcome', 'howdy',
+            'good night', 'greetings', 'welcome', 'goodbye', 'bye', 'farewell',
+            'see you', 'see you later', 'take care', 'have a good day',
             
-            # Farewells
-            'goodbye', 'bye', 'farewell', 'see you', 'see you later', 'take care',
-            'have a good day', 'have a great day', 'have a nice day',
-            'have a good night', 'have a great night', 'catch you later',
-            
-            # Thanks and acknowledgments
+            # Thanks & acknowledgments
             'thank you', 'thanks', 'thank you very much', 'thanks very much',
-            'thank you so much', 'thanks so much', 'thanks a lot', 'many thanks',
-            'much appreciated', 'appreciate it', 'appreciate that',
-            'grateful', 'gratitude', 'thankful',
+            'thank you so much', 'much appreciated', 'appreciate it',
+            'you\'re welcome', 'no problem', 'my pleasure', 'anytime',
             
-            # Responses to thanks
-            'you\'re welcome', 'youre welcome', 'no problem', 'my pleasure',
-            'anytime', 'sure thing', 'of course', 'no worries', 'don\'t mention it',
-            
-            # Pleasantries
+            # Pleasantries & responses
             'please', 'excuse me', 'sorry', 'apologies', 'pardon me',
-            'beg your pardon', 'forgive me', 'my apologies',
-            
-            # Agreement/acknowledgment
             'okay', 'ok', 'alright', 'sure', 'yes', 'no', 'yeah', 'nope',
             'uh huh', 'mm hmm', 'got it', 'understood', 'i see', 'right',
-            'exactly', 'absolutely', 'definitely', 'certainly',
             
             # Conversational fillers
-            'well', 'so', 'now', 'then', 'anyway', 'anyhow', 'however',
-            'you know', 'i mean', 'basically', 'actually', 'literally',
-            'like', 'um', 'uh', 'er', 'ah',
+            'well', 'so', 'now', 'then', 'anyway', 'you know', 'i mean',
+            'basically', 'actually', 'literally', 'like', 'um', 'uh', 'er', 'ah',
             
-            # Questions that aren't claims
-            'how are you', 'how do you do', 'what\'s up', 'how\'s it going',
-            'how have you been', 'what\'s new',
-            
-            # Meta-conversational
-            'let me', 'allow me', 'if i may', 'may i', 'can i',
-            'let\'s', 'shall we', 'why don\'t we',
-            
-            # Ceremonial/formal
+            # Ceremonial/formal openings
             'ladies and gentlemen', 'distinguished guests', 'dear friends',
-            'it\'s an honor', 'it\'s a pleasure', 'privileged to',
-            'delighted to', 'happy to', 'glad to'
+            'my fellow americans', 'folks'
         }
         
-        # Regex patterns for non-claims
-        self.non_claim_patterns = [
-            # Greetings with optional names
-            r'^(hello|hi|hey|greetings)(\s+\w+)?[.,!?]?$',
-            r'^good\s+(morning|afternoon|evening|night)(\s+\w+)?[.,!?]?$',
+        # Subjective opinion indicators that should be filtered out
+        self.opinion_indicators = {
+            # Explicit opinion markers
+            'i think', 'i believe', 'i feel', 'in my opinion', 'it seems to me',
+            'i suppose', 'i guess', 'i assume', 'personally', 'from my perspective',
             
-            # Thank you variations
-            r'^(thank\s+you|thanks)(\s+(very\s+)?much)?(\s+\w+)?[.,!?]?$',
-            r'^(many\s+)?thanks(\s+to\s+\w+)?[.,!?]?$',
-            r'^(much\s+)?appreciated?[.,!?]?$',
+            # Value judgments (these make claims subjective)
+            'good', 'bad', 'great', 'terrible', 'horrible', 'wonderful', 'amazing',
+            'awful', 'fantastic', 'excellent', 'poor', 'brilliant', 'stupid',
+            'smart', 'dumb', 'wise', 'foolish', 'right', 'wrong', 'correct', 'incorrect',
+            'best', 'worst', 'better', 'worse', 'superior', 'inferior',
             
-            # Short responses
-            r'^(yes|no|yeah|nope|okay|ok|sure|alright)([.,!?]|$)',
-            r'^(absolutely|definitely|certainly|exactly)([.,!?]|$)',
+            # Emotional characterizations
+            'disaster', 'catastrophe', 'crisis', 'success', 'failure', 'triumph',
+            'victory', 'defeat', 'embarrassment', 'shame', 'pride', 'honor',
             
-            # Apologetic phrases
-            r'^(sorry|apologies|excuse\s+me|pardon\s+me)(\s+\w+)?[.,!?]?$',
+            # Subjective descriptors
+            'beautiful', 'ugly', 'attractive', 'disgusting', 'pleasant', 'unpleasant',
+            'comfortable', 'uncomfortable', 'exciting', 'boring', 'interesting', 'dull'
+        }
+        
+        # Patterns for statements that are clearly opinions, not facts
+        self.opinion_patterns = [
+            # Direct opinion statements
+            r'\b(is|was|are|were)\s+(good|bad|great|terrible|horrible|wonderful|amazing|awful|fantastic|excellent|poor|brilliant|stupid|smart|dumb|wise|foolish|right|wrong|correct|incorrect|best|worst|better|worse|superior|inferior)\b',
             
-            # Welcome responses
-            r'^(you\'?re\s+)?(welcome|no\s+problem|my\s+pleasure)([.,!?]|$)',
+            # Value judgments about policy/actions
+            r'\b(exactly\s+how\s+to|perfect\s+example\s+of|terrible\s+way\s+to|great\s+way\s+to)\b',
             
-            # Single word or very short
-            r'^\w+[.,!?]?$',  # Single word
-            r'^\w+\s+\w+[.,!?]?$',  # Two words
+            # Characterizations without specific evidence
+            r'\b(has\s+shown\s+.*\s+how\s+to)\s+(enact\s+)?(good|bad|great|terrible)\s+(policy|approach|strategy)\b',
+            
+            # Sweeping judgments
+            r'\b(all|every|everyone|nobody|no one)\s+(knows|thinks|believes|feels|understands)\b',
+            
+            # Subjective assessments of performance
+            r'\b(doing\s+a|did\s+a)\s+(good|bad|great|terrible|horrible|wonderful|amazing|awful|fantastic|excellent|poor)\s+job\b',
+            
+            # Predictions without evidence
+            r'\bwill\s+(definitely|certainly|obviously|clearly)\s+(be|become|fail|succeed)\b',
         ]
     
     def extract(self, transcript: str) -> Dict:
@@ -117,24 +115,31 @@ class ClaimExtractor:
                     'extraction_method': 'empty'
                 }
             
+            logger.info(f"Starting claim extraction from transcript ({len(transcript)} chars)")
+            
             # Try AI extraction first if available
             if self.openai_client:
                 try:
                     ai_result = self._extract_with_ai(transcript)
                     if ai_result and ai_result.get('claims'):
-                        # Double-check AI results with our filters
+                        # Apply strict filtering to AI results
                         filtered_claims = []
                         for claim in ai_result['claims']:
-                            if self._is_valid_claim(claim['text']):
+                            if self._is_verifiable_factual_claim(claim['text']):
                                 filtered_claims.append(claim)
+                            else:
+                                logger.debug(f"Filtered out opinion/non-claim: {claim['text'][:100]}")
                         
-                        ai_result['claims'] = filtered_claims
+                        ai_result['claims'] = filtered_claims[:self.max_claims]
+                        logger.info(f"AI extraction: {len(filtered_claims)} valid claims found")
                         return ai_result
                 except Exception as e:
                     logger.error(f"AI extraction failed: {e}")
             
             # Fallback to pattern-based extraction
-            return self._extract_with_patterns(transcript)
+            pattern_result = self._extract_with_patterns(transcript)
+            logger.info(f"Pattern extraction: {len(pattern_result['claims'])} claims found")
+            return pattern_result
             
         except Exception as e:
             logger.error(f"Error extracting claims: {e}")
@@ -146,50 +151,61 @@ class ClaimExtractor:
             }
     
     def _extract_with_ai(self, transcript: str) -> Optional[Dict]:
-        """Use AI to extract claims"""
+        """Use AI to extract claims with enhanced filtering"""
         try:
             # Limit transcript length for API
             max_length = 8000
             if len(transcript) > max_length:
                 transcript = transcript[:max_length] + "..."
             
-            prompt = f"""Extract factual claims from this transcript that can be fact-checked.
+            prompt = f"""Extract ONLY verifiable factual claims from this transcript. Be extremely selective.
 
-Include statements that:
-- Make specific claims about events, people, or things
-- State facts that can be verified
-- Include numbers, dates, or statistics
-- Make comparisons or assertions
-- Claim something happened or exists
+INCLUDE only statements that:
+- Make specific, objective claims about events, statistics, or facts
+- Can be verified through documentation, data, or evidence  
+- State concrete actions that happened or will happen
+- Include specific numbers, dates, names, or measurable outcomes
+- Make definitive claims about policies, laws, or documented events
 
-Exclude:
-- Pure opinions like "I think" or "I believe"
-- Greetings like "Hello", "Good morning"
-- Thank you statements like "Thank you", "Thanks very much"
-- Pleasantries and acknowledgments
-- Questions
-- Future predictions or hypotheticals
-- Single words or very short phrases
-- Conversational fillers like "You know", "I mean"
-- Apologies or courtesy phrases
+EXCLUDE all of the following:
+- Pure opinions ("Texas has shown how to enact bad policy")
+- Value judgments ("good", "bad", "great", "terrible", "disaster", "success")
+- Subjective characterizations ("horrible", "wonderful", "brilliant", "stupid")
+- Statements starting with "I think", "I believe", "It seems"
+- Greetings, thanks, pleasantries ("Hello", "Thank you", "Good morning")
+- Questions of any kind
+- Future predictions without specific evidence
+- Sweeping generalizations without data
+- Emotional assessments ("embarrassing", "shameful", "proud")
+- Conversational fillers ("Well", "You know", "I mean")
+- Ceremonial language ("Ladies and gentlemen")
 
-For each claim, provide:
-- The complete statement
-- Who said it (if clear)
-- Why it's checkable
+Examples of what TO include:
+- "Unemployment rose to 7.2% in March"
+- "The Senate passed H.R. 1234 with 67 votes"
+- "We allocated $50 billion for infrastructure"
+- "China exported 2.3 million tons of steel last year"
 
-Format as JSON array: [{{"text": "claim", "speaker": "name", "context": "brief context"}}]
+Examples of what NOT to include:
+- "Texas has shown how to enact bad policy" (opinion/characterization)
+- "This is a disaster" (subjective judgment)
+- "We're doing a great job" (opinion)
+- "Everyone knows this is wrong" (sweeping generalization)
+
+Only extract statements that a fact-checker could verify with specific evidence. When in doubt, exclude it.
+
+Format as JSON: [{{"text": "exact claim", "speaker": "name", "reason": "why this is verifiable"}}]
 
 Transcript:
 {transcript}"""
 
             response = self.openai_client.chat.completions.create(
-                model="gpt-3.5-turbo",
+                model="gpt-4" if getattr(self.config, 'USE_GPT4', False) else "gpt-3.5-turbo",
                 messages=[
-                    {"role": "system", "content": "Extract only factual claims for fact-checking. Exclude all pleasantries, greetings, and conversational elements."},
+                    {"role": "system", "content": "You are a strict fact-checker's assistant. Only extract claims that can be objectively verified. Reject opinions, value judgments, and subjective statements completely."},
                     {"role": "user", "content": prompt}
                 ],
-                temperature=0.3,
+                temperature=0.1,  # Lower temperature for more consistent results
                 max_tokens=2000
             )
             
@@ -205,10 +221,10 @@ Transcript:
                     if json_match:
                         claims_data = json.loads(json_match.group())
                     else:
-                        logger.error("No JSON found in AI response")
+                        logger.warning("No JSON found in AI response")
                         return None
                         
-                # Process claims
+                # Process claims with additional validation
                 processed_claims = []
                 speakers = set()
                 
@@ -217,21 +233,24 @@ Transcript:
                         text = claim['text'].strip()
                         speaker = claim.get('speaker', 'Unknown').strip()
                         
-                        # Validate claim
-                        if self._is_valid_claim(text):
+                        # Double-check with our strict validation
+                        if self._is_verifiable_factual_claim(text):
                             processed_claims.append({
                                 'text': text,
                                 'speaker': speaker,
-                                'context': claim.get('context', '')
+                                'context': claim.get('context', ''),
+                                'reason': claim.get('reason', '')
                             })
                             if speaker and speaker != 'Unknown':
                                 speakers.add(speaker)
+                        else:
+                            logger.debug(f"AI extracted but filtered: {text}")
                 
                 return {
-                    'claims': processed_claims[:30],  # Limit to 30 claims
+                    'claims': processed_claims[:self.max_claims],
                     'speakers': list(speakers),
                     'topics': self._extract_topics(transcript),
-                    'extraction_method': 'ai'
+                    'extraction_method': 'ai_enhanced'
                 }
                 
             except json.JSONDecodeError as e:
@@ -243,12 +262,13 @@ Transcript:
             return None
     
     def _extract_with_patterns(self, transcript: str) -> Dict:
-        """Extract claims using pattern matching"""
+        """Extract claims using pattern matching with strict filtering"""
         claims = []
         speakers = set()
         
         # Split into sentences
         sentences = self._split_into_sentences(transcript)
+        logger.info(f"Split transcript into {len(sentences)} sentences")
         
         # Track current speaker
         current_speaker = "Unknown"
@@ -266,39 +286,140 @@ Transcript:
             # Clean sentence
             sentence = sentence.strip()
             
-            # Check if it's a valid claim
-            if self._is_valid_claim(sentence) and self._is_factual_claim(sentence):
+            # Apply strict validation
+            if self._is_verifiable_factual_claim(sentence):
                 claims.append({
                     'text': sentence,
                     'speaker': current_speaker,
                     'context': ''
                 })
         
+        logger.info(f"Pattern matching found {len(claims)} valid claims")
+        
         return {
-            'claims': claims[:30],  # Limit to 30 claims
+            'claims': claims[:self.max_claims],
             'speakers': list(speakers),
             'topics': self._extract_topics(transcript),
-            'extraction_method': 'pattern'
+            'extraction_method': 'pattern_enhanced'
         }
     
+    def _is_verifiable_factual_claim(self, sentence: str) -> bool:
+        """Strict validation: only allow genuinely verifiable factual claims"""
+        if not sentence or len(sentence.strip()) < 10:
+            return False
+        
+        sentence_clean = sentence.strip().lower()
+        
+        # First, check if it's a basic non-claim (greetings, etc.)
+        if not self._is_valid_claim(sentence):
+            return False
+        
+        # Check for opinion indicators - these disqualify the claim
+        for indicator in self.opinion_indicators:
+            if indicator in sentence_clean:
+                return False
+        
+        # Check for opinion patterns
+        for pattern in self.opinion_patterns:
+            if re.search(pattern, sentence_clean):
+                logger.debug(f"Opinion pattern matched: {pattern} in '{sentence_clean[:50]}...'")
+                return False
+        
+        # Additional opinion checks
+        # Statements that characterize something as good/bad without specific metrics
+        if re.search(r'\b(has\s+shown|have\s+shown).*\b(how\s+to)\b', sentence_clean):
+            if re.search(r'\b(good|bad|great|terrible|perfect|awful|excellent|poor)\b', sentence_clean):
+                return False
+        
+        # Reject pure characterizations without specific facts
+        characterization_patterns = [
+            r'^(this|that|it)\s+is\s+(a\s+)?(disaster|catastrophe|crisis|success|failure|triumph|embarrassment)',
+            r'\bis\s+(completely|totally|absolutely)\s+(wrong|right|false|true)',
+            r'\b(cannot|can\'t)\s+manage\b.*(?!specific\s+data|evidence|numbers)',
+        ]
+        
+        for pattern in characterization_patterns:
+            if re.search(pattern, sentence_clean):
+                return False
+        
+        # Now check for factual indicators
+        factual_indicators = [
+            # Specific numbers and statistics
+            r'\b\d+\.?\d*\s*(%|percent|million|billion|thousand)\b',
+            r'\$\d+',
+            r'\b\d+\s*(votes?|people|jobs|cases|deaths|births)\b',
+            
+            # Dates and time periods
+            r'\b(19|20)\d{2}\b',
+            r'\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+\d+',
+            r'\bin\s+(19|20)\d{2}\b',
+            r'\bsince\s+(19|20)\d{2}\b',
+            
+            # Specific policy/legal references
+            r'\b(h\.r\.|s\.|bill|act|amendment)\s*\d+',
+            r'\b(executive\s+order|regulation|statute|code)\s+\d+',
+            r'\b(section|title|chapter)\s+\d+',
+            
+            # Specific organizations and official bodies
+            r'\b(department\s+of|office\s+of|bureau\s+of|agency\s+of)\b',
+            r'\b(congress|senate|house)\s+(passed|voted|approved|rejected)',
+            r'\b(supreme\s+court|district\s+court|appeals\s+court)\b',
+            
+            # Measurable actions and outcomes
+            r'\b(increased|decreased|rose|fell|gained|lost|dropped)\s+(by\s+)?\d+',
+            r'\b(allocated|spent|invested|cut|reduced)\s+\$?\d+',
+            r'\b(signed|vetoed|passed|failed|approved|rejected)\b.*\b(bill|law|agreement|treaty)\b',
+            
+            # Specific geographical or institutional references
+            r'\b(state\s+of|city\s+of|university\s+of|bank\s+of)\s+[A-Z][a-z]+',
+            r'\b[A-Z][a-z]+\s+(university|college|hospital|corporation|company)\b',
+        ]
+        
+        # Must have at least one factual indicator
+        has_factual_indicator = any(re.search(pattern, sentence_clean) for pattern in factual_indicators)
+        
+        if not has_factual_indicator:
+            # Check for proper nouns (people, places, organizations) with action verbs
+            capitalized_words = re.findall(r'\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\b', sentence)
+            action_verbs = re.search(r'\b(said|announced|declared|signed|voted|passed|failed|won|lost|created|built|destroyed|implemented|launched|introduced|proposed)\b', sentence_clean)
+            
+            if len(capitalized_words) >= 2 and action_verbs:
+                has_factual_indicator = True
+        
+        if not has_factual_indicator:
+            return False
+        
+        # Additional validation: must be substantial claim
+        words = sentence_clean.split()
+        if len(words) < 6:
+            return False
+        
+        # Must have a clear subject-verb-object structure for factual claims
+        has_verb = any(verb in sentence_clean for verb in [
+            'is', 'are', 'was', 'were', 'has', 'have', 'had', 'will', 'would', 'can', 'could',
+            'passed', 'failed', 'signed', 'vetoed', 'announced', 'said', 'declared', 'created',
+            'increased', 'decreased', 'rose', 'fell', 'gained', 'lost', 'allocated', 'spent'
+        ])
+        
+        if not has_verb:
+            return False
+        
+        # Final check: reject if it's just a characterization
+        if re.search(r'^[^.]*\b(is|are|was|were)\s+(just|simply|merely|only)\s+', sentence_clean):
+            return False
+        
+        return True
+    
     def _is_valid_claim(self, sentence: str) -> bool:
-        """Check if sentence is valid for fact-checking (not a non-claim)"""
+        """Basic validation - filter out obvious non-claims"""
         if not sentence:
             return False
         
         sentence_clean = sentence.strip().lower()
         
-        # Check length
-        if len(sentence.split()) < 5:
-            # For short sentences, be very strict
-            # Check if it's just a pleasantry
-            if sentence_clean in self.non_claim_phrases:
-                return False
-            
-            # Check against patterns
-            for pattern in self.non_claim_patterns:
-                if re.match(pattern, sentence_clean):
-                    return False
+        # Check length - too short is likely not a claim
+        if len(sentence.split()) < 4:
+            return False
         
         # Skip questions
         if sentence.strip().endswith('?'):
@@ -308,24 +429,16 @@ Transcript:
         if sentence_clean in self.non_claim_phrases:
             return False
         
-        # Check for non-claim patterns
-        for pattern in self.non_claim_patterns:
-            if re.match(pattern, sentence_clean):
-                return False
-        
         # Check if it starts with non-claim phrases
         for phrase in self.non_claim_phrases:
             if sentence_clean.startswith(phrase + ' ') or sentence_clean == phrase:
-                # But allow if it contains factual content after
-                remainder = sentence_clean[len(phrase):].strip()
-                if len(remainder) < 10 or not any(char.isdigit() or char == '$' for char in remainder):
-                    return False
+                return False
         
         # Skip pure conversational elements
         conversational_only = [
-            r'^(well|so|now|then|anyway|however)\s*[,.]?$',
-            r'^(you know|i mean|basically|actually|literally)\s*[,.]?$',
-            r'^(um|uh|er|ah|oh)\s*[,.]?$',
+            r'^(well|so|now|then|anyway|however)\s*[,.]?\s*$',
+            r'^(you know|i mean|basically|actually|literally)\s*[,.]?\s*$',
+            r'^(um|uh|er|ah|oh)\s*[,.]?\s*$',
         ]
         
         for pattern in conversational_only:
@@ -334,105 +447,27 @@ Transcript:
         
         return True
     
-    def _is_factual_claim(self, sentence: str) -> bool:
-        """Check if a sentence is a factual claim worth checking"""
-        sentence_lower = sentence.lower()
-        
-        # Skip pure opinions and feelings
-        opinion_starters = [
-            'i think', 'i believe', 'i feel', 'in my opinion',
-            'it seems', 'it appears', 'i hope', 'i wish',
-            'i suppose', 'i guess', 'i assume'
-        ]
-        if any(sentence_lower.startswith(starter) for starter in opinion_starters):
-            # But check if it's followed by a factual claim
-            if not any(indicator in sentence_lower for indicator in [
-                'that', 'because', 'since', 'due to', 'according to'
-            ]):
-                return False
-        
-        # Look for factual indicators
-        factual_indicators = [
-            # Has numbers
-            r'\b\d+',
-            # Has percentages
-            r'\d+\s*%|\d+\s+percent',
-            # Has money
-            r'\$\d+|\d+\s+dollars?',
-            # Has dates/years
-            r'\b(19|20)\d{2}\b',
-            r'\b(january|february|march|april|may|june|july|august|september|october|november|december)\b',
-            # Has comparisons
-            r'\b(more|less|fewer|greater|higher|lower|bigger|smaller)\s+than\b',
-            # Has specific verbs indicating facts
-            r'\b(is|are|was|were|has|have|had|increased|decreased|rose|fell|gained|lost)\b',
-            # Has definitive statements
-            r'\b(always|never|every|all|none|only|first|last)\b',
-            # Policy/law references
-            r'\b(law|bill|act|policy|regulation|amendment)\b',
-            # Achievement claims
-            r'\b(won|lost|achieved|created|built|destroyed|passed|failed|elected|defeated)\b',
-            # Statistical terms
-            r'\b(average|median|mean|total|sum|count|number)\b',
-            # Location references
-            r'\b(country|state|city|nation|world|global|international)\b'
-        ]
-        
-        # Check if it has at least one factual indicator
-        has_factual_indicator = False
-        for pattern in factual_indicators:
-            if re.search(pattern, sentence_lower):
-                has_factual_indicator = True
-                break
-        
-        if not has_factual_indicator:
-            # Check for named entities (people, places, organizations)
-            # Simple heuristic: has multiple capitalized words
-            capitalized_words = re.findall(r'\b[A-Z][a-z]+\b', sentence)
-            if len(capitalized_words) >= 2:
-                has_factual_indicator = True
-        
-        if not has_factual_indicator:
-            return False
-        
-        # Additional check: does it make a substantive claim?
-        # Check if it has a subject-verb-object structure with meaningful content
-        if has_factual_indicator:
-            # Make sure it's not just a number or date in isolation
-            words = sentence_lower.split()
-            if len(words) < 4:
-                # Too short to be a meaningful claim unless it's very specific
-                if not re.search(r'\b(is|are|was|were)\b', sentence_lower):
-                    return False
-        
-        return True
-    
     def _split_into_sentences(self, text: str) -> List[str]:
         """Split text into sentences"""
-        # Remove timestamps
-        text = re.sub(r'\[\d{1,2}:\d{2}:\d{2}\]', '', text)
-        text = re.sub(r'\[\d{1,2}:\d{2}\]', '', text)
-        text = re.sub(r'\(\d{1,2}:\d{2}:\d{2}\)', '', text)
+        # Remove timestamps and other noise
+        text = re.sub(r'\[\d{1,2}:\d{2}(:\d{2})?\]', '', text)
+        text = re.sub(r'\(\d{1,2}:\d{2}(:\d{2})?\)', '', text)
+        text = re.sub(r'\[APPLAUSE\]|\[LAUGHTER\]|\[MUSIC\]', '', text, flags=re.IGNORECASE)
         
         # Replace line breaks with spaces
         text = re.sub(r'\n+', ' ', text)
         
+        # Handle abbreviations
+        text = re.sub(r'\b(Mr|Mrs|Dr|Ms|Prof|Sr|Jr|U\.S|etc)\.\s*', r'\1<PERIOD> ', text)
+        
         # Split on sentence endings
-        # But be careful with abbreviations
-        text = re.sub(r'\b(Mr|Mrs|Dr|Ms|Prof|Sr|Jr)\.\s*', r'\1<PERIOD> ', text)
         sentences = re.split(r'[.!?]+\s+', text)
         
         # Restore periods in abbreviations
-        sentences = [s.replace('<PERIOD>', '.') for s in sentences]
+        sentences = [s.replace('<PERIOD>', '.').strip() for s in sentences]
         
-        # Clean up
-        cleaned = []
-        for sent in sentences:
-            sent = sent.strip()
-            if sent and len(sent) > 10:  # Minimum length
-                cleaned.append(sent)
-        
-        return cleaned
+        # Filter out very short or empty sentences
+        return [s for s in sentences if s and len(s) > 15]
     
     def _extract_topics(self, transcript: str) -> List[str]:
         """Extract main topics from transcript"""
@@ -440,28 +475,23 @@ Transcript:
         transcript_lower = transcript.lower()
         
         topic_keywords = {
-            'economy': ['economy', 'jobs', 'unemployment', 'inflation', 'taxes', 'budget', 'deficit', 'gdp'],
-            'healthcare': ['healthcare', 'insurance', 'medicare', 'medicaid', 'obamacare', 'health care'],
-            'immigration': ['immigration', 'border', 'immigrants', 'citizenship', 'deportation', 'asylum'],
-            'education': ['education', 'schools', 'students', 'teachers', 'college', 'university', 'tuition'],
-            'climate': ['climate', 'environment', 'energy', 'pollution', 'renewable', 'carbon', 'emissions'],
-            'crime': ['crime', 'police', 'safety', 'violence', 'criminal', 'justice', 'prison'],
-            'foreign policy': ['china', 'russia', 'war', 'military', 'nato', 'foreign', 'international'],
-            'covid-19': ['covid', 'coronavirus', 'pandemic', 'vaccine', 'mask', 'lockdown'],
-            'elections': ['election', 'voting', 'campaign', 'ballot', 'voter', 'candidate'],
-            'infrastructure': ['infrastructure', 'roads', 'bridges', 'broadband', 'transportation'],
-            'technology': ['technology', 'tech', 'internet', 'cyber', 'ai', 'artificial intelligence'],
-            'trade': ['trade', 'tariff', 'import', 'export', 'nafta', 'treaty']
+            'economy': ['economy', 'jobs', 'unemployment', 'inflation', 'taxes', 'budget', 'deficit', 'gdp', 'economic'],
+            'healthcare': ['healthcare', 'health care', 'insurance', 'medicare', 'medicaid', 'obamacare', 'medical'],
+            'immigration': ['immigration', 'border', 'immigrants', 'citizenship', 'deportation', 'asylum', 'migrant'],
+            'education': ['education', 'schools', 'students', 'teachers', 'college', 'university', 'tuition', 'educational'],
+            'climate': ['climate', 'environment', 'energy', 'pollution', 'renewable', 'carbon', 'emissions', 'environmental'],
+            'crime': ['crime', 'police', 'safety', 'violence', 'criminal', 'justice', 'prison', 'law enforcement'],
+            'foreign policy': ['china', 'russia', 'war', 'military', 'nato', 'foreign', 'international', 'diplomacy'],
+            'covid-19': ['covid', 'coronavirus', 'pandemic', 'vaccine', 'mask', 'lockdown', 'quarantine'],
+            'elections': ['election', 'voting', 'campaign', 'ballot', 'voter', 'candidate', 'electoral'],
+            'infrastructure': ['infrastructure', 'roads', 'bridges', 'broadband', 'transportation', 'transit'],
+            'technology': ['technology', 'tech', 'internet', 'cyber', 'ai', 'artificial intelligence', 'digital'],
+            'trade': ['trade', 'tariff', 'import', 'export', 'nafta', 'treaty', 'commerce', 'trade deal']
         }
         
         for topic, keywords in topic_keywords.items():
-            if any(keyword in transcript_lower for keyword in keywords):
+            keyword_count = sum(1 for keyword in keywords if keyword in transcript_lower)
+            if keyword_count >= 2:  # Require at least 2 related keywords
                 topics.append(topic)
         
         return topics[:5]  # Limit to top 5 topics
-    
-    # Compatibility method
-    def extract_claims_enhanced(self, transcript: str, use_ai: bool = True) -> List[Dict]:
-        """Legacy method for compatibility"""
-        result = self.extract(transcript)
-        return result.get('claims', [])
