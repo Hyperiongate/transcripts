@@ -1,208 +1,190 @@
+#!/usr/bin/env python3
 """
-Main Flask Application for Political Fact Checker
-Updated with enhanced verification system
+Main Flask application for Political Transcript Fact Checker
+Enhanced with proper verdict mapping and insightful summaries
 """
+
 import os
-import json
 import logging
 import threading
-import time
-import uuid
+import traceback
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 from flask import Flask, render_template, request, jsonify, send_file
 from flask_cors import CORS
-from werkzeug.utils import secure_filename
-import traceback
+from config import Config
 
-# Configure logging
+# Import services
+from services.claims import ClaimExtractor
+from services.comprehensive_factcheck import FactChecker
+from services.youtube import YouTubeTranscriptExtractor
+from services.export import ExportService
+
+# Set up logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
 
-# Flask app setup
+# Initialize Flask app
 app = Flask(__name__)
+app.config.from_object(Config)
 CORS(app)
 
-# Configuration
-class Config:
-    # Required API keys - update in Render
-    OPENAI_API_KEY = os.getenv('OPENAI_API_KEY')
-    GOOGLE_FACTCHECK_API_KEY = os.getenv('GOOGLE_FACTCHECK_API_KEY')
-    NEWS_API_KEY = os.getenv('NEWS_API_KEY')
-    SCRAPERAPI_KEY = os.getenv('SCRAPERAPI_KEY')
-    WOLFRAM_ALPHA_API_KEY = os.getenv('WOLFRAM_ALPHA_API_KEY')
-    
-    # Model config
-    OPENAI_MODEL = os.getenv('OPENAI_MODEL', 'gpt-3.5-turbo')
-    USE_GPT4 = os.getenv('USE_GPT4', 'False').lower() == 'true'
-    
-    # File handling
-    UPLOAD_FOLDER = os.getenv('UPLOAD_FOLDER', '/tmp/uploads')
-    EXPORT_FOLDER = os.getenv('EXPORT_FOLDER', '/tmp/exports')
-    MAX_CONTENT_LENGTH = 10 * 1024 * 1024  # 10MB
-    
-    # Optional storage
-    MONGODB_URI = os.getenv('MONGODB_URI')
-    REDIS_URL = os.getenv('REDIS_URL')
+# Validate configuration
+config_warnings = Config.validate()
+if config_warnings:
+    for warning in config_warnings:
+        logger.warning(warning)
 
-# Apply config
-app.config.from_object(Config)
+# Initialize services
+claim_extractor = ClaimExtractor(Config)
+fact_checker = FactChecker(Config)
+youtube_extractor = YouTubeTranscriptExtractor()
+export_service = ExportService()
 
-# Ensure directories exist
-os.makedirs(Config.UPLOAD_FOLDER, exist_ok=True)
-os.makedirs(Config.EXPORT_FOLDER, exist_ok=True)
+# In-memory job storage (replace with Redis in production)
+jobs = {}
+job_lock = threading.Lock()
 
-# Storage setup
-in_memory_jobs = {}
-mongo_client = None
-redis_client = None
-
-# Try to connect to MongoDB if configured
-if Config.MONGODB_URI:
-    try:
-        from pymongo import MongoClient
-        mongo_client = MongoClient(Config.MONGODB_URI, serverSelectionTimeoutMS=5000)
-        mongo_client.server_info()
-        logger.info("MongoDB connected successfully")
-    except Exception as e:
-        logger.warning(f"MongoDB connection failed: {str(e)}. Using in-memory storage.")
-        mongo_client = None
-else:
-    logger.info("MongoDB URI not configured. Using in-memory storage.")
-
-# Try to connect to Redis if configured
-if Config.REDIS_URL:
-    try:
-        import redis
-        redis_client = redis.from_url(Config.REDIS_URL, socket_connect_timeout=5)
-        redis_client.ping()
-        logger.info("Redis connected successfully")
-    except Exception as e:
-        logger.warning(f"Redis connection failed: {str(e)}. Using in-memory storage.")
-        redis_client = None
-else:
-    logger.info("Redis URL not configured. Using in-memory storage.")
-
-# Import services - REQUIRED for app to function
-try:
-    from services.transcript import TranscriptProcessor
-    from services.claims import ClaimExtractor
-    # Use comprehensive fact checker with all APIs
-    from services.comprehensive_factcheck import ComprehensiveFactChecker as FactChecker, VERDICT_CATEGORIES
-    
-    # Initialize services
-    transcript_processor = TranscriptProcessor()
-    claim_extractor = ClaimExtractor(openai_api_key=Config.OPENAI_API_KEY)
-    fact_checker = FactChecker(Config)
-    logger.info("Services initialized successfully")
-except ImportError as e:
-    logger.error(f"CRITICAL: Failed to import required services: {str(e)}")
-    logger.error("Please ensure services directory exists with required files")
-    raise SystemExit(f"Cannot start application without services: {str(e)}")
-
-# Enhanced speaker database
-SPEAKER_DATABASE = {
-    'donald trump': {
-        'full_name': 'Donald J. Trump',
-        'role': '45th and 47th President of the United States',
-        'party': 'Republican',
-        'known_for': 'Real estate, reality TV, politics'
+# Enhanced verdict categories with visual elements
+VERDICT_CATEGORIES = {
+    'true': {
+        'label': 'True',
+        'icon': '✅',
+        'color': '#10b981',
+        'score': 100,
+        'description': 'The claim is accurate and supported by evidence'
     },
-    'joe biden': {
-        'full_name': 'Joseph R. Biden Jr.',
-        'role': '46th President of the United States',
-        'party': 'Democrat',
-        'known_for': 'Long Senate career, Vice President under Obama'
+    'mostly_true': {
+        'label': 'Mostly True',
+        'icon': '✓',
+        'color': '#34d399',
+        'score': 85,
+        'description': 'The claim is largely accurate with minor imprecision'
+    },
+    'nearly_true': {
+        'label': 'Nearly True',
+        'icon': '🔵',
+        'color': '#6ee7b7',
+        'score': 70,
+        'description': 'Largely accurate but missing some context'
+    },
+    'exaggeration': {
+        'label': 'Exaggeration',
+        'icon': '📏',
+        'color': '#fbbf24',
+        'score': 50,
+        'description': 'Based on truth but overstated'
+    },
+    'misleading': {
+        'label': 'Misleading',
+        'icon': '⚠️',
+        'color': '#f59e0b',
+        'score': 35,
+        'description': 'Contains truth but creates false impression'
+    },
+    'mostly_false': {
+        'label': 'Mostly False',
+        'icon': '❌',
+        'color': '#f87171',
+        'score': 20,
+        'description': 'Significant inaccuracies with grain of truth'
+    },
+    'false': {
+        'label': 'False',
+        'icon': '❌',
+        'color': '#ef4444',
+        'score': 0,
+        'description': 'Demonstrably incorrect'
+    },
+    'empty_rhetoric': {
+        'label': 'Empty Rhetoric',
+        'icon': '💨',
+        'color': '#94a3b8',
+        'score': None,
+        'description': 'Vague promises or boasts with no substantive content'
+    },
+    'unsubstantiated_prediction': {
+        'label': 'Unsubstantiated Prediction',
+        'icon': '🔮',
+        'color': '#a78bfa',
+        'score': None,
+        'description': 'Future claim with no evidence or plan provided'
+    },
+    'pattern_of_false_promises': {
+        'label': 'Pattern of False Promises',
+        'icon': '🔄',
+        'color': '#f97316',
+        'score': 10,
+        'description': 'Speaker has history of similar unfulfilled claims'
+    },
+    'needs_context': {
+        'label': 'Needs Context',
+        'icon': '❓',
+        'color': '#8b5cf6',
+        'score': None,
+        'description': 'Cannot verify without additional information'
+    },
+    'opinion': {
+        'label': 'Opinion with Analysis',
+        'icon': '💭',
+        'color': '#6366f1',
+        'score': None,
+        'description': 'Subjective claim analyzed for factual elements'
     }
 }
 
 # Job management functions
 def create_job(transcript: str) -> str:
-    """Create a new job"""
-    job_id = str(uuid.uuid4())
-    job_data = {
-        'id': job_id,
-        'status': 'processing',
-        'progress': 0,
-        'message': 'Starting analysis...',
-        'created': datetime.now().isoformat(),
-        'transcript': transcript[:1000],  # Store preview
-        'results': None
-    }
+    """Create a new analysis job"""
+    job_id = datetime.now().strftime('%Y%m%d%H%M%S') + str(threading.get_ident())
     
-    # Store job
-    try:
-        if mongo_client:
-            mongo_client.factchecker.jobs.insert_one(job_data)
-        elif redis_client:
-            redis_client.setex(f"job:{job_id}", 3600, json.dumps(job_data))
-        else:
-            in_memory_jobs[job_id] = job_data
-    except Exception as e:
-        logger.error(f"Error storing job: {e}")
-        in_memory_jobs[job_id] = job_data
+    with job_lock:
+        jobs[job_id] = {
+            'id': job_id,
+            'status': 'created',
+            'progress': 0,
+            'created_at': datetime.now().isoformat(),
+            'transcript_length': len(transcript)
+        }
     
     return job_id
 
-def get_job(job_id: str) -> Optional[Dict]:
-    """Get job data"""
-    try:
-        if mongo_client:
-            job = mongo_client.factchecker.jobs.find_one({'id': job_id})
-            if job:
-                job.pop('_id', None)
-            return job
-        elif redis_client:
-            data = redis_client.get(f"job:{job_id}")
-            return json.loads(data) if data else None
-        else:
-            return in_memory_jobs.get(job_id)
-    except Exception as e:
-        logger.error(f"Error getting job: {e}")
-        return in_memory_jobs.get(job_id)
-
 def update_job(job_id: str, updates: Dict):
-    """Update job data"""
-    try:
-        if mongo_client:
-            mongo_client.factchecker.jobs.update_one(
-                {'id': job_id},
-                {'$set': updates}
-            )
-        elif redis_client:
-            job = get_job(job_id)
-            if job:
-                job.update(updates)
-                redis_client.setex(f"job:{job_id}", 3600, json.dumps(job))
-        else:
-            if job_id in in_memory_jobs:
-                in_memory_jobs[job_id].update(updates)
-    except Exception as e:
-        logger.error(f"Error updating job: {e}")
-        if job_id in in_memory_jobs:
-            in_memory_jobs[job_id].update(updates)
+    """Update job status"""
+    with job_lock:
+        if job_id in jobs:
+            jobs[job_id].update(updates)
+            jobs[job_id]['updated_at'] = datetime.now().isoformat()
+
+def get_job(job_id: str) -> Optional[Dict]:
+    """Get job by ID"""
+    with job_lock:
+        return jobs.get(job_id)
 
 # Routes
 @app.route('/')
 def index():
-    """Home page"""
+    """Main page"""
     return render_template('index.html')
 
 @app.route('/api/analyze', methods=['POST'])
 def analyze():
-    """Start fact-checking analysis"""
+    """Start transcript analysis"""
     try:
         data = request.get_json()
-        transcript = data.get('transcript', '').strip()
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
         
+        transcript = data.get('transcript', '').strip()
         if not transcript:
             return jsonify({'error': 'No transcript provided'}), 400
         
-        if len(transcript) > 50000:
-            return jsonify({'error': 'Transcript too long. Maximum 50,000 characters.'}), 400
+        # Check length
+        if len(transcript) > Config.MAX_TRANSCRIPT_LENGTH:
+            return jsonify({'error': f'Transcript too long. Maximum {Config.MAX_TRANSCRIPT_LENGTH} characters.'}), 400
         
         # Create job
         job_id = create_job(transcript)
@@ -271,8 +253,9 @@ def export_results(job_id: str, format: str):
             }
         
         elif format == 'pdf':
-            # TODO: Implement PDF export
-            return jsonify({'error': 'PDF export not yet implemented'}), 501
+            # Generate PDF
+            pdf_path = export_service.export_pdf(results, job_id)
+            return send_file(pdf_path, as_attachment=True, download_name=f'fact_check_{job_id}.pdf')
             
     except Exception as e:
         logger.error(f"Export error: {e}")
@@ -300,14 +283,12 @@ def process_transcript(job_id: str, transcript: str):
         # Extract claims
         extraction_result = claim_extractor.extract(transcript)
         logger.info(f"Extraction result keys: {extraction_result.keys() if extraction_result else 'None'}")
-        logger.info(f"Extraction result: {extraction_result}")
         
         claims = extraction_result.get('claims', [])
         speakers = extraction_result.get('speakers', [])
         topics = extraction_result.get('topics', [])
         
         logger.info(f"Claims found: {len(claims)}")
-        logger.info(f"First claim: {claims[0] if claims else 'No claims'}")
         
         if not claims:
             update_job(job_id, {
@@ -316,6 +297,7 @@ def process_transcript(job_id: str, transcript: str):
                 'message': 'No verifiable claims found',
                 'results': {
                     'claims': [],
+                    'fact_checks': [],
                     'summary': 'No verifiable claims were found in the transcript.',
                     'credibility_score': None
                 }
@@ -348,37 +330,37 @@ def process_transcript(job_id: str, transcript: str):
                     }
                 )
                 
-                # Make sure we have the claim text in the result
-                result['claim'] = claim.get('text', '')
-                result['speaker'] = claim.get('speaker', 'Unknown')
-                
-                fact_checks.append(result)
+                # Skip None results (trivial claims)
+                if result is not None:
+                    # Make sure we have the claim text in the result
+                    result['claim'] = claim.get('text', '')
+                    result['speaker'] = claim.get('speaker', 'Unknown')
+                    fact_checks.append(result)
                 
             except Exception as e:
                 logger.error(f"Error checking claim {i}: {e}")
                 fact_checks.append({
                     'claim': claim.get('text', ''),
                     'speaker': claim.get('speaker', 'Unknown'),
-                    'verdict': 'unverifiable',
+                    'verdict': 'needs_context',
                     'explanation': f'Error during verification: {str(e)}',
                     'confidence': 0,
                     'sources': []
                 })
         
-        # Calculate credibility score
+        # Calculate credibility score with proper mapping
         credibility_score = calculate_credibility_score(fact_checks)
         
-        # Generate summary
+        # Generate insightful summary
         summary = generate_summary(fact_checks, credibility_score, speakers, topics)
         
         logger.info(f"Fact checking completed: {len(fact_checks)} claims checked")
-        logger.info(f"Sample fact check result: {fact_checks[0] if fact_checks else 'None'}")
         
         # Store results
         results = {
             'transcript_preview': transcript[:500] + '...' if len(transcript) > 500 else transcript,
-            'claims': fact_checks,  # Store fact_checks as 'claims' for frontend compatibility
-            'fact_checks': fact_checks,  # Also store as fact_checks
+            'claims': fact_checks,  # For backward compatibility
+            'fact_checks': fact_checks,
             'speakers': speakers,
             'topics': topics,
             'credibility_score': credibility_score,
@@ -406,20 +388,71 @@ def process_transcript(job_id: str, transcript: str):
         })
 
 def calculate_credibility_score(fact_checks: List[Dict]) -> Dict:
-    """Calculate overall credibility score"""
+    """Calculate overall credibility score with proper verdict mapping"""
     if not fact_checks:
-        return {'score': 0, 'label': 'No claims'}
+        return {'score': 0, 'label': 'No claims', 'breakdown': {}}
     
-    # Count verdicts
-    verdict_counts = {}
+    # Map internal verdicts to UI verdicts
+    verdict_mapping = {
+        # True verdicts
+        'true': 'verified_true',
+        'mostly_true': 'verified_true',
+        'nearly_true': 'partially_accurate',
+        
+        # False verdicts
+        'false': 'verified_false',
+        'mostly_false': 'verified_false',
+        'misleading': 'verified_false',
+        'pattern_of_false_promises': 'verified_false',
+        
+        # Mixed/uncertain
+        'mixed': 'partially_accurate',
+        'exaggeration': 'partially_accurate',
+        
+        # Unverifiable
+        'needs_context': 'unverifiable',
+        'opinion': 'unverifiable',
+        'empty_rhetoric': 'empty_rhetoric',  # Keep as separate category
+        'unsubstantiated_prediction': 'unsubstantiated_prediction'  # Keep as separate
+    }
+    
+    # Count verdicts with mapping
+    verdict_counts = {
+        'verified_true': 0,
+        'verified_false': 0,
+        'partially_accurate': 0,
+        'unverifiable': 0,
+        'empty_rhetoric': 0,
+        'unsubstantiated_prediction': 0
+    }
+    
     total_score = 0
     scored_claims = 0
     
+    # Track worst offenders
+    false_claims = []
+    empty_rhetoric_claims = []
+    
     for fc in fact_checks:
+        if fc is None:  # Skip None results from trivial claims
+            continue
+            
         verdict = fc.get('verdict', 'unverifiable')
-        verdict_counts[verdict] = verdict_counts.get(verdict, 0) + 1
+        mapped_verdict = verdict_mapping.get(verdict, 'unverifiable')
         
-        # Get score from verdict
+        # Count the mapped verdict
+        if mapped_verdict in verdict_counts:
+            verdict_counts[mapped_verdict] += 1
+        else:
+            verdict_counts['unverifiable'] += 1
+        
+        # Track egregious claims
+        if mapped_verdict == 'verified_false':
+            false_claims.append(fc)
+        elif verdict == 'empty_rhetoric':
+            empty_rhetoric_claims.append(fc)
+        
+        # Calculate score
         verdict_info = VERDICT_CATEGORIES.get(verdict, {})
         if verdict_info.get('score') is not None:
             total_score += verdict_info['score']
@@ -431,8 +464,15 @@ def calculate_credibility_score(fact_checks: List[Dict]) -> Dict:
     else:
         score = 50  # Default for unverifiable claims
     
-    # Determine label
-    if score >= 90:
+    # Determine label with more nuance
+    rhetoric_ratio = len(empty_rhetoric_claims) / len(fact_checks) if fact_checks else 0
+    false_ratio = len(false_claims) / len(fact_checks) if fact_checks else 0
+    
+    if rhetoric_ratio > 0.3:
+        label = 'Heavy on Empty Rhetoric'
+    elif false_ratio > 0.3:
+        label = 'Highly Misleading'
+    elif score >= 90:
         label = 'Highly Credible'
     elif score >= 70:
         label = 'Mostly Credible'
@@ -446,67 +486,213 @@ def calculate_credibility_score(fact_checks: List[Dict]) -> Dict:
     return {
         'score': score,
         'label': label,
-        'verdict_breakdown': verdict_counts,
-        'total_claims': len(fact_checks),
-        'scored_claims': scored_claims
+        'breakdown': verdict_counts,
+        'verdict_counts': verdict_counts,  # For backward compatibility
+        'total_claims': len([fc for fc in fact_checks if fc is not None]),
+        'scored_claims': scored_claims,
+        'worst_claims': sorted(false_claims, key=lambda x: x.get('confidence', 0), reverse=True)[:3],
+        'empty_rhetoric_count': len(empty_rhetoric_claims),
+        'false_claims': false_claims,
+        'rhetoric_claims': empty_rhetoric_claims
     }
 
 def generate_summary(fact_checks: List[Dict], credibility_score: Dict, speakers: List[str], topics: List[str]) -> str:
-    """Generate analysis summary"""
-    total = len(fact_checks)
+    """Generate insightful analysis summary with visual flair"""
+    total = credibility_score.get('total_claims', 0)
     score = credibility_score.get('score', 0)
     label = credibility_score.get('label', 'Unknown')
+    breakdown = credibility_score.get('breakdown', {})
     
-    # Count key verdicts
-    verified_true = sum(1 for fc in fact_checks if fc.get('verdict') == 'verified_true')
-    verified_false = sum(1 for fc in fact_checks if fc.get('verdict') == 'verified_false')
-    partially_accurate = sum(1 for fc in fact_checks if fc.get('verdict') == 'partially_accurate')
+    # Start with a visual score indicator
+    if score >= 80:
+        score_visual = "🟢🟢🟢🟢🟢"
+    elif score >= 60:
+        score_visual = "🟡🟡🟡🟡⚪"
+    elif score >= 40:
+        score_visual = "🟠🟠🟠⚪⚪"
+    elif score >= 20:
+        score_visual = "🔴🔴⚪⚪⚪"
+    else:
+        score_visual = "🔴⚪⚪⚪⚪"
     
-    summary = f"Analysis of {total} claims reveals {label} ({score}/100).\n\n"
+    summary_parts = []
     
-    if verified_true > 0:
-        summary += f"✓ {verified_true} claims verified as true\n"
-    if verified_false > 0:
-        summary += f"✗ {verified_false} claims verified as false\n"
-    if partially_accurate > 0:
-        summary += f"⚠ {partially_accurate} claims partially accurate\n"
+    # Headline with visual impact
+    summary_parts.append(f"# 📊 FACT CHECK ANALYSIS COMPLETE")
+    summary_parts.append(f"## Credibility Score: {score}/100 {score_visual}")
+    summary_parts.append(f"### Overall Assessment: **{label.upper()}**")
+    summary_parts.append("")
     
-    if topics:
-        summary += f"\nMain topics: {', '.join(topics)}"
+    # Executive summary
+    if total == 0:
+        summary_parts.append("No verifiable claims found in this transcript.")
+        return "\n".join(summary_parts)
     
-    return summary
+    summary_parts.append(f"Analyzed **{total} claims** from {len(speakers)} speaker(s)")
+    summary_parts.append("")
+    
+    # Key findings with visual hierarchy
+    summary_parts.append("## 🔍 KEY FINDINGS:")
+    
+    if breakdown.get('verified_false', 0) > 0:
+        summary_parts.append(f"### 🚨 **ALERT: {breakdown['verified_false']} FALSE CLAIMS DETECTED**")
+        
+        # Show worst false claims
+        worst_claims = credibility_score.get('worst_claims', [])
+        if worst_claims:
+            summary_parts.append("#### Most Egregious False Claims:")
+            for i, claim in enumerate(worst_claims[:3], 1):
+                claim_text = claim.get('claim', '')[:80] + '...' if len(claim.get('claim', '')) > 80 else claim.get('claim', '')
+                summary_parts.append(f"{i}. **\"{claim_text}\"**")
+                summary_parts.append(f"   - Speaker: {claim.get('speaker', 'Unknown')}")
+                summary_parts.append(f"   - Reality: {claim.get('explanation', '')[:150]}...")
+                summary_parts.append("")
+    
+    if breakdown.get('empty_rhetoric', 0) > 0:
+        summary_parts.append(f"### 💨 **{breakdown['empty_rhetoric']} EMPTY PROMISES** detected")
+        summary_parts.append("Claims with no specific plans, policies, or evidence provided.")
+        summary_parts.append("")
+    
+    # Positive findings
+    if breakdown.get('verified_true', 0) > 0:
+        summary_parts.append(f"### ✅ {breakdown['verified_true']} claims VERIFIED AS TRUE")
+    
+    if breakdown.get('partially_accurate', 0) > 0:
+        summary_parts.append(f"### ⚠️  {breakdown['partially_accurate']} claims PARTIALLY ACCURATE")
+    
+    if breakdown.get('unverifiable', 0) > 0:
+        summary_parts.append(f"### ❓ {breakdown['unverifiable']} claims UNVERIFIABLE")
+    
+    summary_parts.append("")
+    
+    # Pattern analysis
+    if speakers and len(speakers) > 0:
+        summary_parts.append("## 👥 SPEAKER ANALYSIS:")
+        
+        # Analyze each speaker's claims
+        speaker_stats = {}
+        for fc in fact_checks:
+            if fc is None:
+                continue
+            speaker = fc.get('speaker', 'Unknown')
+            if speaker not in speaker_stats:
+                speaker_stats[speaker] = {'total': 0, 'false': 0, 'true': 0, 'rhetoric': 0}
+            
+            speaker_stats[speaker]['total'] += 1
+            verdict = fc.get('verdict', '')
+            if verdict in ['false', 'mostly_false', 'misleading']:
+                speaker_stats[speaker]['false'] += 1
+            elif verdict in ['true', 'mostly_true']:
+                speaker_stats[speaker]['true'] += 1
+            elif verdict == 'empty_rhetoric':
+                speaker_stats[speaker]['rhetoric'] += 1
+        
+        for speaker, stats in speaker_stats.items():
+            if stats['total'] > 0:
+                accuracy = (stats['true'] / stats['total']) * 100 if stats['total'] > 0 else 0
+                summary_parts.append(f"**{speaker}**: {stats['total']} claims")
+                summary_parts.append(f"- Accuracy rate: {accuracy:.0f}%")
+                if stats['false'] > 0:
+                    summary_parts.append(f"- ❌ False claims: {stats['false']}")
+                if stats['rhetoric'] > 0:
+                    summary_parts.append(f"- 💨 Empty rhetoric: {stats['rhetoric']}")
+                summary_parts.append("")
+    
+    # Bottom line assessment
+    summary_parts.append("## 📊 BOTTOM LINE:")
+    
+    if score < 30:
+        summary_parts.append("### ⛔ **SEVERE CREDIBILITY ISSUES**")
+        summary_parts.append("This transcript contains numerous false or misleading claims. Readers should be **highly skeptical** of the information presented.")
+    elif score < 50:
+        summary_parts.append("### ⚠️  **SIGNIFICANT ACCURACY CONCERNS**")
+        summary_parts.append("Multiple false or misleading claims detected. **Verify independently** before accepting these claims.")
+    elif score < 70:
+        summary_parts.append("### 🟡 **MIXED RELIABILITY**")
+        summary_parts.append("Some claims check out, others don't. **Use caution** and cross-reference important claims.")
+    elif score < 90:
+        summary_parts.append("### ✅ **GENERALLY RELIABLE**")
+        summary_parts.append("Most claims are supported by evidence with only minor issues identified.")
+    else:
+        summary_parts.append("### 💚 **HIGHLY CREDIBLE**")
+        summary_parts.append("Claims are well-supported by multiple sources and evidence.")
+    
+    # Value proposition
+    false_count = breakdown.get('verified_false', 0)
+    rhetoric_count = breakdown.get('empty_rhetoric', 0)
+    
+    if false_count > 0 or rhetoric_count > 0:
+        summary_parts.append("")
+        summary_parts.append("## 💡 VALUE PROVIDED:")
+        if false_count > 0:
+            summary_parts.append(f"✓ Identified **{false_count} false claims** you might have believed")
+        if rhetoric_count > 0:
+            summary_parts.append(f"✓ Exposed **{rhetoric_count} empty promises** lacking substance")
+        summary_parts.append("✓ Saved you time by analyzing claims against multiple sources")
+        summary_parts.append("✓ Provided context and evidence for informed judgment")
+    
+    # Call to action
+    summary_parts.append("")
+    summary_parts.append("---")
+    summary_parts.append("*💡 Tip: Click on individual claims below for detailed analysis and sources.*")
+    
+    return "\n".join(summary_parts)
 
 def generate_text_report(results: Dict) -> str:
     """Generate text format report"""
     report = []
-    report.append("FACT CHECK REPORT")
-    report.append("=" * 50)
+    report.append("POLITICAL TRANSCRIPT FACT CHECK REPORT")
+    report.append("=" * 70)
     report.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     report.append("")
     
     # Summary
-    report.append("SUMMARY")
-    report.append("-" * 20)
-    report.append(results.get('summary', 'No summary available'))
+    report.append("EXECUTIVE SUMMARY")
+    report.append("-" * 30)
+    summary = results.get('summary', 'No summary available')
+    # Convert markdown to plain text
+    summary = summary.replace('### ', '').replace('## ', '').replace('# ', '')
+    summary = summary.replace('**', '').replace('*', '')
+    report.append(summary)
     report.append("")
     
     # Credibility Score
     cred = results.get('credibility_score', {})
-    report.append("CREDIBILITY SCORE")
-    report.append("-" * 20)
-    report.append(f"Score: {cred.get('score', 'N/A')}/100")
-    report.append(f"Label: {cred.get('label', 'Unknown')}")
+    report.append("CREDIBILITY ANALYSIS")
+    report.append("-" * 30)
+    report.append(f"Overall Score: {cred.get('score', 'N/A')}/100")
+    report.append(f"Assessment: {cred.get('label', 'Unknown')}")
     report.append("")
     
-    # Claims
-    report.append("FACT CHECKS")
-    report.append("-" * 20)
+    breakdown = cred.get('breakdown', {})
+    if breakdown:
+        report.append("Claims Breakdown:")
+        report.append(f"  Verified True: {breakdown.get('verified_true', 0)}")
+        report.append(f"  Verified False: {breakdown.get('verified_false', 0)}")
+        report.append(f"  Partially Accurate: {breakdown.get('partially_accurate', 0)}")
+        report.append(f"  Unverifiable: {breakdown.get('unverifiable', 0)}")
+        if breakdown.get('empty_rhetoric', 0) > 0:
+            report.append(f"  Empty Rhetoric: {breakdown.get('empty_rhetoric', 0)}")
+    report.append("")
     
-    for i, fc in enumerate(results.get('claims', []), 1):
+    # Detailed Claims
+    report.append("DETAILED FACT CHECKS")
+    report.append("-" * 30)
+    
+    fact_checks = results.get('fact_checks', [])
+    for i, fc in enumerate(fact_checks, 1):
+        if fc is None:
+            continue
+            
         report.append(f"\n{i}. CLAIM: {fc.get('claim', 'Unknown')}")
         report.append(f"   Speaker: {fc.get('speaker', 'Unknown')}")
-        report.append(f"   Verdict: {fc.get('verdict', 'Unknown').upper()}")
-        report.append(f"   Explanation: {fc.get('explanation', 'No explanation')}")
+        report.append(f"   Verdict: {fc.get('verdict', 'Unknown').upper().replace('_', ' ')}")
+        
+        if fc.get('confidence'):
+            report.append(f"   Confidence: {fc.get('confidence')}%")
+            
+        report.append(f"   Analysis: {fc.get('explanation', 'No explanation available')}")
+        
         if fc.get('sources'):
             report.append(f"   Sources: {', '.join(fc['sources'])}")
     
