@@ -17,7 +17,7 @@ from config import Config
 
 # Import services - using existing structure
 from services.claims import ClaimExtractor
-from services.comprehensive_factcheck import FactChecker
+from services.comprehensive_factcheck import ComprehensiveFactChecker as FactChecker
 from services.export import ExportService
 
 # Set up logging
