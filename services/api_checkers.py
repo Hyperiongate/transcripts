@@ -1,10 +1,12 @@
+# services/api_checkers.py  
 """
-API Checker Modules
+API Checker Modules - Complete implementation
 Individual API checking methods for various fact-checking sources
 """
 import re
 import logging
 import aiohttp
+import json
 from typing import Dict, List, Optional
 from datetime import datetime
 
@@ -65,83 +67,40 @@ class APICheckers:
                             
                             return {
                                 'found': True,
-                                'verdict': review.get('textualRating', 'unverified'),
-                                'confidence': 85,
-                                'explanation': review.get('title', 'Verified by fact-checkers'),
-                                'source': 'Google Fact Check',
-                                'publisher': review.get('publisher', {}).get('name', 'Unknown'),
-                                'url': review.get('url', ''),
-                                'weight': 0.9
+                                'verdict': self._parse_google_verdict(review.get('textualRating', '')),
+                                'explanation': review.get('text', 'Fact-check available from Google Fact Check API'),
+                                'confidence': 80,
+                                'source': review.get('publisher', {}).get('name', 'Google Fact Check'),
+                                'url': review.get('url', '')
                             }
-            
-            return {'found': False}
-            
+                        
+                    return {'found': False}
+                    
         except Exception as e:
-            logger.error(f"Google Fact Check API error: {str(e)}")
+            logger.error(f"Google Fact Check API error: {e}")
             return {'found': False}
     
-    async def analyze_with_openai(self, claim: str) -> Dict:
-        """Use OpenAI for claim analysis"""
-        if not self.openai_api_key:
-            return {'found': False}
+    def _parse_google_verdict(self, textual_rating: str) -> str:
+        """Parse Google's textual rating to our verdict system"""
+        if not textual_rating:
+            return 'needs_context'
         
-        try:
-            headers = {
-                'Authorization': f'Bearer {self.openai_api_key}',
-                'Content-Type': 'application/json'
-            }
-            
-            prompt = f"""Analyze this claim for factual accuracy: "{claim}"
-            
-            Consider:
-            1. Is this claim verifiable?
-            2. What specific facts need checking?
-            3. Is the claim misleading even if technically true?
-            4. What important context is missing?
-            5. Has this claim been debunked before?
-            
-            Categorize as: true, mostly_true, misleading, lacks_context, mixed, mostly_false, false, or unsubstantiated.
-            
-            Provide a brief, specific assessment."""
-            
-            data = {
-                'model': 'gpt-3.5-turbo',
-                'messages': [
-                    {'role': 'system', 'content': 'You are a professional fact-checker. Be specific and cite examples when possible.'},
-                    {'role': 'user', 'content': prompt}
-                ],
-                'temperature': 0.2,
-                'max_tokens': 300
-            }
-            
-            async with aiohttp.ClientSession() as session:
-                async with session.post(
-                    'https://api.openai.com/v1/chat/completions',
-                    headers=headers,
-                    json=data,
-                    timeout=aiohttp.ClientTimeout(total=15)
-                ) as response:
-                    if response.status == 200:
-                        result = await response.json()
-                        
-                        if result.get('choices'):
-                            analysis = result['choices'][0]['message']['content']
-                            
-                            return {
-                                'found': True,
-                                'verdict': 'mixed',  # Will be extracted by verdict processor
-                                'confidence': 75,
-                                'explanation': analysis[:300],
-                                'source': 'OpenAI Analysis',
-                                'weight': 0.7,
-                                'raw_analysis': analysis
-                            }
-            
-            return {'found': False}
-            
-        except Exception as e:
-            logger.error(f"OpenAI API error: {str(e)}")
-            return {'found': False}
+        rating_lower = textual_rating.lower()
+        
+        if any(word in rating_lower for word in ['true', 'correct', 'accurate']):
+            return 'true'
+        elif any(word in rating_lower for word in ['mostly true', 'largely accurate']):
+            return 'mostly_true'
+        elif any(word in rating_lower for word in ['mixed', 'half true']):
+            return 'exaggeration'
+        elif any(word in rating_lower for word in ['misleading', 'distorts']):
+            return 'misleading'
+        elif any(word in rating_lower for word in ['mostly false', 'largely inaccurate']):
+            return 'mostly_false'
+        elif any(word in rating_lower for word in ['false', 'incorrect', 'wrong']):
+            return 'false'
+        else:
+            return 'needs_context'
     
     async def check_fred_data(self, claim: str) -> Dict:
         """Check economic claims against FRED data"""
@@ -149,291 +108,531 @@ class APICheckers:
             return {'found': False}
         
         try:
+            # Extract potential economic indicators
             claim_lower = claim.lower()
             
-            for indicator, series_id in self.fred_series.items():
-                if indicator in claim_lower:
-                    numbers = re.findall(r'\d+\.?\d*', claim)
-                    if not numbers:
-                        continue
-                    
-                    url = f"https://api.stlouisfed.org/fred/series/observations"
-                    params = {
-                        'series_id': series_id,
-                        'api_key': self.fred_api_key,
-                        'file_type': 'json',
-                        'sort_order': 'desc',
-                        'limit': 10
-                    }
-                    
+            for keyword, series_id in self.fred_series.items():
+                if keyword in claim_lower:
+                    # Get recent data for this series
                     async with aiohttp.ClientSession() as session:
-                        async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                        url = f"https://api.stlouisfed.org/fred/series/observations"
+                        params = {
+                            'series_id': series_id,
+                            'api_key': self.fred_api_key,
+                            'file_type': 'json',
+                            'limit': 12,  # Last 12 observations
+                            'sort_order': 'desc'
+                        }
+                        
+                        async with session.get(url, params=params) as response:
                             if response.status == 200:
                                 data = await response.json()
+                                observations = data.get('observations', [])
                                 
-                                if data.get('observations'):
-                                    latest_value = float(data['observations'][0]['value'])
-                                    claim_value = float(numbers[0])
-                                    
-                                    diff_pct = abs(latest_value - claim_value) / latest_value * 100
-                                    
-                                    if diff_pct < 5:
-                                        verdict = 'true'
-                                        confidence = 90
-                                    elif diff_pct < 10:
-                                        verdict = 'mostly_true'
-                                        confidence = 80
-                                    elif diff_pct < 20:
-                                        verdict = 'mixed'
-                                        confidence = 70
-                                    else:
-                                        verdict = 'mostly_false'
-                                        confidence = 85
-                                    
+                                if observations:
+                                    latest = observations[0]
                                     return {
                                         'found': True,
-                                        'verdict': verdict,
-                                        'confidence': confidence,
-                                        'explanation': f"FRED data shows {indicator} at {latest_value} (claim: {claim_value})",
-                                        'source': 'Federal Reserve Economic Data',
-                                        'weight': 0.95
+                                        'verdict': 'needs_context',
+                                        'explanation': f"Latest {keyword} data from FRED: {latest.get('value')} as of {latest.get('date')}",
+                                        'confidence': 75,
+                                        'source': 'Federal Reserve Economic Data (FRED)',
+                                        'data': observations
                                     }
             
             return {'found': False}
             
         except Exception as e:
-            logger.error(f"FRED API error: {str(e)}")
+            logger.error(f"FRED API error: {e}")
             return {'found': False}
     
-    async def check_wikipedia(self, claim: str) -> Dict:
-        """Check claims against Wikipedia"""
+    async def check_news_apis(self, claim: str) -> Dict:
+        """Check claim against news APIs for recent verification"""
+        if not self.news_api_key and not self.mediastack_api_key:
+            return {'found': False}
+        
         try:
-            key_terms = self._extract_key_terms(claim)
-            search_query = ' '.join(key_terms[:3])
+            # Use NewsAPI if available
+            if self.news_api_key:
+                return await self._check_newsapi(claim)
             
-            search_url = "https://en.wikipedia.org/w/api.php"
-            params = {
-                'action': 'query',
-                'format': 'json',
-                'list': 'search',
-                'srsearch': search_query,
-                'srlimit': '3'  # FIXED: Changed to string
-            }
-            
-            async with aiohttp.ClientSession() as session:
-                async with session.get(search_url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        
-                        if data.get('query', {}).get('search'):
-                            page_id = data['query']['search'][0]['pageid']
-                            
-                            # FIXED: All parameters must be strings
-                            content_params = {
-                                'action': 'query',
-                                'format': 'json',
-                                'pageids': str(page_id),  # Ensure page_id is string
-                                'prop': 'extracts',
-                                'exintro': '1',      # FIXED: Changed from True to '1'
-                                'explaintext': '1',   # FIXED: Changed from True to '1'
-                                'exsentences': '5'    # FIXED: Changed from 5 to '5'
-                            }
-                            
-                            async with session.get(search_url, params=content_params) as content_response:
-                                if content_response.status == 200:
-                                    content_data = await content_response.json()
-                                    
-                                    pages = content_data.get('query', {}).get('pages', {})
-                                    if pages:
-                                        extract = list(pages.values())[0].get('extract', '')
-                                        
-                                        matches = sum(1 for term in key_terms if term.lower() in extract.lower())
-                                        
-                                        if matches >= 2:
-                                            return {
-                                                'found': True,
-                                                'verdict': 'mostly_true',
-                                                'confidence': 70,
-                                                'explanation': f"Wikipedia entry supports this claim",
-                                                'source': 'Wikipedia',
-                                                'weight': 0.6
-                                            }
-            
-            return {'found': False}
-            
-        except Exception as e:
-            logger.error(f"Wikipedia API error: {str(e)}")
-            return {'found': False}
-    
-    async def check_semantic_scholar(self, claim: str) -> Dict:
-        """Check academic claims"""
-        try:
-            key_terms = self._extract_key_terms(claim)
-            search_query = ' '.join(key_terms[:4])
-            
-            url = "https://api.semanticscholar.org/graph/v1/paper/search"
-            params = {
-                'query': search_query,
-                'fields': 'title,abstract,year,citationCount',
-                'limit': 5
-            }
-            
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        
-                        if data.get('data'):
-                            high_citation_papers = [p for p in data['data'] if p.get('citationCount', 0) > 10]
-                            
-                            if high_citation_papers:
-                                return {
-                                    'found': True,
-                                    'verdict': 'mostly_true',
-                                    'confidence': 75,
-                                    'explanation': f"Found {len(high_citation_papers)} peer-reviewed papers supporting this",
-                                    'source': 'Semantic Scholar',
-                                    'weight': 0.8
-                                }
-            
-            return {'found': False}
-            
-        except Exception as e:
-            logger.error(f"Semantic Scholar API error: {str(e)}")
-            return {'found': False}
-    
-    async def check_cdc_data(self, claim: str) -> Dict:
-        """Check health claims against CDC data"""
-        try:
-            claim_lower = claim.lower()
-            health_keywords = ['covid', 'vaccine', 'disease', 'mortality', 'health', 'cdc']
-            
-            if not any(keyword in claim_lower for keyword in health_keywords):
-                return {'found': False}
-            
-            if 'covid' in claim_lower:
-                endpoint = "https://data.cdc.gov/resource/9mfq-cb36.json"
+            # Fallback to MediaStack
+            elif self.mediastack_api_key:
+                return await self._check_mediastack(claim)
                 
-                async with aiohttp.ClientSession() as session:
-                    async with session.get(endpoint, params={'$limit': 10}, timeout=aiohttp.ClientTimeout(total=10)) as response:
-                        if response.status == 200:
-                            data = await response.json()
-                            
-                            if data:
-                                return {
-                                    'found': True,
-                                    'verdict': 'mixed',
-                                    'confidence': 65,
-                                    'explanation': "CDC data available for verification",
-                                    'source': 'CDC Data',
-                                    'weight': 0.85
-                                }
-            
-            return {'found': False}
-            
         except Exception as e:
-            logger.error(f"CDC API error: {str(e)}")
-            return {'found': False}
-    
-    async def check_news_sources(self, claim: str) -> Dict:
-        """Check news sources for claim verification"""
-        if self.mediastack_api_key:
-            return await self._check_mediastack_news(claim)
-        elif self.news_api_key:
-            return await self._check_newsapi(claim)
-        else:
-            return {'found': False}
-    
-    async def _check_mediastack_news(self, claim: str) -> Dict:
-        """Check MediaStack news API"""
-        try:
-            key_terms = self._extract_key_terms(claim)
-            search_query = ' '.join(key_terms[:4])
-            
-            url = "http://api.mediastack.com/v1/news"
-            params = {
-                'access_key': self.mediastack_api_key,
-                'keywords': search_query,
-                'languages': 'en',
-                'limit': 10,
-                'sort': 'published_desc'
-            }
-            
-            async with aiohttp.ClientSession() as session:
-                async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as response:
-                    if response.status == 200:
-                        data = await response.json()
-                        
-                        if data.get('data'):
-                            article_count = len(data['data'])
-                            return {
-                                'found': True,
-                                'verdict': 'mixed',
-                                'confidence': 60,
-                                'explanation': f"Found {article_count} recent news articles discussing this",
-                                'source': 'MediaStack News',
-                                'weight': 0.7
-                            }
-            
-            return {'found': False}
-            
-        except Exception as e:
-            logger.error(f"MediaStack API error: {str(e)}")
+            logger.error(f"News API error: {e}")
             return {'found': False}
     
     async def _check_newsapi(self, claim: str) -> Dict:
-        """Check News API"""
+        """Check NewsAPI for related articles"""
         try:
+            # Extract key terms from claim
             key_terms = self._extract_key_terms(claim)
+            if not key_terms:
+                return {'found': False}
             
-            url = "https://newsapi.org/v2/everything"
-            params = {
-                'apiKey': self.news_api_key,
-                'q': ' '.join(key_terms[:3]),
-                'sortBy': 'relevancy',
-                'pageSize': 5,
-                'language': 'en'
-            }
+            query = ' AND '.join(key_terms[:3])  # Use top 3 terms
             
             async with aiohttp.ClientSession() as session:
-                async with session.get(url, params=params, timeout=aiohttp.ClientTimeout(total=10)) as response:
+                url = "https://newsapi.org/v2/everything"
+                params = {
+                    'q': query,
+                    'apiKey': self.news_api_key,
+                    'language': 'en',
+                    'sortBy': 'relevancy',
+                    'pageSize': 5
+                }
+                
+                async with session.get(url, params=params) as response:
                     if response.status == 200:
                         data = await response.json()
-                        if data.get('articles'):
+                        articles = data.get('articles', [])
+                        
+                        if articles:
                             return {
                                 'found': True,
-                                'verdict': 'mixed',
+                                'verdict': 'needs_context',
+                                'explanation': f"Found {len(articles)} recent news articles related to this claim",
                                 'confidence': 60,
-                                'explanation': f'Found {len(data["articles"])} related news articles',
-                                'source': 'News API',
-                                'weight': 0.65
+                                'source': 'NewsAPI',
+                                'articles': [{'title': a['title'], 'url': a['url']} for a in articles[:3]]
                             }
             
             return {'found': False}
             
         except Exception as e:
-            logger.error(f"News API error: {str(e)}")
+            logger.error(f"NewsAPI error: {e}")
+            return {'found': False}
+    
+    async def _check_mediastack(self, claim: str) -> Dict:
+        """Check MediaStack API for related news"""
+        try:
+            key_terms = self._extract_key_terms(claim)
+            if not key_terms:
+                return {'found': False}
+            
+            query = ' '.join(key_terms[:3])
+            
+            async with aiohttp.ClientSession() as session:
+                url = "http://api.mediastack.com/v1/news"
+                params = {
+                    'access_key': self.mediastack_api_key,
+                    'keywords': query,
+                    'languages': 'en',
+                    'limit': 5
+                }
+                
+                async with session.get(url, params=params) as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        articles = data.get('data', [])
+                        
+                        if articles:
+                            return {
+                                'found': True,
+                                'verdict': 'needs_context',
+                                'explanation': f"Found {len(articles)} recent articles from MediaStack",
+                                'confidence': 60,
+                                'source': 'MediaStack',
+                                'articles': [{'title': a['title'], 'url': a['url']} for a in articles[:3]]
+                            }
+            
+            return {'found': False}
+            
+        except Exception as e:
+            logger.error(f"MediaStack error: {e}")
             return {'found': False}
     
     def _extract_key_terms(self, claim: str) -> List[str]:
-        """Extract key search terms from claim"""
-        stop_words = {'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 
-                     'of', 'with', 'by', 'from', 'is', 'was', 'are', 'were', 'been', 'be'}
+        """Extract key terms from claim for search"""
+        # Remove common words and extract meaningful terms
+        stop_words = {
+            'the', 'a', 'an', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of', 'with', 'by',
+            'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had', 'do', 'does', 'did',
+            'will', 'would', 'could', 'should', 'may', 'might', 'can', 'must', 'shall'
+        }
         
-        words = claim.split()
-        key_terms = []
+        # Extract words, remove punctuation
+        words = re.findall(r'\b[a-zA-Z]+\b', claim.lower())
         
-        # Keep proper nouns
-        for word in words:
-            if word[0].isupper() and word.lower() not in stop_words:
-                key_terms.append(word)
+        # Filter out stop words and short words
+        key_terms = [word for word in words if word not in stop_words and len(word) > 3]
         
-        # Keep numbers
-        numbers = re.findall(r'\b\d+\.?\d*\b', claim)
-        key_terms.extend(numbers)
+        # Return unique terms, prioritizing longer ones
+        return list(dict.fromkeys(sorted(key_terms, key=len, reverse=True)))
+
+
+# services/context_resolver.py
+"""
+Context Resolver Module - Enhanced context resolution for claims
+"""
+import re
+import logging
+from typing import Dict, List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
+
+class ContextResolver:
+    """Resolve context and pronouns in claims"""
+    
+    def __init__(self):
+        self.pronouns = {
+            'he': ['speaker', 'subject'],
+            'she': ['speaker', 'subject'], 
+            'they': ['group', 'organization'],
+            'we': ['group', 'organization'],
+            'it': ['organization', 'policy', 'thing'],
+            'this': ['policy', 'event', 'thing'],
+            'that': ['policy', 'event', 'thing']
+        }
+    
+    def resolve_with_context(self, claim: str, context: Optional[Dict] = None) -> Tuple[str, Dict]:
+        """Resolve pronouns and context in claim"""
+        if not context:
+            return claim, {}
         
-        # Keep remaining important words
-        remaining_words = [w for w in words if w.lower() not in stop_words and w not in key_terms]
-        key_terms.extend(remaining_words[:3])
+        resolved_claim = claim
+        resolution_info = {}
         
-        return key_terms[:5]
+        # Get transcript and speaker context
+        transcript = context.get('transcript', '')
+        speaker = context.get('speaker', 'Unknown')
+        
+        # Simple pronoun resolution based on speaker
+        if speaker != 'Unknown':
+            resolved_claim = self._resolve_pronouns(resolved_claim, speaker)
+            resolution_info['speaker_resolved'] = speaker
+        
+        # Add more context from transcript if available
+        if transcript and len(resolved_claim) < len(claim) + 50:
+            context_addition = self._extract_nearby_context(claim, transcript)
+            if context_addition:
+                resolution_info['context_addition'] = context_addition
+        
+        return resolved_claim, resolution_info
+    
+    def _resolve_pronouns(self, claim: str, speaker: str) -> str:
+        """Basic pronoun resolution"""
+        # Simple replacements - could be enhanced with NLP
+        resolved = claim
+        
+        # Replace common pronouns with speaker name
+        resolved = re.sub(r'\bI\b', speaker, resolved)
+        resolved = re.sub(r'\bmy\b', f"{speaker}'s", resolved)
+        resolved = re.sub(r'\bmine\b', f"{speaker}'s", resolved)
+        
+        return resolved
+    
+    def _extract_nearby_context(self, claim: str, transcript: str) -> Optional[str]:
+        """Extract nearby context from transcript"""
+        # Find the claim in transcript and get surrounding context
+        claim_words = claim.lower().split()[:5]  # First 5 words
+        
+        if len(claim_words) < 2:
+            return None
+        
+        search_phrase = ' '.join(claim_words)
+        transcript_lower = transcript.lower()
+        
+        # Find approximate location
+        pos = transcript_lower.find(search_phrase)
+        if pos != -1:
+            # Get some context before and after
+            start = max(0, pos - 100)
+            end = min(len(transcript), pos + len(claim) + 100)
+            context = transcript[start:end].strip()
+            
+            if context and len(context) > len(claim):
+                return context
+        
+        return None
+
+
+# services/factcheck_history.py
+"""
+Fact Check History Tracking Module
+Tracks historical claims and patterns for better context
+"""
+import re
+import hashlib
+from typing import Dict, List, Optional
+from datetime import datetime
+from collections import defaultdict
+
+class FactCheckHistory:
+    """Track historical claims and patterns"""
+    
+    def __init__(self):
+        self.claim_history = defaultdict(list)  # claim_hash -> list of checks
+        self.source_patterns = defaultdict(lambda: defaultdict(int))  # source -> verdict -> count
+        self.misleading_patterns = defaultdict(list)  # source -> list of misleading claims
+        
+    def add_check(self, claim: str, source: str, verdict: str, explanation: str):
+        """Add a fact check to history"""
+        claim_hash = self._hash_claim(claim)
+        check_data = {
+            'timestamp': datetime.now().isoformat(),
+            'source': source,
+            'verdict': verdict,
+            'explanation': explanation
+        }
+        self.claim_history[claim_hash].append(check_data)
+        self.source_patterns[source][verdict] += 1
+        
+        if verdict in ['misleading', 'mostly_false', 'false']:
+            self.misleading_patterns[source].append({
+                'claim': claim,
+                'verdict': verdict,
+                'timestamp': datetime.now().isoformat()
+            })
+    
+    def get_historical_context(self, claim: str, source: str) -> Optional[Dict]:
+        """Get historical context for a claim"""
+        claim_hash = self._hash_claim(claim)
+        
+        # Check if this exact claim has been checked before
+        if claim_hash in self.claim_history:
+            past_checks = self.claim_history[claim_hash]
+            return {
+                'previously_checked': True,
+                'check_count': len(past_checks),
+                'past_verdicts': [c['verdict'] for c in past_checks],
+                'first_checked': past_checks[0]['timestamp']
+            }
+        
+        # Check source's pattern of false claims
+        source_stats = self.source_patterns.get(source, {})
+        if source_stats:
+            total_claims = sum(source_stats.values())
+            false_claims = source_stats.get('false', 0) + source_stats.get('mostly_false', 0)
+            misleading_claims = source_stats.get('misleading', 0)
+            
+            return {
+                'source_history': {
+                    'total_claims': total_claims,
+                    'false_claims': false_claims,
+                    'misleading_claims': misleading_claims,
+                    'reliability_score': 1 - (false_claims + misleading_claims * 0.5) / total_claims if total_claims > 0 else None
+                }
+            }
+        
+        return None
+    
+    def _hash_claim(self, claim: str) -> str:
+        """Create hash for claim deduplication"""
+        # Normalize claim text
+        normalized = re.sub(r'[^\w\s]', '', claim.lower().strip())
+        normalized = ' '.join(normalized.split())  # Normalize whitespace
+        
+        return hashlib.md5(normalized.encode()).hexdigest()[:16]
+    
+    def get_pattern_analysis(self, source: str) -> Dict:
+        """Analyze patterns for a specific source"""
+        if source not in self.source_patterns:
+            return {'pattern': 'unknown', 'confidence': 0}
+        
+        stats = self.source_patterns[source]
+        total = sum(stats.values())
+        
+        if total < 5:  # Not enough data
+            return {'pattern': 'insufficient_data', 'confidence': 0}
+        
+        false_rate = (stats.get('false', 0) + stats.get('mostly_false', 0)) / total
+        misleading_rate = stats.get('misleading', 0) / total
+        true_rate = (stats.get('true', 0) + stats.get('mostly_true', 0)) / total
+        
+        if false_rate > 0.6:
+            return {'pattern': 'frequently_false', 'confidence': 85}
+        elif misleading_rate > 0.5:
+            return {'pattern': 'often_misleading', 'confidence': 75}
+        elif true_rate > 0.7:
+            return {'pattern': 'generally_accurate', 'confidence': 80}
+        else:
+            return {'pattern': 'mixed_accuracy', 'confidence': 60}# services/context_resolver.py
+"""
+Context Resolver Module - Enhanced context resolution for claims
+"""
+import re
+import logging
+from typing import Dict, List, Optional, Tuple
+
+logger = logging.getLogger(__name__)
+
+class ContextResolver:
+    """Resolve context and pronouns in claims"""
+    
+    def __init__(self):
+        self.pronouns = {
+            'he': ['speaker', 'subject'],
+            'she': ['speaker', 'subject'], 
+            'they': ['group', 'organization'],
+            'we': ['group', 'organization'],
+            'it': ['organization', 'policy', 'thing'],
+            'this': ['policy', 'event', 'thing'],
+            'that': ['policy', 'event', 'thing']
+        }
+    
+    def resolve_with_context(self, claim: str, context: Optional[Dict] = None) -> Tuple[str, Dict]:
+        """Resolve pronouns and context in claim"""
+        if not context:
+            return claim, {}
+        
+        resolved_claim = claim
+        resolution_info = {}
+        
+        # Get transcript and speaker context
+        transcript = context.get('transcript', '')
+        speaker = context.get('speaker', 'Unknown')
+        
+        # Simple pronoun resolution based on speaker
+        if speaker != 'Unknown':
+            resolved_claim = self._resolve_pronouns(resolved_claim, speaker)
+            resolution_info['speaker_resolved'] = speaker
+        
+        # Add more context from transcript if available
+        if transcript and len(resolved_claim) < len(claim) + 50:
+            context_addition = self._extract_nearby_context(claim, transcript)
+            if context_addition:
+                resolution_info['context_addition'] = context_addition
+        
+        return resolved_claim, resolution_info
+    
+    def _resolve_pronouns(self, claim: str, speaker: str) -> str:
+        """Basic pronoun resolution"""
+        # Simple replacements - could be enhanced with NLP
+        resolved = claim
+        
+        # Replace common pronouns with speaker name
+        resolved = re.sub(r'\bI\b', speaker, resolved)
+        resolved = re.sub(r'\bmy\b', f"{speaker}'s", resolved)
+        resolved = re.sub(r'\bmine\b', f"{speaker}'s", resolved)
+        
+        return resolved
+    
+    def _extract_nearby_context(self, claim: str, transcript: str) -> Optional[str]:
+        """Extract nearby context from transcript"""
+        # Find the claim in transcript and get surrounding context
+        claim_words = claim.lower().split()[:5]  # First 5 words
+        
+        if len(claim_words) < 2:
+            return None
+        
+        search_phrase = ' '.join(claim_words)
+        transcript_lower = transcript.lower()
+        
+        # Find approximate location
+        pos = transcript_lower.find(search_phrase)
+        if pos != -1:
+            # Get some context before and after
+            start = max(0, pos - 100)
+            end = min(len(transcript), pos + len(claim) + 100)
+            context = transcript[start:end].strip()
+            
+            if context and len(context) > len(claim):
+                return context
+        
+        return None
+
+
+# services/factcheck_history.py
+"""
+Fact Check History Tracking Module
+Tracks historical claims and patterns for better context
+"""
+import re
+import hashlib
+from typing import Dict, List, Optional
+from datetime import datetime
+from collections import defaultdict
+
+class FactCheckHistory:
+    """Track historical claims and patterns"""
+    
+    def __init__(self):
+        self.claim_history = defaultdict(list)  # claim_hash -> list of checks
+        self.source_patterns = defaultdict(lambda: defaultdict(int))  # source -> verdict -> count
+        self.misleading_patterns = defaultdict(list)  # source -> list of misleading claims
+        
+    def add_check(self, claim: str, source: str, verdict: str, explanation: str):
+        """Add a fact check to history"""
+        claim_hash = self._hash_claim(claim)
+        check_data = {
+            'timestamp': datetime.now().isoformat(),
+            'source': source,
+            'verdict': verdict,
+            'explanation': explanation
+        }
+        self.claim_history[claim_hash].append(check_data)
+        self.source_patterns[source][verdict] += 1
+        
+        if verdict in ['misleading', 'mostly_false', 'false']:
+            self.misleading_patterns[source].append({
+                'claim': claim,
+                'verdict': verdict,
+                'timestamp': datetime.now().isoformat()
+            })
+    
+    def get_historical_context(self, claim: str, source: str) -> Optional[Dict]:
+        """Get historical context for a claim"""
+        claim_hash = self._hash_claim(claim)
+        
+        # Check if this exact claim has been checked before
+        if claim_hash in self.claim_history:
+            past_checks = self.claim_history[claim_hash]
+            return {
+                'previously_checked': True,
+                'check_count': len(past_checks),
+                'past_verdicts': [c['verdict'] for c in past_checks],
+                'first_checked': past_checks[0]['timestamp']
+            }
+        
+        # Check source's pattern of false claims
+        source_stats = self.source_patterns.get(source, {})
+        if source_stats:
+            total_claims = sum(source_stats.values())
+            false_claims = source_stats.get('false', 0) + source_stats.get('mostly_false', 0)
+            misleading_claims = source_stats.get('misleading', 0)
+            
+            return {
+                'source_history': {
+                    'total_claims': total_claims,
+                    'false_claims': false_claims,
+                    'misleading_claims': misleading_claims,
+                    'reliability_score': 1 - (false_claims + misleading_claims * 0.5) / total_claims if total_claims > 0 else None
+                }
+            }
+        
+        return None
+    
+    def _hash_claim(self, claim: str) -> str:
+        """Create hash for claim deduplication"""
+        # Normalize claim text
+        normalized = re.sub(r'[^\w\s]', '', claim.lower().strip())
+        normalized = ' '.join(normalized.split())  # Normalize whitespace
+        
+        return hashlib.md5(normalized.encode()).hexdigest()[:16]
+    
+    def get_pattern_analysis(self, source: str) -> Dict:
+        """Analyze patterns for a specific source"""
+        if source not in self.source_patterns:
+            return {'pattern': 'unknown', 'confidence': 0}
+        
+        stats = self.source_patterns[source]
+        total = sum(stats.values())
+        
+        if total < 5:  # Not enough data
+            return {'pattern': 'insufficient_data', 'confidence': 0}
+        
+        false_rate = (stats.get('false', 0) + stats.get('mostly_false', 0)) / total
+        misleading_rate = stats.get('misleading', 0) / total
+        true_rate = (stats.get('true', 0) + stats.get('mostly_true', 0)) / total
+        
+        if false_rate > 0.6:
+            return {'pattern': 'frequently_false', 'confidence': 85}
+        elif misleading_rate > 0.5:
+            return {'pattern': 'often_misleading', 'confidence': 75}
+        elif true_rate > 0.7:
+            return {'pattern': 'generally_accurate', 'confidence': 80}
+        else:
+            return {'pattern': 'mixed_accuracy', 'confidence': 60}
