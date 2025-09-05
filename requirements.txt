@@ -5,32 +5,50 @@ Flask-Login==0.6.2
 Flask-Migrate==4.0.5
 Flask-SQLAlchemy==3.0.5
 gunicorn==21.2.0
+
 # Security
 Werkzeug==2.3.7
+
 # Database
 SQLAlchemy==2.0.21
+
 # Environment variables
 python-dotenv==1.0.0
+
 # API and HTTP requests
 requests==2.31.0
+
 # AI/ML dependencies
 openai==1.12.0
 anthropic==0.18.1
+
 # Document processing
 PyPDF2==3.0.1
 python-docx==1.1.0
+
 # Date/time handling
 python-dateutil==2.8.2
+
 # Web scraping (for fact checking)
 beautifulsoup4==4.12.2
 lxml==4.9.3
+
 # PDF generation for exports
 reportlab==4.0.4
+
 # Image processing
 Pillow==10.1.0
+
 # Async support
 aiohttp==3.9.1
 asyncio==3.4.3
+
+# YouTube and Audio Processing Dependencies (NEWLY ADDED)
+youtube-transcript-api==0.6.2
+yt-dlp==2024.3.10
+SpeechRecognition==3.10.1
+pydub==0.25.1
+
 # Optional: Database support (only if using MongoDB/Redis)
 pymongo==4.5.0
 redis==5.0.0
